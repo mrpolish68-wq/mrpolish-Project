@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>פאנל ניהול | מיסטר פוליש</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#1f2024" />
+
+  <!-- ===== PAGE GUARD: runs before anything renders ===== -->
+  <script>
+    if (localStorage.getItem("isUriAdmin") !== "true") {
+      location.replace("login.html");
+    }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800;900&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/jpeg" href="logo.jpg" />
+
+  <!-- Client-side PDF generation (direct download, no print dialog) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+  <style>
+    body { background: var(--marble-100); color: var(--ink-900); }
+
+    /* ===== Shell layout ===== */
+    .admin-shell { display: grid; grid-template-columns: 256px 1fr; min-height: 100vh; min-height: 100dvh; }
+
+    /* Sidebar (right side in RTL) */
+    .admin-sidebar {
+      background: linear-gradient(180deg, var(--char-900), var(--char-950));
+      color: var(--white);
+      padding: 24px 18px;
+      display: flex; flex-direction: column; gap: 8px;
+      position: sticky; inset-block-start: 0; height: 100vh; height: 100dvh;
+    }
+    .admin-brand { display:flex; align-items:center; gap:12px; padding-block-end: 18px; margin-block-end: 12px; border-block-end:1px solid oklch(1 0 0 / 0.1); }
+    .admin-brand img { height: 44px; width:auto; border-radius:8px; background:var(--white); padding:4px; }
+    .admin-brand b { color: var(--gold-400); font-size: 1.05rem; line-height:1.2; }
+    .admin-brand span { display:block; color: oklch(0.7 0.01 264); font-size:.72rem; font-weight:400; }
+
+    .admin-nav { display:flex; flex-direction:column; gap:6px; flex:1; }
+    .admin-nav button {
+      display:flex; align-items:center; gap:10px;
+      width:100%; text-align:right;
+      font-family:var(--font-base); font-weight:600; font-size:.96rem;
+      color: oklch(0.86 0.01 264);
+      background:transparent; border:0; border-radius:12px;
+      padding:12px 14px; cursor:pointer;
+      transition: background .2s, color .2s, transform .15s;
+    }
+    .admin-nav button .ic { font-size:1.15rem; }
+    .admin-nav button:hover { background: oklch(1 0 0 / 0.06); color:var(--white); }
+    .admin-nav button.active {
+      background: linear-gradient(135deg, var(--gold-500), var(--gold-700));
+      color: var(--char-950); box-shadow: 0 8px 20px var(--gold-glow);
+    }
+    .admin-logout {
+      font-family:var(--font-base); font-weight:700; font-size:.9rem;
+      color: oklch(0.85 0.05 25); background: oklch(1 0 0 / 0.04);
+      border:1px solid oklch(0.7 0.12 25 / 0.4); border-radius:12px;
+      padding:11px 14px; cursor:pointer; transition: background .2s;
+    }
+    .admin-logout:hover { background: oklch(0.55 0.16 25 / 0.2); }
+
+    /* Main */
+    .admin-main { padding: 0 0 40px; }
+    .admin-topbar {
+      position: sticky; inset-block-start:0; z-index:10;
+      background: oklch(0.99 0 0 / 0.9); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+      border-block-end:1px solid var(--marble-200);
+      padding: 18px 28px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    }
+    .admin-topbar h1 { font-size:1.35rem; color:var(--char-900); }
+    .admin-topbar .hello { color: var(--ink-500); font-size:.9rem; }
+    .admin-content { padding: 26px 28px; max-width: 1100px; }
+
+    .admin-view { display:none; animation: viewIn .4s var(--ease-out); }
+    .admin-view.active { display:block; }
+    @keyframes viewIn { from{opacity:0; transform:translateY(12px);} to{opacity:1; transform:none;} }
+
+    .view-head { margin-block-end: 20px; }
+    .view-head h2 { font-size:1.3rem; color:var(--char-900); }
+    .view-head p { color: var(--ink-600,var(--ink-500)); font-size:.94rem; margin-block-start:4px; }
+
+    /* ===== Tab 1: metrics ===== */
+    .metric-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:18px; }
+    .metric {
+      background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg);
+      padding:22px; box-shadow:var(--shadow-sm); position:relative; overflow:hidden;
+      transition: transform .2s, box-shadow .25s;
+    }
+    .metric:hover { transform:translateY(-4px); box-shadow:var(--shadow-md); }
+    .metric::before { content:""; position:absolute; inset-block-start:0; inset-inline:0; height:3px; background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); }
+    .metric .ic { width:46px; height:46px; display:grid; place-items:center; border-radius:12px; background:linear-gradient(135deg,var(--marble-100),var(--marble-200)); font-size:1.4rem; margin-block-end:14px; }
+    .metric .num { font-size:2.1rem; font-weight:800; color:var(--char-900); font-family:var(--font-display); }
+    .metric .lbl { color:var(--ink-700); font-weight:600; font-size:.95rem; }
+    .metric .trend { font-size:.8rem; font-weight:700; color:var(--whatsapp-dark); margin-block-start:6px; }
+
+    .panel { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:22px; box-shadow:var(--shadow-sm); margin-block-start:22px; }
+    .panel h3 { font-size:1.05rem; color:var(--char-900); margin-block-end:14px; }
+    .activity { display:grid; gap:10px; }
+    .activity li { display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--marble-50); border-radius:12px; }
+    .activity .dot { width:9px; height:9px; border-radius:50%; background:var(--gold-500); flex-shrink:0; }
+    .activity .txt { flex:1; color:var(--ink-700); font-size:.92rem; }
+    .activity .time { color:var(--ink-500); font-size:.8rem; }
+
+    /* ===== Tab 2: calendar ===== */
+    .cal { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:22px; box-shadow:var(--shadow-sm); }
+    .cal-head { display:flex; align-items:center; justify-content:space-between; margin-block-end:16px; }
+    .cal-head .title { font-size:1.15rem; font-weight:800; color:var(--char-900); }
+    .cal-nav { display:flex; gap:8px; }
+    .cal-nav button { width:38px; height:38px; border-radius:10px; border:1px solid var(--marble-200); background:var(--marble-50); cursor:pointer; font-size:1.1rem; color:var(--char-800); transition:background .2s; }
+    .cal-nav button:hover { background:var(--marble-200); }
+    .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+    .cal-dow { text-align:center; font-weight:700; color:var(--ink-500); font-size:.8rem; padding-block:6px; }
+    .cal-day {
+      aspect-ratio:1; border:1px solid var(--marble-200); border-radius:10px;
+      background:var(--marble-50); cursor:pointer; position:relative;
+      display:flex; align-items:flex-start; justify-content:flex-end; padding:6px 8px;
+      font-weight:600; color:var(--char-800); font-size:.9rem;
+      transition: background .15s, border-color .15s, transform .1s;
+    }
+    .cal-day:hover { border-color:var(--gold-400); background:var(--white); }
+    .cal-day.empty { background:transparent; border:0; cursor:default; }
+    .cal-day.today { border-color:var(--gold-500); box-shadow:inset 0 0 0 1px var(--gold-500); }
+    .cal-day.has-note::after { content:""; position:absolute; inset-block-end:6px; inset-inline-start:6px; width:7px; height:7px; border-radius:50%; background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); }
+    .cal-day.selected { background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); color:var(--char-950); border-color:transparent; }
+
+    .cal-editor { margin-block-start:18px; padding-block-start:18px; border-block-start:1px solid var(--marble-200); }
+    .cal-editor.hidden { display:none; }
+    .cal-editor h4 { color:var(--char-900); margin-block-end:10px; }
+    .cal-editor textarea { width:100%; min-height:90px; resize:vertical; font-family:var(--font-base); font-size:.96rem; padding:12px 14px; border:1.5px solid var(--marble-200); border-radius:var(--radius); background:var(--marble-50); }
+    .cal-editor textarea:focus { outline:0; border-color:var(--gold-500); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.22); }
+    .cal-editor-actions { display:flex; gap:10px; margin-block-start:12px; }
+
+    /* ===== Tab 3: AI quote agent ===== */
+    /* ===== Tab 3: digital work-order form ===== */
+    .order-form {
+      max-width: 760px;
+      background: linear-gradient(160deg, var(--char-800), var(--char-950));
+      color: var(--white);
+      border: 1px solid oklch(0.82 0.13 88 / 0.20);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      box-shadow: var(--shadow-md);
+    }
+    .of-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px 18px; }
+    .of-field.full { grid-column: 1 / -1; }
+    .of-field label { display:block; font-size:.82rem; font-weight:700; color:var(--gold-500); margin-block-end:6px; }
+    .of-field input, .of-field textarea {
+      width:100%; font-family:var(--font-base); font-size:1rem;
+      padding:11px 13px; border-radius:10px;
+      background:oklch(1 0 0 / 0.07); color:var(--white);
+      border:1px solid oklch(1 0 0 / 0.14);
+      transition:border-color .2s, box-shadow .2s;
+    }
+    .of-field textarea { min-height:130px; resize:vertical; line-height:1.7; }
+    .of-field input::placeholder, .of-field textarea::placeholder { color:oklch(0.62 0.01 264); }
+    .of-field input:focus, .of-field textarea:focus { outline:0; border-color:var(--gold-500); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.22); }
+    .of-field .with-prefix { position:relative; }
+    .of-field .with-prefix span { position:absolute; inset-block-start:50%; inset-inline-start:12px; transform:translateY(-50%); color:var(--gold-400); font-weight:700; }
+    .of-field .with-prefix input { padding-inline-start:30px; font-size:1.2rem; font-weight:800; }
+    .of-readonly { opacity:.9; }
+    .of-actions { margin-block-start:24px; }
+
+    /* Two-column layout: order form (right) + helper calculator (left) */
+    .order-layout { display:grid; grid-template-columns:1.5fr 1fr; gap:22px; align-items:start; }
+    .order-layout .order-form { max-width:none; }
+
+    .calc-card {
+      background: linear-gradient(160deg, var(--char-850), var(--char-950));
+      border:1px solid oklch(0.82 0.13 88 / 0.18);
+      border-radius:var(--radius-lg);
+      padding:24px;
+      box-shadow:var(--shadow-md);
+      position:sticky; inset-block-start:90px;
+    }
+    .calc-card h3 { color:var(--gold-400); font-size:1.05rem; margin-block-end:4px; display:flex; align-items:center; gap:8px; }
+    .calc-card .hint { color:oklch(0.75 0.01 264); font-size:.82rem; margin-block-end:16px; }
+    .calc-field { margin-block-end:14px; }
+    .calc-field label { display:block; font-size:.82rem; font-weight:700; color:var(--gold-500); margin-block-end:6px; }
+    .calc-field input { width:100%; font-family:var(--font-base); font-size:1rem; padding:11px 13px; border-radius:10px; background:oklch(1 0 0 / 0.07); color:var(--white); border:1px solid oklch(1 0 0 / 0.14); transition:border-color .2s, box-shadow .2s; }
+    .calc-field input::placeholder { color:oklch(0.62 0.01 264); }
+    .calc-field input:focus { outline:0; border-color:var(--gold-500); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.22); }
+    .calc-total { margin-block:18px 16px; padding:16px; border-radius:12px; background:oklch(1 0 0 / 0.05); border:1px solid oklch(0.82 0.13 88 / 0.28); text-align:center; }
+    .calc-total .lbl { display:block; color:oklch(0.8 0.01 264); font-size:.8rem; margin-block-end:6px; }
+    .calc-total .val { font-family:var(--font-display); font-weight:800; font-size:2rem; color:var(--gold-400); text-shadow:0 0 18px var(--gold-glow); transition:transform .15s var(--ease-out); }
+    .calc-total .val.bump { transform:scale(1.08); }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 900px) {
+      .admin-shell { grid-template-columns: 1fr; }
+      .admin-sidebar { position:static; height:auto; flex-direction:column; }
+      .admin-nav { flex-direction:row; flex-wrap:wrap; }
+      .admin-nav button { flex:1 1 auto; justify-content:center; }
+      .of-grid { grid-template-columns:1fr; }
+      .order-layout { grid-template-columns:1fr; }
+      .calc-card { position:static; }
+      .admin-content { padding:20px 16px; }
+      .admin-topbar { padding:16px; }
+    }
+
+    /* ===== Work-order document (rendered off-screen for html2pdf) ===== */
+    #orderDoc { position:fixed; inset-block-start:0; inset-inline-start:-10000px; width:794px; background:#fff; }
+    .wo { color:#1a1a1a; font-family:var(--font-base); direction:rtl; padding:36px 40px; background:#fff; }
+    .wo-bsd { text-align:center; font-size:.9rem; color:#555; letter-spacing:2px; margin-block-end:10px; }
+    .wo-head { display:flex; justify-content:space-between; align-items:center; gap:16px; border-block-end:3px solid var(--gold-600); padding-block-end:16px; margin-block-end:20px; }
+    .wo-logo img { height:88px; width:auto; }
+    .wo-brand { text-align:center; }
+    .wo-brand-name { font-family:var(--font-display); font-weight:800; font-size:2.1rem; color:#1a2a52; line-height:1.1; }
+    .wo-sub { font-size:.9rem; color:#7a6320; font-weight:600; margin-block-start:4px; max-width:240px; }
+    .wo-contact { text-align:left; font-size:.85rem; color:#333; line-height:1.8; }
+    .wo-contact b { color:#1a2a52; }
+    .wo-titlebar { display:flex; justify-content:space-between; align-items:center; background:#1a2a52; color:#fff; padding:11px 18px; border-radius:8px; margin-block-end:18px; font-weight:800; font-size:1.1rem; }
+    .wo-titlebar .num { color:#f3d97a; }
+    .wo-meta { display:flex; gap:36px; margin-block-end:16px; font-size:.96rem; }
+    .wo-meta b { color:#7a6320; }
+    .wo-block .lbl { font-weight:700; color:#7a6320; margin-block-end:7px; }
+    .wo-desc { border:1px solid #ddd; border-radius:8px; padding:16px; min-height:150px; white-space:pre-wrap; line-height:1.9; background:#fbfaf6; font-size:.96rem; }
+    .wo-total { display:flex; justify-content:space-between; align-items:center; background:#faf3df; border:2px solid var(--gold-500); border-radius:10px; padding:14px 20px; margin-block:20px; font-size:1.35rem; font-weight:800; color:#1a2a52; }
+    .wo-foot { display:flex; justify-content:space-between; gap:30px; margin-block-start:20px; }
+    .wo-terms { font-size:.88rem; color:#333; line-height:1.95; }
+    .wo-terms b { color:#1a2a52; }
+    .wo-greet { text-align:left; font-family:var(--font-display); font-weight:800; color:#1a2a52; font-size:1.05rem; line-height:1.6; align-self:flex-end; }
+    .wo-sign { display:flex; justify-content:space-between; gap:60px; margin-block-start:40px; font-size:.92rem; text-align:center; }
+    .wo-sign span { flex:1; border-block-start:1px solid #888; padding-block-start:8px; color:#444; }
+  </style>
+</head>
+
+<body>
+  <div class="admin-shell">
+    <!-- ===== Sidebar ===== -->
+    <aside class="admin-sidebar">
+      <div class="admin-brand">
+        <img src="logo.jpg" alt="מיסטר פוליש" />
+        <b>מיסטר פוליש<span>פאנל ניהול</span></b>
+      </div>
+      <nav class="admin-nav" id="adminNav">
+        <button data-view="dash" class="active"><span class="ic" aria-hidden="true">📊</span> לוח בקרה ופעילות</button>
+        <button data-view="calendar"><span class="ic" aria-hidden="true">📅</span> יומן פגישות</button>
+        <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
+      </nav>
+      <button class="admin-logout" id="logoutBtn">התנתקות</button>
+    </aside>
+
+    <!-- ===== Main ===== -->
+    <main class="admin-main">
+      <div class="admin-topbar">
+        <h1 id="topTitle">לוח בקרה ופעילות</h1>
+        <span class="hello">שלום, אורי 👋</span>
+      </div>
+
+      <div class="admin-content">
+        <!-- Tab 1: Dashboard -->
+        <section class="admin-view active" id="view-dash">
+          <div class="view-head"><h2>סקירה כללית</h2><p>תמונת מצב של הפעילות באתר (נתוני הדגמה).</p></div>
+          <div class="metric-grid">
+            <div class="metric"><div class="ic">👁️</div><div class="num" data-count="1284">0</div><div class="lbl">כניסות לאתר (החודש)</div><div class="trend">▲ 12% מהחודש שעבר</div></div>
+            <div class="metric"><div class="ic">🎯</div><div class="num" data-count="37">0</div><div class="lbl">לידים חדשים</div><div class="trend">▲ 8 השבוע</div></div>
+            <div class="metric"><div class="ic">📝</div><div class="num" data-count="21">0</div><div class="lbl">שליחות טופס</div><div class="trend">▲ 5 השבוע</div></div>
+            <div class="metric"><div class="ic">💬</div><div class="num" data-count="58">0</div><div class="lbl">פניות וואטסאפ</div><div class="trend">▲ 19% מהחודש שעבר</div></div>
+          </div>
+          <div class="panel">
+            <h3>פעילות אחרונה</h3>
+            <ul class="activity">
+              <li><span class="dot"></span><span class="txt">ליד חדש: בקשה לפוליש קריסטל מרעננה</span><span class="time">לפני 2 שעות</span></li>
+              <li><span class="dot"></span><span class="txt">שליחת טופס: ליטוש שיש - תל אביב</span><span class="time">לפני 5 שעות</span></li>
+              <li><span class="dot"></span><span class="txt">פניית וואטסאפ: חידוש בטון</span><span class="time">אתמול</span></li>
+              <li><span class="dot"></span><span class="txt">ליד חדש: מריחת סילר - בית שמש</span><span class="time">אתמול</span></li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- Tab 2: Calendar -->
+        <section class="admin-view" id="view-calendar">
+          <div class="view-head"><h2>יומן פגישות</h2><p>לחץ על יום כדי להוסיף או לצפות בהערה. הנתונים נשמרים מקומית בדפדפן.</p></div>
+          <div class="cal">
+            <div class="cal-head">
+              <div class="cal-nav">
+                <button id="calPrev" aria-label="חודש קודם">›</button>
+                <button id="calNext" aria-label="חודש הבא">‹</button>
+              </div>
+              <div class="title" id="calTitle"></div>
+            </div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="cal-editor hidden" id="calEditor">
+              <h4 id="calEditorTitle">הערה ליום</h4>
+              <textarea id="calNote" placeholder="לדוגמה: 09:00 פגישה עם משפחת לוי - ליטוש שיש, רעננה"></textarea>
+              <div class="cal-editor-actions">
+                <button class="btn btn-shimmer btn-sm" id="calSave">שמירה</button>
+                <button class="btn btn-navy btn-sm" id="calDelete">מחיקה</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab 3: Work Order form -->
+        <section class="admin-view" id="view-ai">
+          <div class="view-head"><h2>הזמנת עבודה</h2><p>מלא את פרטי ההזמנה והפק מסמך PDF רשמי להורדה ישירה.</p></div>
+          <div class="order-layout">
+          <div class="order-form">
+            <div class="of-grid">
+              <div class="of-field">
+                <label for="ofNum">הזמנת עבודה מס׳</label>
+                <input id="ofNum" class="of-readonly" readonly />
+              </div>
+              <div class="of-field">
+                <label for="ofDate">תאריך</label>
+                <input id="ofDate" />
+              </div>
+              <div class="of-field full">
+                <label for="ofClient">עבור הלקוח</label>
+                <input id="ofClient" placeholder="שם הלקוח" autocomplete="off" />
+              </div>
+              <div class="of-field full">
+                <label for="ofAddress">כתובת</label>
+                <input id="ofAddress" placeholder="כתובת הלקוח" autocomplete="off" />
+              </div>
+              <div class="of-field full">
+                <label for="ofDesc">תיאור העבודה ודרישת הלקוח</label>
+                <textarea id="ofDesc" placeholder="פרט את העבודה: סוג הליטוש/פוליש, חדרים/שטח, דרישות מיוחדות של הלקוח וכו׳"></textarea>
+              </div>
+              <div class="of-field full">
+                <label for="ofTotal">סך הכל לתשלום</label>
+                <div class="with-prefix"><span>₪</span><input id="ofTotal" type="number" inputmode="decimal" placeholder="0" /></div>
+              </div>
+            </div>
+            <div class="of-actions">
+              <button class="btn btn-shiny btn-lg btn-block" id="ofGenerate"><span class="shiny-content">📄 הפק הזמנת עבודה (PDF)</span></button>
+            </div>
+          </div>
+
+          <aside class="calc-card">
+            <h3><span aria-hidden="true">🧮</span> מחשבון עזר לחישוב עלות</h3>
+            <p class="hint">חשב מחיר לפי שטח, ועדכן אוטומטית את הסכום בטופס.</p>
+            <div class="calc-field">
+              <label for="calcPrice">מחיר למ״ר (₪)</label>
+              <input id="calcPrice" type="number" inputmode="decimal" placeholder="0" />
+            </div>
+            <div class="calc-field">
+              <label for="calcMeters">כמות מ״ר</label>
+              <input id="calcMeters" type="number" inputmode="decimal" placeholder="0" />
+            </div>
+            <div class="calc-total">
+              <span class="lbl">סך הכל מחושב</span>
+              <span class="val" id="calcTotal">₪0</span>
+            </div>
+            <button class="btn btn-shiny btn-block" id="calcSync"><span class="shiny-content">⬅ עדכן סכום בטופס</span></button>
+          </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===== Work-order document (rendered off-screen → PDF) ===== -->
+  <div id="orderDoc"></div>
+
+  <script>
+    (function () {
+      "use strict";
+      // Guard (belt & suspenders alongside the head guard)
+      if (localStorage.getItem("isUriAdmin") !== "true") { location.replace("login.html"); return; }
+
+      /* ---------- Tab switching ---------- */
+      var nav = document.getElementById("adminNav");
+      var titles = { dash: "לוח בקרה ופעילות", calendar: "יומן פגישות", ai: "הזמנות עבודה" };
+      nav.addEventListener("click", function (e) {
+        var btn = e.target.closest("button[data-view]");
+        if (!btn) return;
+        nav.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b === btn); });
+        var v = btn.getAttribute("data-view");
+        document.querySelectorAll(".admin-view").forEach(function (s) { s.classList.toggle("active", s.id === "view-" + v); });
+        document.getElementById("topTitle").textContent = titles[v];
+      });
+
+      /* ---------- Logout ---------- */
+      document.getElementById("logoutBtn").addEventListener("click", function () {
+        localStorage.removeItem("isUriAdmin");
+        location.replace("login.html");
+      });
+
+      /* ---------- Tab 1: count-up metrics ---------- */
+      document.querySelectorAll(".metric .num[data-count]").forEach(function (el) {
+        var target = parseInt(el.getAttribute("data-count"), 10), cur = 0;
+        var step = Math.max(1, Math.round(target / 40));
+        var t = setInterval(function () {
+          cur += step;
+          if (cur >= target) { cur = target; clearInterval(t); }
+          el.textContent = cur.toLocaleString("he-IL");
+        }, 24);
+      });
+
+      /* ---------- Tab 2: Calendar ---------- */
+      var calGrid = document.getElementById("calGrid");
+      var calTitle = document.getElementById("calTitle");
+      var editor = document.getElementById("calEditor");
+      var editorTitle = document.getElementById("calEditorTitle");
+      var noteBox = document.getElementById("calNote");
+      var NOTES_KEY = "mrp_cal_notes";
+      var months = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
+      var dows = ["א","ב","ג","ד","ה","ו","ש"];
+      var view = new Date(); view.setDate(1);
+      var selectedKey = null;
+
+      function getNotes() { try { return JSON.parse(localStorage.getItem(NOTES_KEY)) || {}; } catch (e) { return {}; } }
+      function setNotes(n) { localStorage.setItem(NOTES_KEY, JSON.stringify(n)); }
+      function key(y, m, d) { return y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0"); }
+
+      function renderCal() {
+        var y = view.getFullYear(), m = view.getMonth();
+        calTitle.textContent = months[m] + " " + y;
+        calGrid.innerHTML = "";
+        dows.forEach(function (d) { var h = document.createElement("div"); h.className = "cal-dow"; h.textContent = d; calGrid.appendChild(h); });
+        var firstDow = new Date(y, m, 1).getDay();
+        var days = new Date(y, m + 1, 0).getDate();
+        var notes = getNotes();
+        var today = new Date();
+        for (var i = 0; i < firstDow; i++) { var e = document.createElement("div"); e.className = "cal-day empty"; calGrid.appendChild(e); }
+        for (var d = 1; d <= days; d++) {
+          var cell = document.createElement("button");
+          cell.className = "cal-day";
+          cell.type = "button";
+          cell.textContent = d;
+          var k = key(y, m, d);
+          cell.dataset.key = k;
+          if (notes[k]) cell.classList.add("has-note");
+          if (y === today.getFullYear() && m === today.getMonth() && d === today.getDate()) cell.classList.add("today");
+          if (k === selectedKey) cell.classList.add("selected");
+          calGrid.appendChild(cell);
+        }
+      }
+
+      calGrid.addEventListener("click", function (e) {
+        var cell = e.target.closest(".cal-day:not(.empty)");
+        if (!cell) return;
+        selectedKey = cell.dataset.key;
+        renderCal();
+        editor.classList.remove("hidden");
+        editorTitle.textContent = "הערה ליום " + selectedKey.split("-").reverse().join("/");
+        noteBox.value = getNotes()[selectedKey] || "";
+        noteBox.focus();
+      });
+      document.getElementById("calSave").addEventListener("click", function () {
+        if (!selectedKey) return;
+        var n = getNotes();
+        if (noteBox.value.trim()) n[selectedKey] = noteBox.value.trim(); else delete n[selectedKey];
+        setNotes(n); renderCal();
+      });
+      document.getElementById("calDelete").addEventListener("click", function () {
+        if (!selectedKey) return;
+        var n = getNotes(); delete n[selectedKey]; setNotes(n);
+        noteBox.value = ""; renderCal();
+      });
+      document.getElementById("calPrev").addEventListener("click", function () { view.setMonth(view.getMonth() - 1); renderCal(); });
+      document.getElementById("calNext").addEventListener("click", function () { view.setMonth(view.getMonth() + 1); renderCal(); });
+      renderCal();
+
+      /* ---------- Tab 3: Work Order ---------- */
+      var $ = function (id) { return document.getElementById(id); };
+      var SEQ_KEY = "mrp_order_seq";
+
+      function getSeq() { var v = parseInt(localStorage.getItem(SEQ_KEY), 10); return isNaN(v) ? 3 : v; }
+      function setSeq(v) { localStorage.setItem(SEQ_KEY, String(v)); }
+      function pad3(n) { return String(n).padStart(3, "0"); }
+
+      // Prefill order number + today's date
+      $("ofNum").value = pad3(getSeq());
+      $("ofDate").value = new Date().toLocaleDateString("he-IL");
+
+      /* ---------- Helper calculator (price × m²) ---------- */
+      function calcRecalc() {
+        var p = parseFloat($("calcPrice").value) || 0;
+        var m = parseFloat($("calcMeters").value) || 0;
+        var total = p * m;
+        $("calcTotal").textContent = "₪" + Math.round(total).toLocaleString("he-IL");
+        return total;
+      }
+      ["calcPrice", "calcMeters"].forEach(function (id) {
+        $(id).addEventListener("input", function () {
+          calcRecalc();
+          var v = $("calcTotal");
+          v.classList.add("bump");
+          setTimeout(function () { v.classList.remove("bump"); }, 150);
+        });
+      });
+      $("calcSync").addEventListener("click", function () {
+        var total = calcRecalc();
+        $("ofTotal").value = Math.round(total);
+        $("ofTotal").focus();
+        $("ofTotal").style.boxShadow = "0 0 0 3px oklch(0.82 0.13 88 / 0.55)";
+        setTimeout(function () { $("ofTotal").style.boxShadow = ""; }, 700);
+      });
+
+      /* ---------- Logo resolver (png → jpg → text fallback) ---------- */
+      function resolveLogo(cb) {
+        var tryNames = ["logo.png", "logo.jpg"];
+        var i = 0;
+        (function next() {
+          if (i >= tryNames.length) { cb(null); return; }
+          var img = new Image();
+          img.onload = function () { cb(tryNames[i]); };
+          img.onerror = function () { i++; next(); };
+          img.src = tryNames[i];
+        })();
+      }
+
+      var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+
+      function buildDoc(data, logoSrc) {
+        var logo = logoSrc
+          ? '<div class="wo-logo"><img src="' + logoSrc + '" alt="Mr. Polish" /></div>'
+          : '<div class="wo-logo"></div>';
+        var total = (parseFloat(data.total) || 0).toLocaleString("he-IL");
+        return '' +
+          '<div class="wo">' +
+            '<div class="wo-bsd">בס"ד</div>' +
+            '<div class="wo-head">' +
+              logo +
+              '<div class="wo-brand"><div class="wo-brand-name">Mr. Polish</div><div class="wo-sub">כל עבודות הליטוש, פוליש והברקה קריסטלית</div></div>' +
+              '<div class="wo-contact"><b>אורי: 052-9534540</b><br/>רח׳ אהרון אהרונסון 15, נתניה<br/>עוסק פטור 023062185</div>' +
+            '</div>' +
+            '<div class="wo-titlebar"><span>הזמנת עבודה</span><span class="num">מס׳ ' + esc(data.num) + '</span><span>תאריך: ' + esc(data.date) + '</span></div>' +
+            '<div class="wo-meta"><span><b>עבור הלקוח:</b> ' + esc(data.client) + '</span><span><b>כתובת:</b> ' + esc(data.address) + '</span></div>' +
+            '<div class="wo-block"><div class="lbl">תיאור העבודה ודרישת הלקוח:</div><div class="wo-desc">' + esc(data.desc) + '</div></div>' +
+            '<div class="wo-total"><span>סך הכל לתשלום</span><span>₪' + total + '</span></div>' +
+            '<div class="wo-foot">' +
+              '<div class="wo-terms"><b>תנאי תשלום:</b><br/>50% ביום ההגעה.<br/>40% ביום בסוף העבודה.<br/>10% לפינישים הסופיים.<br/>הצעת המחיר אינה כוללת מע"מ.</div>' +
+              '<div class="wo-greet">בברכה,<br/>אורי מרגלית<br/>Mr. Polish</div>' +
+            '</div>' +
+            '<div class="wo-sign"><span>חתימת הלקוח</span><span>חתימת המבצע</span></div>' +
+          '</div>';
+      }
+
+      $("ofGenerate").addEventListener("click", function () {
+        var btn = this;
+        var seq = getSeq();
+        var data = {
+          num: pad3(seq),
+          date: $("ofDate").value.trim() || new Date().toLocaleDateString("he-IL"),
+          client: $("ofClient").value.trim() || "—",
+          address: $("ofAddress").value.trim() || "—",
+          desc: $("ofDesc").value.trim() || "—",
+          total: $("ofTotal").value
+        };
+
+        btn.disabled = true;
+        resolveLogo(function (logoSrc) {
+          var host = document.getElementById("orderDoc");
+          host.innerHTML = buildDoc(data, logoSrc);
+
+          var opt = {
+            margin: [8, 8, 8, 8],
+            filename: "הזמנת_עבודה_" + data.num + ".pdf",
+            image: { type: "jpeg", quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 794 },
+            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+          };
+
+          var done = function () {
+            // increment the sequence only after a successful generation
+            setSeq(seq + 1);
+            $("ofNum").value = pad3(seq + 1);
+            host.innerHTML = "";
+            btn.disabled = false;
+          };
+
+          // small delay so the logo image is decoded before capture
+          setTimeout(function () {
+            try {
+              var worker = html2pdf().set(opt).from(host.firstElementChild).save();
+              if (worker && typeof worker.then === "function") { worker.then(done).catch(done); }
+              else { setTimeout(done, 1800); }
+            } catch (e) {
+              btn.disabled = false;
+              alert("אירעה שגיאה בהפקת ה-PDF. נסה שוב.");
+            }
+          }, 200);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

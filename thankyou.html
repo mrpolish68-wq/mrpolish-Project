@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>תודה! הפרטים התקבלו | מיסטר פוליש</title>
+  <meta name="description" content="תודה שפנית למיסטר פוליש - אורי מרגלית. הפרטים התקבלו ונחזור אליך בהקדם." />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#1f2024" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800;900&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/jpeg" href="logo.jpg" />
+
+  <style>
+    .ty-wrap {
+      min-height: 100vh; min-height: 100dvh;
+      display: grid; place-items: center;
+      padding: 24px;
+      background: radial-gradient(circle at 50% 0%, oklch(0.28 0.02 264), var(--char-950) 70%);
+      overflow: hidden;
+    }
+    .ty-card {
+      width: 100%; max-width: 480px;
+      text-align: center;
+      background: oklch(1 0 0 / 0.04);
+      border: 1px solid oklch(0.82 0.13 88 / 0.22);
+      border-radius: var(--radius-lg);
+      padding: 48px 34px;
+      box-shadow: var(--shadow-lg);
+      -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+      animation: tyIn .7s var(--ease-out) both;
+    }
+    @keyframes tyIn { from { opacity:0; transform: translateY(26px) scale(.97); } to { opacity:1; transform:none; } }
+
+    /* Animated checkmark */
+    .ty-check { width: 96px; height: 96px; margin: 0 auto 22px; display:block; }
+    .ty-check circle {
+      stroke: var(--gold-500); stroke-width: 3; fill: none;
+      stroke-dasharray: 295; stroke-dashoffset: 295;
+      animation: tyCircle .7s var(--ease-out) .2s forwards;
+    }
+    .ty-check path {
+      stroke: var(--gold-400); stroke-width: 4; fill: none;
+      stroke-linecap: round; stroke-linejoin: round;
+      stroke-dasharray: 60; stroke-dashoffset: 60;
+      animation: tyTick .5s var(--ease-out) .8s forwards;
+      filter: drop-shadow(0 0 8px var(--gold-glow));
+    }
+    @keyframes tyCircle { to { stroke-dashoffset: 0; } }
+    @keyframes tyTick { to { stroke-dashoffset: 0; } }
+
+    .ty-card h1 { color: var(--white); font-size: clamp(1.6rem, 5vw, 2.2rem); }
+    .ty-card p { color: oklch(0.86 0.01 264); line-height: 1.8; margin-block: 14px 28px; }
+    .ty-card .sub-strong { color: var(--gold-400); font-weight: 700; }
+    .ty-meta { margin-block-start: 22px; color: oklch(0.7 0.01 264); font-size: .85rem; }
+    .ty-meta a { color: var(--gold-400); }
+
+    /* Floating confetti dots (lightweight, GPU transform only) */
+    .ty-confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+    .ty-confetti i {
+      position: absolute; top: -12px; width: 9px; height: 9px; border-radius: 2px;
+      background: var(--gold-500); opacity: 0;
+      animation: tyFall linear forwards;
+    }
+    @keyframes tyFall {
+      0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(105vh) rotate(540deg); opacity: 0; }
+    }
+    .ty-card { position: relative; z-index: 1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .ty-card, .ty-check circle, .ty-check path { animation: none; }
+      .ty-check circle, .ty-check path { stroke-dashoffset: 0; }
+      .ty-confetti { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="ty-confetti" id="confetti" aria-hidden="true"></div>
+
+  <main class="ty-wrap">
+    <section class="ty-card">
+      <svg class="ty-check" viewBox="0 0 100 100" role="img" aria-label="הצלחה">
+        <circle cx="50" cy="50" r="47"></circle>
+        <path d="M30 52 L45 67 L72 36"></path>
+      </svg>
+
+      <h1>תודה! הפרטים התקבלו בהצלחה</h1>
+      <p>פנייתך התקבלה אצלנו ו<span class="sub-strong">אורי יחזור אליך בהקדם</span> עם כל הפרטים והצעת מחיר מותאמת. בינתיים, מוזמן/ת להמשיך לגלוש באתר.</p>
+
+      <a href="index.html" class="btn btn-gold btn-lg">חזרה לעמוד הבית</a>
+
+      <p class="ty-meta">רוצה לזרז? חייג/י <a href="tel:0529534540" dir="ltr">052-9534540</a> או שלח/י
+        <a href="https://wa.me/972529534540" target="_blank" rel="noopener">וואטסאפ</a>.</p>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      var host = document.getElementById("confetti");
+      var colors = ["#e8c34a", "#caa030", "#f3d97a", "#ffffff"];
+      for (var i = 0; i < 26; i++) {
+        var c = document.createElement("i");
+        c.style.insetInlineStart = Math.random() * 100 + "vw";
+        c.style.background = colors[i % colors.length];
+        c.style.animationDuration = (2.6 + Math.random() * 2.2) + "s";
+        c.style.animationDelay = (Math.random() * 1.2) + "s";
+        c.style.transform = "scale(" + (0.7 + Math.random()) + ")";
+        host.appendChild(c);
+      }
+      // clean up after the burst so nothing keeps running
+      setTimeout(function () { host.remove(); }, 7000);
+    })();
+  </script>
+</body>
+</html>

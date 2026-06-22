@@ -1,0 +1,28 @@
+# Project: Mr. Polish Website (אורי מרגלית)
+
+## Business Context & Identity
+- **Client:** Uri Margalit (אורי מרגלית) - 30 years of professional experience.
+- **Brand Name:** Mr. Polish (מיסטר פוליש). Has an official logo.
+- **Core Services:** Professional floor polishing, stone and marble restoration (ליטוש אבן ושיש), crystalline shine (הברקה קריסטלית / פוליש קריסטל), sealer protection application (מריחת סילר הגנה), and concrete/Bomanite renewal (חידוש וליטוש בטון ובומנייט).
+- **Target Audience:** Private clients (houses/apartments) and corporate/professional clients (architects, contractors, offices). Nationwide service with focus on Center, Jerusalem, and Beit Shemesh.
+- **Primary Goal:** A highly attractive, modern, and high-converting website showcasing before/after galleries and videos, driving users to call or send a WhatsApp message. Includes a future secure admin panel with a calendar and AI quote/invoice generator.
+
+## Tech Stack & Environment
+- **Environment:** Windows Workspace / Antigravity IDE / Claude Code
+- **Frontend:** Semantic HTML5, CSS3, modern responsive layouts (Mobile-First approach).
+- **Language & Internationalization (i18n):** - **Primary Language:** Hebrew (Strict RTL support, `dir="rtl"` and `lang="he"` by default).
+  - **Secondary Language:** English (Built-in layout flexibility for LTR translation, clean language switching architecture without breaking UI).
+
+## Available Skills & Plugins (Global / User Scope)
+You must implicitly leverage these pre-installed, verified tools for development:
+1. `ui-ux-pro-max-skill`: Enforce high-converting layouts, professional color palettes, and clear visual hierarchy.
+2. `brand-guidelines`: Maintain the professional, reliable, and premium tone of a 30-year expert.
+3. `frontend-design`: Ensure pixel-perfect responsiveness on mobile devices, tablets, and desktops. Always implement a sticky mobile action bar for calls/WhatsApp.
+4. `AgriciDaniel/claude-seo`: Inject schema definitions, optimize meta tags, and structure content for top Google ranking using semantic elements. Includes local Playwright browser capability.
+
+## Rigid Development Rules
+1. **Hebrew Punctuation & Alignment:** Ensure periods, colons, and question marks are correctly aligned in RTL text without syntax flipping.
+2. **Multilingual Layout Safety:** CSS structure must handle direction switching smoothly (`rtl` to `ltr`) using logical properties (e.g., `margin-inline-start`) to prevent layout breaking when switching to English.
+3. **Step-by-Step Implementation:** Build one component or one page at a time. Do not overcomplicate the folder structure.
+4. **Compliance & Security:** Code must comply with Israeli regulations (Accessibility/נגישות, Privacy/חוק 13). Secure all forms against vulnerabilities.
+5. **Git Updates:** Remind the user to commit and push changes to GitHub whenever a stable milestone is reached to keep the live deployment updated.
