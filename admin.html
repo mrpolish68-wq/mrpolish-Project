@@ -7,12 +7,19 @@
   <meta name="robots" content="noindex, nofollow" />
   <meta name="theme-color" content="#1f2024" />
 
-  <!-- ===== PAGE GUARD: runs before anything renders ===== -->
+  <!-- ===== PAGE GUARD: fast pre-check before anything renders =====
+       Bounces logged-out visitors instantly (no flash). The body
+       script then verifies the session against Supabase for real. -->
   <script>
-    if (localStorage.getItem("isUriAdmin") !== "true") {
-      location.replace("login.html");
-    }
+    (function () {
+      try {
+        if (!localStorage.getItem("sb-jxawixeegaaqjdbtacfi-auth-token")) {
+          location.replace("login.html");
+        }
+      } catch (e) { location.replace("login.html"); }
+    })();
   </script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -364,8 +371,16 @@
   <script>
     (function () {
       "use strict";
-      // Guard (belt & suspenders alongside the head guard)
-      if (localStorage.getItem("isUriAdmin") !== "true") { location.replace("login.html"); return; }
+
+      // Supabase Auth — verify a real, non-expired session server-side.
+      var SUPABASE_URL = "https://jxawixeegaaqjdbtacfi.supabase.co";
+      var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YXdpeGVlZ2FhcWpkYnRhY2ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMzk2NTIsImV4cCI6MjA5NzcxNTY1Mn0.3ixLBI6OLQ_CcBgAGUo8_iUtEmMVpoEd8Ypp2ReuMq4";
+      var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+      // getUser() validates the JWT with Supabase; bounce if invalid/expired.
+      sb.auth.getUser().then(function (res) {
+        if (res.error || !res.data || !res.data.user) location.replace("login.html");
+      });
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
@@ -381,8 +396,7 @@
 
       /* ---------- Logout ---------- */
       document.getElementById("logoutBtn").addEventListener("click", function () {
-        localStorage.removeItem("isUriAdmin");
-        location.replace("login.html");
+        sb.auth.signOut().then(function () { location.replace("login.html"); });
       });
 
       /* ---------- Tab 1: count-up metrics ---------- */

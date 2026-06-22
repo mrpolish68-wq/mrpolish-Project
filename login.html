@@ -12,6 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800;900&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet" />
 
   <script>document.documentElement.classList.add("js");</script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/jpeg" href="logo.jpg" />
 
@@ -64,6 +65,11 @@
       <p class="sub">אזור מאובטח - מיסטר פוליש</p>
 
       <div class="login-field">
+        <label for="email">אימייל</label>
+        <input type="email" id="email" name="email" placeholder="admin@mrpolish.co.il" autocomplete="username" dir="ltr" required />
+      </div>
+
+      <div class="login-field">
         <label for="pw">סיסמה</label>
         <input type="password" id="pw" name="pw" placeholder="הקלד סיסמה" autocomplete="current-password" required />
       </div>
@@ -80,33 +86,44 @@
   <script>
     (function () {
       "use strict";
-      var MASTER = "UriMrPolish2026!";
 
-      // Already authenticated → straight to the dashboard
-      if (localStorage.getItem("isUriAdmin") === "true") {
-        location.replace("admin.html");
-        return;
-      }
+      // Supabase Auth — real server-side authentication (replaces the old
+      // hardcoded client-side password). The anon key is public by design.
+      var SUPABASE_URL = "https://jxawixeegaaqjdbtacfi.supabase.co";
+      var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YXdpeGVlZ2FhcWpkYnRhY2ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMzk2NTIsImV4cCI6MjA5NzcxNTY1Mn0.3ixLBI6OLQ_CcBgAGUo8_iUtEmMVpoEd8Ypp2ReuMq4";
+      var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
       var form = document.getElementById("loginForm");
+      var email = document.getElementById("email");
       var pw = document.getElementById("pw");
       var err = document.getElementById("err");
       var card = form;
 
+      // Already signed in (validated server-side) → straight to the dashboard.
+      // getUser() verifies the JWT with Supabase, so a tampered/expired token
+      // can't trigger a redirect loop with the admin guard.
+      sb.auth.getUser().then(function (res) {
+        if (!res.error && res.data && res.data.user) location.replace("admin.html");
+      });
+
+      function fail(msg) {
+        err.style.color = "";
+        err.textContent = msg;
+        card.classList.remove("shake");
+        void card.offsetWidth; // restart animation
+        card.classList.add("shake");
+      }
+
       form.addEventListener("submit", function (e) {
         e.preventDefault();
-        if (pw.value === MASTER) {
-          localStorage.setItem("isUriAdmin", "true");
-          err.style.color = "var(--whatsapp-dark)";
-          err.textContent = "מתחבר…";
-          location.href = "admin.html";
-        } else {
-          err.textContent = "סיסמה שגויה, נסה שוב.";
-          card.classList.remove("shake");
-          void card.offsetWidth; // restart animation
-          card.classList.add("shake");
-          pw.select();
-        }
+        err.style.color = "var(--whatsapp-dark)";
+        err.textContent = "מתחבר…";
+        sb.auth.signInWithPassword({ email: email.value.trim(), password: pw.value })
+          .then(function (res) {
+            if (res.error) { fail("פרטי התחברות שגויים, נסו שוב."); pw.select(); return; }
+            location.href = "admin.html";
+          })
+          .catch(function () { fail("שגיאת התחברות, נסו שוב מאוחר יותר."); });
       });
     })();
   </script>
