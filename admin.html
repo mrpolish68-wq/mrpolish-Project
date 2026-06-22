@@ -13,7 +13,7 @@
   <script>
     (function () {
       try {
-        if (!localStorage.getItem("sb-jxawixeegaaqjdbtacfi-auth-token")) {
+        if (!localStorage.getItem("sb-mmognkxkglkotzkuxzly-auth-token")) {
           location.replace("login.html");
         }
       } catch (e) { location.replace("login.html"); }
@@ -373,8 +373,8 @@
       "use strict";
 
       // Supabase Auth — verify a real, non-expired session server-side.
-      var SUPABASE_URL = "https://jxawixeegaaqjdbtacfi.supabase.co";
-      var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YXdpeGVlZ2FhcWpkYnRhY2ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMzk2NTIsImV4cCI6MjA5NzcxNTY1Mn0.3ixLBI6OLQ_CcBgAGUo8_iUtEmMVpoEd8Ypp2ReuMq4";
+      var SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
+      var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
       var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
       // getUser() validates the JWT with Supabase; bounce if invalid/expired.

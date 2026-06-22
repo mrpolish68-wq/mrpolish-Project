@@ -11,8 +11,8 @@
   /* ---------------------------------------------------------
      SUPABASE — lead storage backend (REST API)
   --------------------------------------------------------- */
-  var SUPABASE_URL = "https://jxawixeegaaqjdbtacfi.supabase.co/rest/v1/";
-  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4YXdpeGVlZ2FhcWpkYnRhY2ZpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMzk2NTIsImV4cCI6MjA5NzcxNTY1Mn0.3ixLBI6OLQ_CcBgAGUo8_iUtEmMVpoEd8Ypp2ReuMq4";
+  var SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co/rest/v1/";
+  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
 
   /* ---------------------------------------------------------
      0. PRELOADER / SPLASH SCREEN
