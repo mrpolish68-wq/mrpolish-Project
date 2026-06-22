@@ -75,7 +75,7 @@
     .admin-logout:hover { background: oklch(0.55 0.16 25 / 0.2); }
 
     /* Main */
-    .admin-main { padding: 0 0 40px; }
+    .admin-main { padding: 0 0 40px; min-width: 0; } /* allow inner table to scroll, not stretch the page */
     .admin-topbar {
       position: sticky; inset-block-start:0; z-index:10;
       background: oklch(0.99 0 0 / 0.9); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
@@ -116,6 +116,42 @@
     .activity .dot { width:9px; height:9px; border-radius:50%; background:var(--gold-500); flex-shrink:0; }
     .activity .txt { flex:1; color:var(--ink-700); font-size:.92rem; }
     .activity .time { color:var(--ink-500); font-size:.8rem; }
+
+    /* ===== Leads management table ===== */
+    .leads-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-block-end:16px; }
+    .leads-search-wrap { position:relative; flex:1; min-width:220px; max-width:420px; }
+    .leads-search-ic { position:absolute; inset-inline-start:14px; inset-block-start:50%; transform:translateY(-50%); font-size:.95rem; opacity:.6; pointer-events:none; }
+    .leads-search {
+      width:100%; font-family:var(--font-base); font-size:.95rem;
+      padding:11px 14px; padding-inline-start:40px;
+      border:1.5px solid var(--marble-200); border-radius:var(--radius);
+      background:var(--marble-50); color:var(--char-900);
+      transition:border-color .2s, box-shadow .2s, background .2s;
+    }
+    .leads-search:focus { outline:0; border-color:var(--gold-500); background:var(--white); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.2); }
+    .leads-count { color:var(--ink-500); font-size:.85rem; font-weight:600; white-space:nowrap; }
+
+    .leads-table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; border:1px solid var(--marble-200); }
+    .leads-table { width:100%; border-collapse:collapse; min-width:720px; font-size:.9rem; }
+    .leads-table thead th {
+      text-align:start; font-weight:700; color:var(--char-900); font-size:.82rem;
+      background:var(--marble-100); padding:12px 14px; white-space:nowrap;
+      border-block-end:1px solid var(--marble-200); position:sticky; inset-block-start:0;
+    }
+    .leads-table th.sortable { cursor:pointer; user-select:none; transition:color .15s; }
+    .leads-table th.sortable:hover { color:var(--gold-700); }
+    .leads-table th .arrow { color:var(--gold-600); font-size:.75rem; margin-inline-start:2px; }
+    .leads-table tbody td { padding:11px 14px; border-block-end:1px solid var(--marble-100); color:var(--ink-700); vertical-align:top; }
+    .leads-table tbody tr:hover { background:var(--marble-50); }
+    .leads-table tbody tr:last-child td { border-block-end:0; }
+    .leads-table .col-date { white-space:nowrap; color:var(--ink-500); font-size:.82rem; }
+    .leads-table .col-name { font-weight:700; color:var(--char-900); white-space:nowrap; }
+    .leads-table .col-phone { white-space:nowrap; direction:ltr; text-align:start; }
+    .leads-table .col-phone a { color:var(--char-700); text-decoration:none; }
+    .leads-table .col-phone a:hover { color:var(--gold-700); text-decoration:underline; }
+    .leads-table .col-notes { max-width:260px; color:var(--ink-500); }
+    .leads-empty { text-align:center; color:var(--ink-500); padding:28px 14px !important; font-weight:600; }
+    .leads-muted { color:var(--ink-500); opacity:.7; }
 
     /* ===== Tab 2: calendar ===== */
     .cal { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:22px; box-shadow:var(--shadow-sm); }
@@ -250,6 +286,7 @@
       </div>
       <nav class="admin-nav" id="adminNav">
         <button data-view="dash" class="active"><span class="ic" aria-hidden="true">📊</span> לוח בקרה ופעילות</button>
+        <button data-view="leads"><span class="ic" aria-hidden="true">📋</span> ניהול לידים</button>
         <button data-view="calendar"><span class="ic" aria-hidden="true">📅</span> יומן פגישות</button>
         <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
       </nav>
@@ -278,6 +315,37 @@
             <ul class="activity" id="activityList">
               <li><span class="dot"></span><span class="txt">טוען נתונים…</span></li>
             </ul>
+          </div>
+        </section>
+
+        <!-- Tab: Leads management -->
+        <section class="admin-view" id="view-leads">
+          <div class="view-head"><h2>ניהול לידים</h2><p>כל הפניות שהתקבלו מהאתר. חיפוש לפי שם או עיר, ומיון לפי תאריך או שם.</p></div>
+          <div class="panel">
+            <div class="leads-toolbar">
+              <div class="leads-search-wrap">
+                <span class="leads-search-ic" aria-hidden="true">🔍</span>
+                <input type="search" id="leadsSearch" class="leads-search" placeholder="חיפוש לפי שם או עיר…" autocomplete="off" />
+              </div>
+              <div class="leads-count" id="leadsCount"></div>
+            </div>
+            <div class="leads-table-wrap">
+              <table class="leads-table">
+                <thead>
+                  <tr>
+                    <th class="sortable" data-sort="created_at" aria-sort="descending">תאריך <span class="arrow">▾</span></th>
+                    <th class="sortable" data-sort="name">שם <span class="arrow"></span></th>
+                    <th>טלפון</th>
+                    <th>עיר / יישוב</th>
+                    <th>שירות</th>
+                    <th>הערות</th>
+                  </tr>
+                </thead>
+                <tbody id="leadsBody">
+                  <tr><td colspan="6" class="leads-empty">טוען נתונים…</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -382,7 +450,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", calendar: "יומן פגישות", ai: "הזמנות עבודה" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -390,6 +458,7 @@
         var v = btn.getAttribute("data-view");
         document.querySelectorAll(".admin-view").forEach(function (s) { s.classList.toggle("active", s.id === "view-" + v); });
         document.getElementById("topTitle").textContent = titles[v];
+        if (v === "leads") loadLeads(); // lazy-load on first open
       });
 
       /* ---------- Logout ---------- */
@@ -495,6 +564,134 @@
                 esc(label) + '</span><span class="time">' + esc(timeAgo(r.created_at)) + "</span></li>";
             }).join("");
           });
+      })();
+
+      /* ---------- Leads management: full searchable + sortable table ----------
+         Fetches ALL leads (authenticated session). Lazy-loaded on first open. */
+      var loadLeads = (function () {
+        var body = document.getElementById("leadsBody");
+        var searchInput = document.getElementById("leadsSearch");
+        var countEl = document.getElementById("leadsCount");
+        var headers = document.querySelectorAll(".leads-table th.sortable");
+
+        var allLeads = [];        // full dataset from Supabase
+        var loaded = false;       // fetch only once
+        var sortKey = "created_at";
+        var sortDir = "desc";     // "asc" | "desc"
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+        function fmtDate(iso) {
+          var d = new Date(iso);
+          if (isNaN(d)) return "";
+          var p = function (n) { return (n < 10 ? "0" : "") + n; };
+          return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear() +
+            " " + p(d.getHours()) + ":" + p(d.getMinutes());
+        }
+        function dash(v) {
+          var s = (v == null ? "" : String(v)).trim();
+          return s ? esc(s) : '<span class="leads-muted">—</span>';
+        }
+
+        function currentRows() {
+          var q = (searchInput.value || "").trim().toLowerCase();
+          var rows = allLeads.filter(function (r) {
+            if (!q) return true;
+            var name = (r.name || "").toLowerCase();
+            var loc = (r.location || "").toLowerCase();
+            return name.indexOf(q) !== -1 || loc.indexOf(q) !== -1;
+          });
+          rows.sort(function (a, b) {
+            var av, bv;
+            if (sortKey === "created_at") {
+              av = new Date(a.created_at).getTime() || 0;
+              bv = new Date(b.created_at).getTime() || 0;
+            } else { // name
+              av = (a.name || "").toLowerCase();
+              bv = (b.name || "").toLowerCase();
+            }
+            if (av < bv) return sortDir === "asc" ? -1 : 1;
+            if (av > bv) return sortDir === "asc" ? 1 : -1;
+            return 0;
+          });
+          return rows;
+        }
+
+        function render() {
+          var rows = currentRows();
+          countEl.textContent = "סה״כ " + allLeads.length + " לידים" +
+            (rows.length !== allLeads.length ? " (" + rows.length + " מסוננים)" : "");
+          if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="6" class="leads-empty">' +
+              (allLeads.length ? "לא נמצאו תוצאות לחיפוש." : "אין עדיין לידים.") + "</td></tr>";
+            return;
+          }
+          body.innerHTML = rows.map(function (r) {
+            var phone = (r.phone || "").trim();
+            var phoneCell = phone
+              ? '<a href="tel:' + esc(phone) + '">' + esc(phone) + "</a>"
+              : '<span class="leads-muted">—</span>';
+            return "<tr>" +
+              '<td class="col-date">' + esc(fmtDate(r.created_at)) + "</td>" +
+              '<td class="col-name">' + dash(r.name) + "</td>" +
+              '<td class="col-phone">' + phoneCell + "</td>" +
+              "<td>" + dash(r.location) + "</td>" +
+              "<td>" + dash(r.service) + "</td>" +
+              '<td class="col-notes">' + dash(r.notes) + "</td>" +
+              "</tr>";
+          }).join("");
+        }
+
+        function updateArrows() {
+          headers.forEach(function (th) {
+            var arrow = th.querySelector(".arrow");
+            if (th.getAttribute("data-sort") === sortKey) {
+              arrow.textContent = sortDir === "asc" ? "▴" : "▾";
+              th.setAttribute("aria-sort", sortDir === "asc" ? "ascending" : "descending");
+            } else {
+              arrow.textContent = "";
+              th.removeAttribute("aria-sort");
+            }
+          });
+        }
+
+        // Wire interactions once
+        searchInput.addEventListener("input", render);
+        headers.forEach(function (th) {
+          th.addEventListener("click", function () {
+            var key = th.getAttribute("data-sort");
+            if (sortKey === key) {
+              sortDir = sortDir === "asc" ? "desc" : "asc";
+            } else {
+              sortKey = key;
+              sortDir = key === "name" ? "asc" : "desc";
+            }
+            updateArrows();
+            render();
+          });
+        });
+
+        return function loadLeads() {
+          if (loaded) return;
+          loaded = true;
+          sb.from("leads")
+            .select("id, created_at, name, phone, location, service, notes")
+            .order("created_at", { ascending: false })
+            .then(function (res) {
+              if (res.error) {
+                loaded = false; // allow retry on next open
+                body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה בטעינת הלידים. נסו לרענן.</td></tr>';
+                countEl.textContent = "";
+                return;
+              }
+              allLeads = res.data || [];
+              updateArrows();
+              render();
+            });
+        };
       })();
 
       /* ---------- Tab 2: Calendar ---------- */
