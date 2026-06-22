@@ -107,6 +107,7 @@
     .metric .num { font-size:2.1rem; font-weight:800; color:var(--char-900); font-family:var(--font-display); }
     .metric .lbl { color:var(--ink-700); font-weight:600; font-size:.95rem; }
     .metric .trend { font-size:.8rem; font-weight:700; color:var(--whatsapp-dark); margin-block-start:6px; }
+    .metric .trend.muted { color:var(--ink-500); font-weight:600; }
 
     .panel { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:22px; box-shadow:var(--shadow-sm); margin-block-start:22px; }
     .panel h3 { font-size:1.05rem; color:var(--char-900); margin-block-end:14px; }
@@ -265,20 +266,17 @@
       <div class="admin-content">
         <!-- Tab 1: Dashboard -->
         <section class="admin-view active" id="view-dash">
-          <div class="view-head"><h2>סקירה כללית</h2><p>תמונת מצב של הפעילות באתר (נתוני הדגמה).</p></div>
+          <div class="view-head"><h2>סקירה כללית</h2><p>תמונת מצב של הפעילות באתר.</p></div>
           <div class="metric-grid">
-            <div class="metric"><div class="ic">👁️</div><div class="num" data-count="1284">0</div><div class="lbl">כניסות לאתר (החודש)</div><div class="trend">▲ 12% מהחודש שעבר</div></div>
-            <div class="metric"><div class="ic">🎯</div><div class="num" data-count="37">0</div><div class="lbl">לידים חדשים</div><div class="trend">▲ 8 השבוע</div></div>
-            <div class="metric"><div class="ic">📝</div><div class="num" data-count="21">0</div><div class="lbl">שליחות טופס</div><div class="trend">▲ 5 השבוע</div></div>
-            <div class="metric"><div class="ic">💬</div><div class="num" data-count="58">0</div><div class="lbl">פניות וואטסאפ</div><div class="trend">▲ 19% מהחודש שעבר</div></div>
+            <div class="metric"><div class="ic">👁️</div><div class="num" id="metricVisits">—</div><div class="lbl">כניסות לאתר (החודש)</div><div class="trend muted">דורש חיבור אנליטיקס</div></div>
+            <div class="metric"><div class="ic">🎯</div><div class="num" id="metricLeads">0</div><div class="lbl">לידים חדשים</div><div class="trend" id="trendLeads">טוען…</div></div>
+            <div class="metric"><div class="ic">📝</div><div class="num" id="metricForms">0</div><div class="lbl">שליחות טופס</div><div class="trend" id="trendForms">טוען…</div></div>
+            <div class="metric"><div class="ic">💬</div><div class="num" id="metricWa">—</div><div class="lbl">פניות וואטסאפ</div><div class="trend muted">נמדד באפליקציית וואטסאפ</div></div>
           </div>
           <div class="panel">
             <h3>פעילות אחרונה</h3>
-            <ul class="activity">
-              <li><span class="dot"></span><span class="txt">ליד חדש: בקשה לפוליש קריסטל מרעננה</span><span class="time">לפני 2 שעות</span></li>
-              <li><span class="dot"></span><span class="txt">שליחת טופס: ליטוש שיש - תל אביב</span><span class="time">לפני 5 שעות</span></li>
-              <li><span class="dot"></span><span class="txt">פניית וואטסאפ: חידוש בטון</span><span class="time">אתמול</span></li>
-              <li><span class="dot"></span><span class="txt">ליד חדש: מריחת סילר - בית שמש</span><span class="time">אתמול</span></li>
+            <ul class="activity" id="activityList">
+              <li><span class="dot"></span><span class="txt">טוען נתונים…</span></li>
             </ul>
           </div>
         </section>
@@ -399,16 +397,105 @@
         sb.auth.signOut().then(function () { location.replace("login.html"); });
       });
 
-      /* ---------- Tab 1: count-up metrics ---------- */
-      document.querySelectorAll(".metric .num[data-count]").forEach(function (el) {
-        var target = parseInt(el.getAttribute("data-count"), 10), cur = 0;
-        var step = Math.max(1, Math.round(target / 40));
-        var t = setInterval(function () {
-          cur += step;
-          if (cur >= target) { cur = target; clearInterval(t); }
-          el.textContent = cur.toLocaleString("he-IL");
-        }, 24);
-      });
+      /* ---------- Tab 1: LIVE dashboard data from Supabase ----------
+         Reads run through the authenticated admin session (supabase-js
+         attaches the logged-in user's JWT automatically), so the "leads"
+         table needs a SELECT policy for the authenticated role. */
+      (function initDashboard() {
+        var elLeads = document.getElementById("metricLeads");
+        var elForms = document.getElementById("metricForms");
+        var elTrendLeads = document.getElementById("trendLeads");
+        var elTrendForms = document.getElementById("trendForms");
+        var list = document.getElementById("activityList");
+
+        function countUp(el, target) {
+          var cur = 0, step = Math.max(1, Math.round(target / 40));
+          el.textContent = "0";
+          if (target <= 0) return;
+          var t = setInterval(function () {
+            cur += step;
+            if (cur >= target) { cur = target; clearInterval(t); }
+            el.textContent = cur.toLocaleString("he-IL");
+          }, 24);
+        }
+
+        function timeAgo(iso) {
+          var sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+          if (sec < 60) return "ממש עכשיו";
+          var m = Math.floor(sec / 60);
+          if (m < 60) return "לפני " + m + (m === 1 ? " דקה" : " דקות");
+          var h = Math.floor(m / 60);
+          if (h < 24) return "לפני " + h + (h === 1 ? " שעה" : " שעות");
+          var d = Math.floor(h / 24);
+          if (d === 1) return "אתמול";
+          if (d < 30) return "לפני " + d + " ימים";
+          var mo = Math.floor(d / 30);
+          return "לפני " + mo + (mo === 1 ? " חודש" : " חודשים");
+        }
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+
+        function showListMessage(msg) {
+          list.innerHTML = '<li><span class="dot"></span><span class="txt">' + esc(msg) + "</span></li>";
+        }
+
+        // Total + recent leads in one query (count: exact returns the grand total).
+        sb.from("leads")
+          .select("id, created_at, name, location, service, notes", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .limit(6)
+          .then(function (res) {
+            if (res.error) {
+              elLeads.textContent = "—";
+              elForms.textContent = "—";
+              elTrendLeads.textContent = "שגיאת טעינה";
+              elTrendForms.textContent = "שגיאת טעינה";
+              elTrendLeads.classList.add("muted");
+              elTrendForms.classList.add("muted");
+              showListMessage("לא ניתן לטעון נתונים כרגע.");
+              return;
+            }
+
+            var total = res.count || 0;
+            // Every lead row is a form submission, so both cards reflect it.
+            countUp(elLeads, total);
+            countUp(elForms, total);
+
+            // Accurate "this week" trend via a dedicated count query (head:true
+            // returns the count only, no rows, regardless of the total size).
+            var weekAgoISO = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+            sb.from("leads")
+              .select("id", { count: "exact", head: true })
+              .gte("created_at", weekAgoISO)
+              .then(function (wk) {
+                var label = wk.error ? ("סה״כ " + total + " פניות")
+                                     : ("▲ " + (wk.count || 0) + " השבוע");
+                elTrendLeads.textContent = label;
+                elTrendForms.textContent = label;
+              });
+
+            // Recent activity feed.
+            var rows = res.data || [];
+            if (!rows.length) {
+              showListMessage("אין עדיין פניות. הליד הראשון יופיע כאן.");
+              return;
+            }
+            list.innerHTML = rows.map(function (r) {
+              var service = (r.service && String(r.service).trim()) || "פנייה חדשה";
+              var who = (r.name && String(r.name).trim()) || "";
+              var place = (r.location && String(r.location).trim()) || "";
+              var label = "ליד חדש: " + service +
+                (who ? " - " + who : "") +
+                (place ? " מ" + place : "");
+              return '<li><span class="dot"></span><span class="txt">' +
+                esc(label) + '</span><span class="time">' + esc(timeAgo(r.created_at)) + "</span></li>";
+            }).join("");
+          });
+      })();
 
       /* ---------- Tab 2: Calendar ---------- */
       var calGrid = document.getElementById("calGrid");

@@ -222,6 +222,7 @@
     contact_area: "Full Nationwide Service ✔",
     form_name: "Full name",
     form_phone: "Phone",
+    form_location: "City / Town",
     form_service: "Service type",
     form_service_other: "Other / Not sure",
     form_message: "Additional details (optional)",
@@ -335,6 +336,7 @@
 
       var name = form.name.value.trim();
       var phone = form.phone.value.trim();
+      var location = form.location.value.trim();
       var service = form.service.value;
       var message = form.message.value.trim();
 
@@ -351,6 +353,7 @@
         body: JSON.stringify({
           name: name,
           phone: phone,
+          location: location,
           service: service,
           notes: message
         })
@@ -359,7 +362,8 @@
       // 2) FOREGROUND WHATSAPP — open a prefilled chat with Uri.
       //    Opened synchronously inside the submit gesture so popup blockers allow it.
       var waText = "היי אורי, שלחתי עכשיו פנייה באתר לגבי " + service +
-        ". השם שלי הוא " + name + " והטלפון שלי הוא " + phone + ". " + message;
+        ". השם שלי הוא " + name + " והטלפון שלי הוא " + phone +
+        (location ? " (" + location + ")" : "") + ". " + message;
       var url = "https://wa.me/" + PHONE_INTL + "?text=" + encodeURIComponent(waText.trim());
       window.open(url, "_blank", "noopener");
 
