@@ -305,10 +305,10 @@
         <section class="admin-view active" id="view-dash">
           <div class="view-head"><h2>סקירה כללית</h2><p>תמונת מצב של הפעילות באתר.</p></div>
           <div class="metric-grid">
-            <div class="metric"><div class="ic">👁️</div><div class="num" id="metricVisits">—</div><div class="lbl">כניסות לאתר (החודש)</div><div class="trend muted">דורש חיבור אנליטיקס</div></div>
+            <div class="metric"><div class="ic">👁️</div><div class="num" id="metricVisits">—</div><div class="lbl">כניסות לאתר</div><div class="trend muted" id="trendVisits">סה״כ מצטבר</div></div>
             <div class="metric"><div class="ic">🎯</div><div class="num" id="metricLeads">0</div><div class="lbl">לידים חדשים</div><div class="trend" id="trendLeads">טוען…</div></div>
             <div class="metric"><div class="ic">📝</div><div class="num" id="metricForms">0</div><div class="lbl">שליחות טופס</div><div class="trend" id="trendForms">טוען…</div></div>
-            <div class="metric"><div class="ic">💬</div><div class="num" id="metricWa">—</div><div class="lbl">פניות וואטסאפ</div><div class="trend muted">נמדד באפליקציית וואטסאפ</div></div>
+            <div class="metric"><div class="ic">💬</div><div class="num" id="metricWa">—</div><div class="lbl">פניות וואטסאפ</div><div class="trend muted" id="trendWa">סה״כ מצטבר</div></div>
           </div>
           <div class="panel">
             <h3>פעילות אחרונה</h3>
@@ -487,6 +487,15 @@
             el.textContent = cur.toLocaleString("he-IL");
           }, 24);
         }
+
+        // Native site metrics (page views + WhatsApp clicks) from the counter table.
+        sb.from("site_stats").select("metric, count").then(function (res) {
+          if (res.error || !res.data) return; // keep "—" placeholders on error
+          var map = {};
+          res.data.forEach(function (row) { map[row.metric] = Number(row.count) || 0; });
+          if (map.page_views != null) countUp(document.getElementById("metricVisits"), map.page_views);
+          if (map.whatsapp_clicks != null) countUp(document.getElementById("metricWa"), map.whatsapp_clicks);
+        });
 
         function timeAgo(iso) {
           var sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));

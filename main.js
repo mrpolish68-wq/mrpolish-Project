@@ -15,6 +15,30 @@
   var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
 
   /* ---------------------------------------------------------
+     ANALYTICS — GA4 events + native Supabase counters
+     - gaEvent(): sends a custom event to Google Analytics (gtag.js)
+     - bumpMetric(): atomically increments a counter in Supabase via
+       the increment_metric() RPC (fire-and-forget, never blocks UX)
+  --------------------------------------------------------- */
+  function gaEvent(name, params) {
+    if (typeof window.gtag === "function") window.gtag("event", name, params || {});
+  }
+  function bumpMetric(metricName) {
+    try {
+      fetch(SUPABASE_URL + "rpc/increment_metric", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": "Bearer " + SUPABASE_ANON_KEY
+        },
+        body: JSON.stringify({ metric_name: metricName }),
+        keepalive: true
+      }).catch(function () {});
+    } catch (e) { /* analytics is best-effort */ }
+  }
+
+  /* ---------------------------------------------------------
      0. PRELOADER / SPLASH SCREEN
      Plays preloader.mp4 once, then fades out + slides up to
      reveal the homepage. Robust against blocked autoplay via
@@ -367,6 +391,9 @@
       var url = "https://wa.me/" + PHONE_INTL + "?text=" + encodeURIComponent(waText.trim());
       window.open(url, "_blank", "noopener");
 
+      // Marketing analytics: a validated lead is a successful submission.
+      gaEvent("form_submission", { service: service, location: location || undefined });
+
       // 3) UX — confirm, clear the fields, then land on the thank-you page.
       status.textContent = t("Thanks! Redirecting…", "תודה! מעבירים אתכם…");
       status.classList.add("ok");
@@ -684,6 +711,22 @@
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
   })();
+
+  /* ---------------------------------------------------------
+     9c. ANALYTICS WIRING
+     - Page view: native counter for the admin dashboard
+       (GA4 already auto-tracks page_view via the gtag config tag).
+     - WhatsApp click: GA4 event + native counter, on any wa.me link
+       (hero CTA, contact info, footer, mobile action bar).
+  --------------------------------------------------------- */
+  bumpMetric("page_views");
+
+  document.addEventListener("click", function (e) {
+    var link = e.target.closest && e.target.closest('a[href*="wa.me"]');
+    if (!link) return;
+    gaEvent("whatsapp_click");
+    bumpMetric("whatsapp_clicks");
+  });
 
   /* ---------------------------------------------------------
      10. MISC
