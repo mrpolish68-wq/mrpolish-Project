@@ -133,8 +133,13 @@
     nav_gallery: "Before &amp; After",
     nav_about: "About",
     nav_faq: "FAQ",
+    nav_blog: "Blog &amp; Guides",
     nav_contact: "Contact",
     header_call: "052-9534540",
+
+    blog_eyebrow: "Knowledge Center",
+    blog_title: "Blog &amp; Guides",
+    blog_sub: "Professional tips and guides on floor polishing, marble &amp; stone restoration and floor care — from Uri Margalit, a 30-year expert.",
 
     hero_badge: "Years of experience",
     hero_title: "Your floors will shine like new",

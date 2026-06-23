@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-Y9FGVG5WSZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-Y9FGVG5WSZ');
+  </script>
+
+  <title>בלוג ומדריכים | מיסטר פוליש - אורי מרגלית</title>
+  <meta name="description" content="בלוג ומדריכים של מיסטר פוליש - טיפים מקצועיים בנושא ליטוש מרצפות, חידוש שיש ואבן, הברקה קריסטלית ותחזוקת רצפות מאורי מרגלית, מומחה עם 30 שנות ניסיון." />
+  <meta name="keywords" content="בלוג ליטוש, מדריך חידוש שיש, טיפים לתחזוקת רצפות, פוליש קריסטל, מיסטר פוליש" />
+  <meta name="author" content="Mr. Polish - Uri Margalit" />
+  <meta name="robots" content="index, follow" />
+  <meta name="theme-color" content="#1f2024" />
+  <link rel="canonical" href="https://www.mrpolish.co.il/blog.html" />
+
+  <!-- Open Graph / Social -->
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="he_IL" />
+  <meta property="og:site_name" content="מיסטר פוליש" />
+  <meta property="og:title" content="בלוג ומדריכים | מיסטר פוליש - אורי מרגלית" />
+  <meta property="og:description" content="טיפים ומדריכים מקצועיים בנושא ליטוש, חידוש שיש ואבן ותחזוקת רצפות." />
+  <meta property="og:image" content="https://www.mrpolish.co.il/logo.jpg" />
+  <meta property="og:url" content="https://www.mrpolish.co.il/blog.html" />
+
+  <link rel="icon" type="image/jpeg" href="favicon.jpg" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800;900&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet" />
+
+  <script>document.documentElement.classList.add("js");</script>
+  <link rel="stylesheet" href="styles.css" />
+
+  <style>
+    /* Content page (no full-screen hero) — keep the header solid so the dark nav stays readable */
+    .site-header {
+      background: oklch(0.99 0 0 / 0.95);
+      -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+      border-block-end: 1px solid var(--marble-200);
+      box-shadow: var(--shadow-sm);
+    }
+    .blog-main { padding-block: clamp(36px, 6vw, 68px); background: var(--white); }
+    .blog-embed-wrap { max-width: 920px; margin-inline: auto; min-height: 320px; }
+    #soro-blog { min-height: 320px; }
+  </style>
+</head>
+
+<body>
+  <a href="#main" class="skip-link">דלג לתוכן הראשי</a>
+
+  <header class="site-header" id="top">
+    <div class="container header-inner">
+      <a href="index.html" class="brand" aria-label="מיסטר פוליש - דף הבית">
+        <img src="logo.jpg" alt="מיסטר פוליש - אורי מרגלית, ליטוש וחידוש מרצפות" class="brand-logo" />
+      </a>
+
+      <nav class="main-nav" aria-label="ניווט ראשי">
+        <ul>
+          <li><a href="index.html#services" data-i18n="nav_services">השירותים שלנו</a></li>
+          <li><a href="index.html#compare" data-i18n="nav_gallery">לפני ואחרי</a></li>
+          <li><a href="index.html#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
+          <li><a href="index.html#about" data-i18n="nav_about">אודות</a></li>
+          <li><a href="blog.html" data-i18n="nav_blog" aria-current="page">בלוג ומדריכים</a></li>
+          <li><a href="index.html#contact" data-i18n="nav_contact">צרו קשר</a></li>
+        </ul>
+      </nav>
+
+      <div class="header-actions">
+        <button class="lang-switch" id="langSwitch" type="button" aria-label="Switch language to English">EN</button>
+        <a href="tel:+972529534540" class="btn btn-shimmer btn-sm header-call">
+          <span class="icon-phone" aria-hidden="true">📞</span>
+          <span data-i18n="header_call">052-9534540</span>
+        </a>
+        <button class="nav-toggle" id="navToggle" type="button" aria-label="פתח תפריט" aria-expanded="false" aria-controls="mobileMenu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Mobile slide-out menu -->
+    <nav class="mobile-menu" id="mobileMenu" aria-label="ניווט נייד" hidden>
+      <ul>
+        <li><a href="index.html#services" data-i18n="nav_services">השירותים שלנו</a></li>
+        <li><a href="index.html#compare" data-i18n="nav_gallery">לפני ואחרי</a></li>
+        <li><a href="index.html#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
+        <li><a href="index.html#about" data-i18n="nav_about">אודות</a></li>
+        <li><a href="blog.html" data-i18n="nav_blog" aria-current="page">בלוג ומדריכים</a></li>
+        <li><a href="index.html#contact" data-i18n="nav_contact">צרו קשר</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- Dark hero band -->
+    <section class="legal-hero">
+      <div class="container">
+        <span class="eyebrow" data-i18n="blog_eyebrow">מרכז הידע</span>
+        <h1 data-i18n="blog_title">בלוג ומדריכים</h1>
+        <p data-i18n="blog_sub">טיפים ומדריכים מקצועיים בנושא ליטוש, חידוש שיש ואבן ותחזוקת רצפות — מאורי מרגלית, מומחה עם 30 שנות ניסיון.</p>
+      </div>
+    </section>
+
+    <!-- Soro blog embed -->
+    <section class="blog-main">
+      <div class="container">
+        <div class="blog-embed-wrap reveal">
+          <!-- Soro integration -->
+          <div id="soro-blog"></div>
+          <script src="https://app.trysoro.com/api/embed/7eda0ea0-cda4-4e5e-affe-9223476932e2" defer></script>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div class="footer-col">
+        <img src="logo.jpg" alt="מיסטר פוליש" class="footer-logo" />
+        <p data-i18n="footer_about">מיסטר פוליש - אורי מרגלית. ליטוש וחידוש מרצפות, אבן, שיש ובטון עם 30 שנות ניסיון.</p>
+      </div>
+
+      <div class="footer-col">
+        <h3 data-i18n="footer_nav">ניווט</h3>
+        <ul>
+          <li><a href="index.html#services" data-i18n="nav_services">השירותים שלנו</a></li>
+          <li><a href="index.html#compare" data-i18n="nav_gallery">לפני ואחרי</a></li>
+          <li><a href="index.html#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
+          <li><a href="blog.html" data-i18n="nav_blog">בלוג ומדריכים</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h3 data-i18n="footer_legal">מידע ותקנון</h3>
+        <ul>
+          <li><a href="privacy.html" data-i18n="footer_privacy">מדיניות פרטיות</a></li>
+          <li><a href="terms.html" data-i18n="footer_terms">תנאי שימוש</a></li>
+          <li><a href="accessibility.html" data-i18n="footer_a11y">הצהרת נגישות</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h3 data-i18n="footer_contact">צרו קשר</h3>
+        <ul>
+          <li><a href="tel:+972529534540" dir="ltr">052-9534540</a></li>
+          <li><a href="https://wa.me/972529534540" target="_blank" rel="noopener" data-i18n="footer_wa">וואטסאפ</a></li>
+          <li><span data-i18n="contact_area">שירות בפריסה ארצית מלאה ✔</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <p>© <span id="year">2026</span> מיסטר פוליש - אורי מרגלית. <span data-i18n="footer_rights">כל הזכויות שמורות.</span></p>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
