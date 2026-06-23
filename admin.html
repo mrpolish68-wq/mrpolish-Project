@@ -28,8 +28,7 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/jpeg" href="favicon.jpg" />
 
-  <!-- Client-side PDF generation (direct download, no print dialog) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <!-- Work order is produced via the native print dialog (vector Hebrew, crash-proof) -->
 
   <style>
     body { background: var(--marble-100); color: var(--ink-900); }
@@ -249,10 +248,11 @@
       .admin-topbar { padding:16px; }
     }
 
-    /* ===== Work-order document (rendered off-screen for html2pdf) ===== */
+    /* ===== Work-order document (kept off-screen; shown only when printing) ===== */
     #orderDoc { position:fixed; inset-block-start:0; inset-inline-start:-10000px; width:794px; background:#fff; }
     /* A4 work order — replicates the physical notepad, Hebrew-safe fonts (Heebo, no Playfair) */
-    .wo { color:#1a1a1a; font-family:'Heebo','Segoe UI',Arial,sans-serif; direction:rtl; padding:42px 46px; background:#fff; min-height:1100px; }
+    .wo { color:#1a1a1a; font-family:'Heebo','Segoe UI',Arial,sans-serif; direction:rtl; padding:42px 46px; background:#fff; min-height:1100px;
+      -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     /* Header: right text block + left logo/license block */
     .wo-head { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; border-block-end:3px solid #c9a23a; padding-block-end:18px; margin-block-end:22px; }
     .wo-head-right { text-align:right; }
@@ -285,6 +285,15 @@
     .wo-greet { text-align:left; font-weight:800; color:#1a2a52; font-size:1.12rem; line-height:1.75; }
     /* Signature lines at the bottom edge */
     .wo-sign { display:flex; justify-content:space-between; gap:50px; margin-block-start:54px; font-size:1rem; color:#333; font-weight:600; }
+
+    /* ===== PRINT: show only the work order, as a clean A4 page ===== */
+    @media print {
+      body { padding:0 !important; background:#fff !important; }
+      body > *:not(#orderDoc) { display:none !important; }
+      #orderDoc { position:static !important; inset-inline-start:auto !important; left:auto !important; width:100% !important; }
+      .wo { padding:0 !important; min-height:auto !important; }
+      @page { size:A4; margin:14mm; }
+    }
   </style>
 </head>
 
@@ -885,33 +894,29 @@
           var host = document.getElementById("orderDoc");
           host.innerHTML = buildDoc(data, logoSrc);
 
-          var opt = {
-            margin: [8, 8, 8, 8],
-            filename: "work-order-" + data.num + ".pdf",
-            image: { type: "jpeg", quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 794 },
-            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-          };
-
-          var done = function () {
-            // increment the sequence only after a successful generation
+          // Advance the order number + clean up once the print dialog closes.
+          var cleaned = false;
+          function cleanup() {
+            if (cleaned) return;
+            cleaned = true;
+            window.removeEventListener("afterprint", cleanup);
             setSeq(seq + 1);
             $("ofNum").value = pad3(seq + 1);
             host.innerHTML = "";
             btn.disabled = false;
-          };
+          }
+          window.addEventListener("afterprint", cleanup);
 
-          // small delay so the logo image is decoded before capture
+          // Let layout + the cached logo settle, then open the native print
+          // dialog → crisp vector Hebrew, no canvas, no freeze. Users pick
+          // "Save as PDF" to download.
           setTimeout(function () {
-            try {
-              var worker = html2pdf().set(opt).from(host.firstElementChild).save();
-              if (worker && typeof worker.then === "function") { worker.then(done).catch(done); }
-              else { setTimeout(done, 1800); }
-            } catch (e) {
-              btn.disabled = false;
-              alert("אירעה שגיאה בהפקת ה-PDF. נסה שוב.");
-            }
-          }, 200);
+            try { window.print(); }
+            catch (e) { cleanup(); alert("לא ניתן לפתוח את חלון ההדפסה. נסו שוב."); }
+          }, 250);
+
+          // Safety net in case afterprint never fires (older browsers).
+          setTimeout(cleanup, 60000);
         });
       });
     })();
