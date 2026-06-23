@@ -28,7 +28,7 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/jpeg" href="favicon.jpg" />
 
-  <!-- Work order PDF: html2canvas snapshots an isolated iframe (crash-proof) → jsPDF download -->
+  <!-- Work order PDF: html2canvas snapshots a clean off-screen node → jsPDF download -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
@@ -250,7 +250,7 @@
       .admin-topbar { padding:16px; }
     }
 
-    /* Work-order document is rendered in an isolated iframe with its own
+    /* Work-order document is rendered off-screen in the main doc with its own
        html2canvas-safe stylesheet (see WO_CSS in JS) → direct PDF download. */
   </style>
 </head>
@@ -781,26 +781,30 @@
       });
 
       /* ---------- Logo resolver (png → jpg → text fallback) ---------- */
-      function resolveLogo(cb) {
-        var tryNames = ["favicon.jpg", "logo.jpg"];
-        var i = 0;
-        (function next() {
-          if (i >= tryNames.length) { cb(null); return; }
-          var img = new Image();
-          img.onload = function () { cb(tryNames[i]); };
-          img.onerror = function () { i++; next(); };
-          img.src = tryNames[i];
-        })();
+      // Load favicon.jpg as a base64 data URI → embedded inline so html2canvas
+      // never has to fetch it (no path / CORS / async-load failures). Falls
+      // back to no logo if the fetch fails.
+      function loadLogoDataUri(cb) {
+        try {
+          fetch("favicon.jpg", { cache: "force-cache" })
+            .then(function (r) { if (!r.ok) throw 0; return r.blob(); })
+            .then(function (blob) {
+              var fr = new FileReader();
+              fr.onload = function () { cb(fr.result); };
+              fr.onerror = function () { cb(null); };
+              fr.readAsDataURL(blob);
+            })
+            .catch(function () { cb(null); });
+        } catch (e) { cb(null); }
       }
 
       var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
 
-      /* Self-contained, html2canvas-safe stylesheet for the work order.
+      /* Work-order stylesheet — scoped to .wo so it's safe to inject globally.
          Physical CSS properties + hex colors only — NO oklch, NO gradients
          (those crashed html2canvas). Ruled lines are real bordered divs. */
       var WO_CSS =
-        "*{box-sizing:border-box;margin:0;padding:0;}" +
-        "body{background:#fff;}" +
+        ".wo,.wo *{box-sizing:border-box;margin:0;padding:0;}" +
         ".wo{color:#1a1a1a;font-family:'Heebo','Arial','Segoe UI',sans-serif;direction:rtl;padding:42px 46px;background:#fff;width:794px;}" +
         ".wo-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;border-bottom:3px solid #c9a23a;padding-bottom:18px;margin-bottom:22px;}" +
         ".wo-head-right{text-align:right;}" +
@@ -890,9 +894,12 @@
 
         btn.disabled = true;
 
-        resolveLogo(function (logoSrc) {
-          // Render the document inside an isolated iframe — its own clean
-          // stylesheet means html2canvas never sees oklch/gradients → no freeze.
+        loadLogoDataUri(function (logoData) {
+          // Render inside an ISOLATED iframe whose only stylesheet is WO_CSS.
+          // This is essential: html2canvas 1.4.1 THROWS on the oklch() colors
+          // in the admin's styles.css, so the captured element must live in a
+          // document that has none. The logo is an embedded data URI, so the
+          // iframe never has to fetch favicon.jpg (the live CORS/path failure).
           var iframe = document.createElement("iframe");
           iframe.setAttribute("aria-hidden", "true");
           iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:794px;height:1200px;border:0;background:#fff;";
@@ -908,9 +915,8 @@
           idoc.open();
           idoc.write(
             '<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="utf-8">' +
-            '<base href="' + location.origin + '/">' +
             '<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;700;800;900&display=swap" rel="stylesheet">' +
-            '<style>' + WO_CSS + '</style></head><body>' + buildDoc(data, logoSrc) + '</body></html>'
+            '<style>' + WO_CSS + '</style></head><body>' + buildDoc(data, logoData) + '</body></html>'
           );
           idoc.close();
 
@@ -920,7 +926,7 @@
             started = true;
             try {
               window.html2canvas(idoc.querySelector(".wo"), {
-                scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false
+                scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false, imageTimeout: 20000
               }).then(function (canvas) {
                 var pdf = new window.jspdf.jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
                 var pageW = 210, pageH = 297;
@@ -939,14 +945,16 @@
             }
           };
 
-          // Render once the logo image + fonts are ready (with a safety fallback).
+          // Render once the embedded logo + fonts are ready (data URI = instant),
+          // with layered safety fallbacks so it always fires.
           var go = function () {
-            var fontsReady = (idoc.fonts && idoc.fonts.ready) ? idoc.fonts.ready : Promise.resolve();
-            fontsReady.then(function () { setTimeout(render, 80); }, function () { setTimeout(render, 80); });
+            var fr = (idoc.fonts && idoc.fonts.ready) ? idoc.fonts.ready : Promise.resolve();
+            fr.then(function () { setTimeout(render, 80); }, function () { setTimeout(render, 80); });
           };
           var imgEl = idoc.querySelector(".wo-logo img");
-          if (imgEl && !imgEl.complete) { imgEl.onload = go; imgEl.onerror = go; setTimeout(go, 1500); }
+          if (imgEl && !imgEl.complete) { imgEl.onload = go; imgEl.onerror = go; setTimeout(go, 2000); }
           else { go(); }
+          setTimeout(render, 6000); // absolute safety net
         });
       });
     })();
