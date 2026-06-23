@@ -945,15 +945,21 @@
             }
           };
 
-          // Render once the embedded logo + fonts are ready (data URI = instant),
-          // with layered safety fallbacks so it always fires.
+          // Guarantee the base64 logo is fully decoded AND fonts are ready
+          // before snapshotting, then add a ~300ms buffer so the browser has
+          // finished painting the image into the DOM (avoids the race where
+          // html2canvas captures before the logo renders).
           var go = function () {
-            var fr = (idoc.fonts && idoc.fonts.ready) ? idoc.fonts.ready : Promise.resolve();
-            fr.then(function () { setTimeout(render, 80); }, function () { setTimeout(render, 80); });
+            var imgEl = idoc.querySelector(".wo-logo img");
+            var imgReady = (imgEl && imgEl.decode) ? imgEl.decode().catch(function () {}) : Promise.resolve();
+            var fontsReady = (idoc.fonts && idoc.fonts.ready) ? idoc.fonts.ready : Promise.resolve();
+            Promise.all([imgReady, fontsReady]).then(function () {
+              setTimeout(render, 300);
+            }, function () {
+              setTimeout(render, 300);
+            });
           };
-          var imgEl = idoc.querySelector(".wo-logo img");
-          if (imgEl && !imgEl.complete) { imgEl.onload = go; imgEl.onerror = go; setTimeout(go, 2000); }
-          else { go(); }
+          go();
           setTimeout(render, 6000); // absolute safety net
         });
       });
