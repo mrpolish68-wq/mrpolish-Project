@@ -251,28 +251,40 @@
 
     /* ===== Work-order document (rendered off-screen for html2pdf) ===== */
     #orderDoc { position:fixed; inset-block-start:0; inset-inline-start:-10000px; width:794px; background:#fff; }
-    .wo { color:#1a1a1a; font-family:var(--font-base); direction:rtl; padding:36px 40px; background:#fff; }
-    .wo-bsd { text-align:center; font-size:.9rem; color:#555; letter-spacing:2px; margin-block-end:10px; }
-    .wo-head { display:flex; justify-content:space-between; align-items:center; gap:16px; border-block-end:3px solid var(--gold-600); padding-block-end:16px; margin-block-end:20px; }
-    .wo-logo img { height:88px; width:auto; }
-    .wo-brand { text-align:center; }
-    .wo-brand-name { font-family:var(--font-display); font-weight:800; font-size:2.1rem; color:#1a2a52; line-height:1.1; }
-    .wo-sub { font-size:.9rem; color:#7a6320; font-weight:600; margin-block-start:4px; max-width:240px; }
-    .wo-contact { text-align:left; font-size:.85rem; color:#333; line-height:1.8; }
-    .wo-contact b { color:#1a2a52; }
-    .wo-titlebar { display:flex; justify-content:space-between; align-items:center; background:#1a2a52; color:#fff; padding:11px 18px; border-radius:8px; margin-block-end:18px; font-weight:800; font-size:1.1rem; }
-    .wo-titlebar .num { color:#f3d97a; }
-    .wo-meta { display:flex; gap:36px; margin-block-end:16px; font-size:.96rem; }
-    .wo-meta b { color:#7a6320; }
-    .wo-block .lbl { font-weight:700; color:#7a6320; margin-block-end:7px; }
-    .wo-desc { border:1px solid #ddd; border-radius:8px; padding:16px; min-height:150px; white-space:pre-wrap; line-height:1.9; background:#fbfaf6; font-size:.96rem; }
-    .wo-total { display:flex; justify-content:space-between; align-items:center; background:#faf3df; border:2px solid var(--gold-500); border-radius:10px; padding:14px 20px; margin-block:20px; font-size:1.35rem; font-weight:800; color:#1a2a52; }
-    .wo-foot { display:flex; justify-content:space-between; gap:30px; margin-block-start:20px; }
-    .wo-terms { font-size:.88rem; color:#333; line-height:1.95; }
+    /* A4 work order — replicates the physical notepad, Hebrew-safe fonts (Heebo, no Playfair) */
+    .wo { color:#1a1a1a; font-family:'Heebo','Segoe UI',Arial,sans-serif; direction:rtl; padding:42px 46px; background:#fff; min-height:1100px; }
+    /* Header: right text block + left logo/license block */
+    .wo-head { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; border-block-end:3px solid #c9a23a; padding-block-end:18px; margin-block-end:22px; }
+    .wo-head-right { text-align:right; }
+    .wo-bsd { font-size:.78rem; color:#666; letter-spacing:1px; margin-block-end:6px; }
+    .wo-brand-name { font-weight:900; font-size:2.6rem; color:#1a2a52; line-height:1.05; }
+    .wo-sub { font-size:1rem; color:#7a6320; font-weight:600; margin-block-start:7px; }
+    .wo-contact { font-size:.92rem; color:#333; margin-block-start:9px; }
+    .wo-head-left { text-align:center; flex-shrink:0; }
+    .wo-logo img { height:92px; width:auto; border-radius:8px; }
+    .wo-license { font-size:.82rem; color:#1a2a52; font-weight:700; margin-block-start:7px; }
+    /* Title + date */
+    .wo-titlebar { display:flex; justify-content:space-between; align-items:baseline; border-block-end:2px solid #1a2a52; padding-block-end:10px; margin-block-end:20px; }
+    .wo-title { font-weight:800; font-size:1.5rem; color:#1a2a52; }
+    .wo-date { font-size:1.02rem; color:#333; font-weight:600; }
+    /* Client + address */
+    .wo-meta { margin-block-end:20px; font-size:1.02rem; }
+    .wo-field { padding:8px 2px 9px; border-block-end:1px dashed #b8b8b8; margin-block-end:11px; }
+    .wo-field b { color:#7a6320; margin-inline-end:6px; }
+    /* Description — subtle ruled notebook lines */
+    .wo-block .lbl { font-weight:700; color:#7a6320; margin-block-end:9px; font-size:1.02rem; }
+    .wo-desc { white-space:pre-wrap; font-size:1.02rem; color:#222; line-height:32px; min-height:224px; padding:0 4px;
+      background-image:repeating-linear-gradient(to bottom, transparent 0, transparent 31px, #dcdcdc 31px, #dcdcdc 32px); }
+    /* Footer: right = terms + total, left = sign-off */
+    .wo-foot { display:flex; justify-content:space-between; align-items:flex-end; gap:34px; margin-block-start:28px; }
+    .wo-foot-right { width:58%; }
+    .wo-terms { font-size:.92rem; color:#333; line-height:1.95; }
     .wo-terms b { color:#1a2a52; }
-    .wo-greet { text-align:left; font-family:var(--font-display); font-weight:800; color:#1a2a52; font-size:1.05rem; line-height:1.6; align-self:flex-end; }
-    .wo-sign { display:flex; justify-content:space-between; gap:60px; margin-block-start:40px; font-size:.92rem; text-align:center; }
-    .wo-sign span { flex:1; border-block-start:1px solid #888; padding-block-start:8px; color:#444; }
+    .wo-total { display:inline-block; margin-block-start:16px; background:#faf3df; border:2px solid #c9a23a; border-radius:10px;
+      padding:13px 24px; font-size:1.3rem; font-weight:800; color:#1a2a52; }
+    .wo-greet { text-align:left; font-weight:800; color:#1a2a52; font-size:1.12rem; line-height:1.75; }
+    /* Signature lines at the bottom edge */
+    .wo-sign { display:flex; justify-content:space-between; gap:50px; margin-block-start:54px; font-size:1rem; color:#333; font-weight:600; }
   </style>
 </head>
 
@@ -806,7 +818,7 @@
 
       /* ---------- Logo resolver (png → jpg → text fallback) ---------- */
       function resolveLogo(cb) {
-        var tryNames = ["logo.png", "logo.jpg"];
+        var tryNames = ["favicon.jpg", "logo.jpg"];
         var i = 0;
         (function next() {
           if (i >= tryNames.length) { cb(null); return; }
@@ -820,27 +832,39 @@
       var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
 
       function buildDoc(data, logoSrc) {
-        var logo = logoSrc
-          ? '<div class="wo-logo"><img src="' + logoSrc + '" alt="Mr. Polish" /></div>'
-          : '<div class="wo-logo"></div>';
+        var logo = logoSrc ? '<img src="' + logoSrc + '" alt="מיסטר פוליש" />' : '';
         var total = (parseFloat(data.total) || 0).toLocaleString("he-IL");
         return '' +
           '<div class="wo">' +
-            '<div class="wo-bsd">בס"ד</div>' +
             '<div class="wo-head">' +
-              logo +
-              '<div class="wo-brand"><div class="wo-brand-name">Mr. Polish</div><div class="wo-sub">כל עבודות הליטוש, פוליש והברקה קריסטלית</div></div>' +
-              '<div class="wo-contact"><b>אורי: 052-9534540</b><br/>רח׳ אהרון אהרונסון 15, נתניה<br/>עוסק פטור 023062185</div>' +
+              '<div class="wo-head-right">' +
+                '<div class="wo-bsd">בס"ד</div>' +
+                '<div class="wo-brand-name">מיסטר פוליש</div>' +
+                '<div class="wo-sub">כל עבודות הליטוש, פוליש והברקה קריסטלית</div>' +
+                '<div class="wo-contact">רח׳ אהרון אהרונסון 15, נתניה | אורי: 052-9534540</div>' +
+              '</div>' +
+              '<div class="wo-head-left">' +
+                '<div class="wo-logo">' + logo + '</div>' +
+                '<div class="wo-license">עוסק מורשה 023062185</div>' +
+              '</div>' +
             '</div>' +
-            '<div class="wo-titlebar"><span>הזמנת עבודה</span><span class="num">מס׳ ' + esc(data.num) + '</span><span>תאריך: ' + esc(data.date) + '</span></div>' +
-            '<div class="wo-meta"><span><b>עבור הלקוח:</b> ' + esc(data.client) + '</span><span><b>כתובת:</b> ' + esc(data.address) + '</span></div>' +
+            '<div class="wo-titlebar">' +
+              '<span class="wo-title">הזמנת עבודה מס׳ ' + esc(data.num) + '</span>' +
+              '<span class="wo-date">תאריך: ' + esc(data.date) + '</span>' +
+            '</div>' +
+            '<div class="wo-meta">' +
+              '<div class="wo-field"><b>עבור הלקוח:</b>' + esc(data.client) + '</div>' +
+              '<div class="wo-field"><b>כתובת:</b>' + esc(data.address) + '</div>' +
+            '</div>' +
             '<div class="wo-block"><div class="lbl">תיאור העבודה ודרישת הלקוח:</div><div class="wo-desc">' + esc(data.desc) + '</div></div>' +
-            '<div class="wo-total"><span>סך הכל לתשלום</span><span>₪' + total + '</span></div>' +
             '<div class="wo-foot">' +
-              '<div class="wo-terms"><b>תנאי תשלום:</b><br/>50% ביום ההגעה.<br/>40% ביום בסוף העבודה.<br/>10% לפינישים הסופיים.<br/>הצעת המחיר אינה כוללת מע"מ.</div>' +
-              '<div class="wo-greet">בברכה,<br/>אורי מרגלית<br/>Mr. Polish</div>' +
+              '<div class="wo-foot-right">' +
+                '<div class="wo-terms"><b>תנאי תשלום:</b><br/>50% ביום ההגעה.<br/>40% ביום בסוף העבודה.<br/>10% לפינישים הסופיים.<br/>הצעת המחיר אינה כוללת מע"מ.</div>' +
+                '<div class="wo-total">סך הכל לתשלום: ' + total + ' ₪</div>' +
+              '</div>' +
+              '<div class="wo-greet">בברכה,<br/>אורי מרגלית<br/>מיסטר פוליש</div>' +
             '</div>' +
-            '<div class="wo-sign"><span>חתימת הלקוח</span><span>חתימת המבצע</span></div>' +
+            '<div class="wo-sign"><span>חתימת הלקוח: _________________</span><span>חתימת המבצע: _________________</span></div>' +
           '</div>';
       }
 
@@ -863,7 +887,7 @@
 
           var opt = {
             margin: [8, 8, 8, 8],
-            filename: "הזמנת_עבודה_" + data.num + ".pdf",
+            filename: "work-order-" + data.num + ".pdf",
             image: { type: "jpeg", quality: 0.98 },
             html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", windowWidth: 794 },
             jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
