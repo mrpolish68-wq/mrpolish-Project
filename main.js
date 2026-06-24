@@ -658,7 +658,7 @@
     var shareData = {
       title: "מיסטר פוליש",
       text: "היי, תראה את האתר הזה לפוליש, נראה לי ממש מקצועי לעסק/לבית שלנו!",
-      url: "https://www.mrpolish.co.il/"
+      url: "https://mr-polishes.com/"
     };
     function showToast(msg) {
       if (!toast) return;
