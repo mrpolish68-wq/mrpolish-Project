@@ -103,6 +103,14 @@
       <h1>תודה! הפרטים התקבלו בהצלחה</h1>
       <p>פנייתך התקבלה אצלנו ו<span class="sub-strong">אורי יחזור אליך בהקדם</span> עם כל הפרטים והצעת מחיר מותאמת. בינתיים, מוזמן/ת להמשיך לגלוש באתר.</p>
 
+      <!-- WhatsApp fallback: shown if the auto-opened tab was blocked, or as a backup -->
+      <div id="waContinue" hidden style="margin-block-end:16px;">
+        <p id="waHint" class="ty-meta" style="margin-block:0 12px;"></p>
+        <a id="waBtn" href="#" target="_blank" rel="noopener" class="btn btn-whatsapp btn-lg btn-block">
+          <span aria-hidden="true">💬</span> <span>המשך לוואטסאפ</span>
+        </a>
+      </div>
+
       <a href="index.html" class="btn btn-gold btn-lg">חזרה לעמוד הבית</a>
 
       <p class="ty-meta">רוצה לזרז? חייג/י <a href="tel:0529534540" dir="ltr">052-9534540</a> או שלח/י
@@ -111,6 +119,30 @@
   </main>
 
   <script>
+    // WhatsApp fallback — if the lead form couldn't auto-open WhatsApp (popup
+    // blocked), or as a backup, show a one-tap button with the prefilled message.
+    (function () {
+      var url, blocked;
+      try {
+        url = sessionStorage.getItem("mrp_wa_url");
+        blocked = sessionStorage.getItem("mrp_wa_blocked") === "1";
+        sessionStorage.removeItem("mrp_wa_url");
+        sessionStorage.removeItem("mrp_wa_blocked");
+      } catch (e) {}
+      if (!url) return;
+      var wrap = document.getElementById("waContinue");
+      var btn = document.getElementById("waBtn");
+      var hint = document.getElementById("waHint");
+      if (!wrap || !btn) return;
+      btn.href = url;
+      if (hint) {
+        hint.textContent = blocked
+          ? "החלון של וואטסאפ נחסם — לחצו כאן כדי לשלוח את ההודעה לאורי 👇"
+          : "ההודעה מוכנה בוואטסאפ. אם לא נפתחה, אפשר להמשיך כאן 👇";
+      }
+      wrap.hidden = false;
+    })();
+
     (function () {
       if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       var host = document.getElementById("confetti");

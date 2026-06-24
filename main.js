@@ -369,8 +369,27 @@
       var service = form.service.value;
       var message = form.message.value.trim();
 
-      // 1) BACKGROUND DB — store the lead in the Supabase "leads" table.
-      //    Fire-and-forget so it never blocks the WhatsApp redirect below.
+      // Build the prefilled WhatsApp message up-front.
+      var waText = "היי אורי, שלחתי עכשיו פנייה באתר לגבי " + service +
+        ". השם שלי הוא " + name + " והטלפון שלי הוא " + phone +
+        (location ? " (" + location + ")" : "") + ". " + message;
+      var waUrl = "https://wa.me/" + PHONE_INTL + "?text=" + encodeURIComponent(waText.trim());
+
+      // 1) FOREGROUND WHATSAPP — open synchronously, as the very first action
+      //    inside the submit gesture, to maximize the chance of bypassing
+      //    popup blockers. Detect whether the tab was actually opened.
+      var waWin = window.open(waUrl, "_blank");
+      if (waWin) { try { waWin.opener = null; } catch (e) {} } // sever opener (manual noopener)
+
+      // Persist the link so the thank-you page can offer a one-tap fallback —
+      // this guarantees the user can still reach WhatsApp if the popup was blocked.
+      try {
+        sessionStorage.setItem("mrp_wa_url", waUrl);
+        sessionStorage.setItem("mrp_wa_blocked", waWin ? "0" : "1");
+      } catch (e) {}
+
+      // 2) BACKGROUND DB — store the lead in the Supabase "leads" table.
+      //    Fire-and-forget so it never blocks the redirect below.
       fetch(SUPABASE_URL + "leads", {
         method: "POST",
         headers: {
@@ -388,23 +407,15 @@
         })
       }).catch(function () { /* DB write is best-effort; WhatsApp is the primary delivery */ });
 
-      // 2) FOREGROUND WHATSAPP — open a prefilled chat with Uri.
-      //    Opened synchronously inside the submit gesture so popup blockers allow it.
-      var waText = "היי אורי, שלחתי עכשיו פנייה באתר לגבי " + service +
-        ". השם שלי הוא " + name + " והטלפון שלי הוא " + phone +
-        (location ? " (" + location + ")" : "") + ". " + message;
-      var url = "https://wa.me/" + PHONE_INTL + "?text=" + encodeURIComponent(waText.trim());
-      window.open(url, "_blank", "noopener");
-
       // Marketing analytics: a validated lead is a successful submission.
       gaEvent("form_submission", { service: service, location: location || undefined });
 
-      // 3) UX — confirm, clear the fields, then land on the thank-you page.
+      // 3) UX — confirm, clear the fields, then land on the thank-you page
+      //    (Google Ads conversion anchor + WhatsApp fallback button).
       status.textContent = t("Thanks! Redirecting…", "תודה! מעבירים אתכם…");
       status.classList.add("ok");
       form.reset();
 
-      // …then redirect to the thank-you page (Google Ads conversion anchor)
       setTimeout(function () { window.location.href = "thankyou.html"; }, 400);
     });
   }
