@@ -6,6 +6,12 @@ desktop.ini
 .vscode/
 .idea/
 
+# Dependencies
+node_modules/
+
+# Marketing working files — not part of the deployed site
+marketing/
+
 # Logs & temp
 *.log
 npm-debug.log*
