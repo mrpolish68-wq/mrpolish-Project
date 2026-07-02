@@ -213,9 +213,11 @@
 <body>
   <!-- ============ PRELOADER / SPLASH SCREEN ============ -->
   <div class="preloader" id="preloader" role="status" aria-label="טוען את האתר">
+    <!-- No autoplay / src here on purpose: the ~2.9MB video is attached by JS
+         only on the first visit of a session, so repeat views never fetch it. -->
     <video class="preloader-video" id="preloaderVideo"
-           autoplay muted playsinline preload="auto" poster="logo.jpg">
-      <source src="preloader.mp4" type="video/mp4" />
+           muted playsinline preload="none" poster="logo.jpg">
+      <source data-src="preloader.mp4" type="video/mp4" />
     </video>
 
     <div class="preloader-content" aria-hidden="true">

@@ -48,6 +48,17 @@
     var pre = document.getElementById("preloader");
     if (!pre) return;
 
+    // Perf: show the intro splash at most ONCE per browser session. Every
+    // subsequent navigation / return renders the real page immediately
+    // (no overlay, no scroll-lock, no 2.9MB video request).
+    try {
+      if (sessionStorage.getItem("mrp_splash_seen")) {
+        if (pre.parentNode) pre.parentNode.removeChild(pre);
+        return;
+      }
+      sessionStorage.setItem("mrp_splash_seen", "1");
+    } catch (e) { /* private mode / storage blocked: fall through, show once */ }
+
     var video = document.getElementById("preloaderVideo");
     var skip = document.getElementById("preloaderSkip");
     var done = false, started = false;
@@ -90,17 +101,25 @@
     function startClock() {
       if (started) return;
       started = true;
-      if (reduce) { showName(); revealTimer = setTimeout(hide, 1200); return; }
-      nameTimer = setTimeout(showName, 3000);
-      revealTimer = setTimeout(hide, 5000);
+      if (reduce) { showName(); revealTimer = setTimeout(hide, 700); return; }
+      nameTimer = setTimeout(showName, 500);
+      revealTimer = setTimeout(hide, 2000);
     }
 
     if (video) {
       video.muted = true; // required for reliable autoplay
 
-      // Prefer the video's own clock for the name cue (machine exits ~3s).
+      // Attach the source now (first visit only — repeat visits already
+      // returned above, so the video bytes are never requested for them).
+      var source = video.querySelector("source");
+      if (source && !source.getAttribute("src") && source.dataset.src) {
+        source.setAttribute("src", source.dataset.src);
+        video.load();
+      }
+
+      // Prefer the video's own clock for the name cue.
       video.addEventListener("timeupdate", function () {
-        if (video.currentTime >= 3) showName();
+        if (video.currentTime >= 0.5) showName();
       });
       video.addEventListener("playing", startClock, { once: true });
       video.addEventListener("error", startClock, { once: true });
@@ -118,7 +137,7 @@
     if (skip) skip.addEventListener("click", hide);
 
     // Ultimate safety net: never trap the visitor behind the splash.
-    safetyTimer = setTimeout(hide, 7000);
+    safetyTimer = setTimeout(hide, 3000);
   })();
 
   /* ---------------------------------------------------------
