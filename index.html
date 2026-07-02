@@ -46,29 +46,116 @@
   <!-- If JS is disabled, never show the splash overlay. -->
   <noscript><style>.preloader{display:none !important;}</style></noscript>
 
-  <!-- SEO: Structured Data (Schema.org) -->
+  <!-- SEO: Structured Data (Schema.org) — LocalBusiness with geo, service-area
+       cities, social/GBP profiles (sameAs), and aggregateRating + reviews. -->
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
+    "@id": "https://mr-polishes.com/#business",
     "name": "מיסטר פוליש - Mr. Polish",
+    "url": "https://mr-polishes.com/",
     "image": "https://mr-polishes.com/logo.jpg",
+    "logo": "https://mr-polishes.com/logo.jpg",
     "description": "ליטוש וחידוש מרצפות, אבן, שיש ובטון. הברקה קריסטלית ומריחת סילר הגנה. 30 שנות ניסיון.",
     "founder": "אורי מרגלית",
     "telephone": "+972529534540",
     "priceRange": "₪₪",
-    "areaServed": ["מרכז", "ירושלים", "בית שמש", "ישראל"],
     "address": {
       "@type": "PostalAddress",
-      "addressCountry": "IL"
+      "addressCountry": "IL",
+      "addressRegion": "מחוז המרכז"
     },
-    "sameAs": [],
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": 32.1848,
+      "longitude": 34.8707
+    },
+    "areaServed": [
+      {
+        "@type": "City",
+        "name": "נתניה",
+        "geo": { "@type": "GeoCoordinates", "latitude": 32.3215, "longitude": 34.8532 }
+      },
+      {
+        "@type": "City",
+        "name": "רעננה",
+        "geo": { "@type": "GeoCoordinates", "latitude": 32.1848, "longitude": 34.8707 }
+      },
+      {
+        "@type": "City",
+        "name": "כפר סבא",
+        "geo": { "@type": "GeoCoordinates", "latitude": 32.1782, "longitude": 34.9077 }
+      },
+      "אזור השרון",
+      "מרכז",
+      "ירושלים",
+      "בית שמש",
+      "ישראל"
+    ],
+    "sameAs": [
+      "https://g.page/r/CRSEpD2_CFoDEBI",
+      "https://www.facebook.com/margalitlitushim",
+      "https://www.instagram.com/mr.polish.floors/"
+    ],
     "openingHoursSpecification": {
       "@type": "OpeningHoursSpecification",
       "dayOfWeek": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"],
       "opens": "08:00",
       "closes": "19:00"
-    }
+    },
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "5",
+      "bestRating": "5",
+      "worstRating": "1",
+      "ratingCount": "6",
+      "reviewCount": "6"
+    },
+    "review": [
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "הכולל השמח" },
+        "datePublished": "2019-06-12",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "השירות אדיב עבודה ברמה מקצועית מה שסכמנו על העבודה בוצע לשביעות רצוני כל הכבוד על הסדר והנקיון יחס אדיב כל הכבוד"
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "David Halfon" },
+        "datePublished": "2018-08-26",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "מעולים! מניסיון - חברה מקצועית עם אנשים ישרים."
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "ליני זר" },
+        "datePublished": "2016-11-22",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "כשמתבוננים בריצפת השיש שלנו אי אפשר שלא לראות את האנשים שמאחורי העבודה... איזה משפחה מדהימה זו משפחת מרגלית: מיקצוענים, ישרי דרך, נעימי הליכות ובעיקר לוקחי אחריות. למרות שמהלך הליטוש הוא לא כיף גדול הנועם שבעבודתם הופך את זה לחוויה אחרת. והתוצאה אכן כמו שהבטיחו באמת מושלמת!"
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Yael Olsher Azar" },
+        "datePublished": "2018-08-27",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "דוד ואורי עשו לנו עבודת ליטוש וסילר. עבודה מקצועית ושירות מצויין."
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Seli Sasi" },
+        "datePublished": "2016-11-15",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "את העבודה המדהימה שלהם אי אפשר להשיג במקום אחר! באדיבות, עם חיוך, במקצועיות מטורפת ותוצאות מרהיבות!"
+      },
+      {
+        "@type": "Review",
+        "author": { "@type": "Person", "name": "Ben Atia" },
+        "datePublished": "2016-07-22",
+        "reviewRating": { "@type": "Rating", "ratingValue": "5", "bestRating": "5", "worstRating": "1" },
+        "reviewBody": "עבודה מעולה של צוות מקצועי שעובד מהלב, חברה מדהימים! תודה רבה לכם על הכל!"
+      }
+    ]
   }
   </script>
 
