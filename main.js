@@ -296,6 +296,7 @@
     footer_contact: "Contact",
     footer_wa: "WhatsApp",
     footer_rights: "All rights reserved.",
+    social_follow: "Follow us",
     bar_call: "Call now",
     bar_wa: "WhatsApp",
     bar_waze: "Waze"

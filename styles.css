@@ -1226,6 +1226,33 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 
 .header-actions { display: flex; align-items: center; gap: 10px; }
 
+/* Compact social pair in the header bar (matches lang-switch styling) */
+.header-social { display: flex; align-items: center; gap: 6px; }
+.header-social a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--char-800);
+  background: transparent;
+  border: 1.5px solid var(--char-700);
+  transition: transform .2s var(--ease-out), background .2s ease,
+              border-color .2s ease, color .2s ease, box-shadow .25s ease;
+}
+.header-social a svg { width: 18px; height: 18px; display: block; }
+.header-social a:hover,
+.header-social a:focus-visible {
+  color: var(--white);
+  border-color: transparent;
+  transform: translateY(-2px);
+}
+.header-social a:focus-visible { outline: 3px solid var(--gold-500); outline-offset: 2px; }
+/* Hide only on the very smallest screens so the mobile bar stays uncluttered
+   (it fits fine from ~360px up; footer + reviews cover narrower devices). */
+@media (max-width: 359px) { .header-social { display: none; } }
+
 .lang-switch {
   background: transparent;
   border: 1.5px solid var(--char-700);
@@ -1655,6 +1682,66 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 .footer-col ul { display: grid; gap: 10px; }
 .footer-col a { transition: color .2s ease, padding-inline-start .2s ease; }
 .footer-col a:hover { color: var(--gold-400); padding-inline-start: 4px; }
+
+/* =========================================================
+   SOCIAL PROFILE BUTTONS (footer + reviews section)
+   Circular gold-outlined badges on the dark brand surface;
+   fill with the native brand colour + lift on hover.
+   ========================================================= */
+.social-follow-label {
+  display: block;
+  color: var(--gold-500);
+  font-weight: 700;
+  font-size: 0.98rem;
+  letter-spacing: 0.01em;
+}
+.footer-social { margin-block-start: 20px; }
+.footer-social .social-follow-label { margin-block-end: 12px; }
+.social-links { display: flex; align-items: center; gap: 12px; }
+/* Target the anchors directly so footer's generic `.footer-col a` rules
+   (colour + padding shift + transition) never override these. */
+.social-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--white);
+  background: oklch(1 0 0 / 0.06);
+  border: 1.5px solid oklch(0.82 0.13 88 / 0.42);
+  transition: transform .25s var(--ease-out), background .25s ease,
+              border-color .25s ease, box-shadow .3s ease, color .25s ease;
+}
+.social-links a svg { width: 22px; height: 22px; display: block; }
+.social-links a:hover,
+.social-links a:focus-visible {
+  color: var(--white);
+  padding-inline-start: 0;                 /* cancel footer link hover shift */
+  transform: translateY(-4px) scale(1.08);
+  border-color: transparent;
+}
+.social-links a:focus-visible { outline: 3px solid var(--gold-500); outline-offset: 3px; }
+.social-btn--fb:hover,
+.social-btn--fb:focus-visible { background: #1877F2; box-shadow: 0 12px 30px oklch(0.55 0.2 264 / 0.55); }
+.social-btn--ig:hover,
+.social-btn--ig:focus-visible {
+  background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+  box-shadow: 0 12px 30px oklch(0.55 0.22 5 / 0.55);
+}
+
+/* Social row under the reviews marquee — centred, reinforces social proof */
+.reviews-social-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-block-start: 22px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .social-links a:hover, .social-links a:focus-visible { transform: none; }
+}
 .footer-bottom {
   border-block-start: 1px solid oklch(0.35 0.01 264 / 0.6);
   padding-block: 20px;
