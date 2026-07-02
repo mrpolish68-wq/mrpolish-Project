@@ -972,9 +972,110 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 }
 .reviews-cta:focus-visible { outline: 3px solid var(--gold-500); outline-offset: 3px; }
 
+/* Two CTAs under the marquee: primary "write a review" + ghost "read on Google" */
+.reviews-cta-wrap { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: center; }
+.reviews-cta--write {
+  color: var(--char-900);
+  background: linear-gradient(135deg, var(--gold-400), var(--gold-600));
+  border-color: transparent;
+}
+.reviews-cta--write:hover { box-shadow: 0 14px 34px var(--gold-glow); }
+
 @media (prefers-reduced-motion: reduce) {
   .marquee { overflow-x: auto; } /* let users scroll manually instead */
   .marquee__track { animation: none; }
+}
+
+/* =========================================================
+   WRITE-A-REVIEW MODAL
+   Self-contained overlay + dialog. Reuses .field / .btn.
+   ========================================================= */
+.review-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.review-modal[hidden] { display: none; }
+.review-modal__overlay {
+  position: absolute;
+  inset: 0;
+  background: oklch(0.15 0.02 264 / 0.6);
+  backdrop-filter: blur(3px);
+  animation: reviewFade .2s var(--ease-out);
+}
+.review-modal__dialog {
+  position: relative;
+  width: min(540px, 100%);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  background: var(--white);
+  /* Reset the inherited white text from the dark .marquee-section so form
+     labels (which have no explicit colour) don't render white-on-white. */
+  color: var(--ink-900);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg, 0 30px 80px rgba(0,0,0,0.35));
+  padding: clamp(24px, 5vw, 40px);
+  text-align: center;
+  animation: reviewPop .25s var(--ease-out);
+}
+.review-modal__close {
+  position: absolute;
+  inset-block-start: 12px;
+  inset-inline-end: 14px;
+  background: transparent;
+  border: 0;
+  font-size: 1.9rem;
+  line-height: 1;
+  color: var(--ink-700);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+.review-modal__close:hover { color: var(--ink-900); background: var(--marble-100); }
+.review-modal__close:focus-visible { outline: 3px solid var(--gold-500); outline-offset: 2px; }
+.review-modal__title { font-size: clamp(1.35rem, 3vw, 1.7rem); color: var(--char-900); margin-block-end: 8px; }
+.review-modal__sub { color: var(--ink-700); font-size: 0.98rem; margin-block-end: 20px; }
+.review-form { display: grid; gap: 16px; text-align: start; }
+.review-form .field label { font-weight: 600; }
+.review-modal__dismiss {
+  margin-block-start: 14px;
+  background: transparent;
+  border: 0;
+  color: var(--ink-700);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.review-modal__dismiss:hover { color: var(--ink-900); }
+
+/* Success state */
+.review-success__icon {
+  width: 64px;
+  height: 64px;
+  margin: 4px auto 16px;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--white);
+  background: var(--whatsapp, oklch(0.68 0.16 150));
+  border-radius: 50%;
+  animation: reviewPop .35s var(--ease-out);
+}
+.review-success__msg { color: var(--ink-800, var(--ink-700)); font-size: 1.02rem; line-height: 1.7; margin-block-end: 22px; }
+.review-success__cta { margin-block-end: 4px; }
+
+@keyframes reviewFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes reviewPop { from { opacity: 0; transform: translateY(12px) scale(0.97); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .review-modal__overlay,
+  .review-modal__dialog,
+  .review-success__icon { animation: none; }
 }
 
 /* =========================================================

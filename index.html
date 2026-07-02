@@ -162,6 +162,7 @@
           <li><a href="#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
           <li><a href="#about" data-i18n="nav_about">אודות</a></li>
           <li><a href="blog.html" data-i18n="nav_blog">בלוג ומדריכים</a></li>
+          <li><a href="#testimonials" data-i18n="nav_reviews">ביקורות</a></li>
           <li><a href="#contact" data-i18n="nav_contact">צרו קשר</a></li>
         </ul>
       </nav>
@@ -186,6 +187,7 @@
         <li><a href="#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
         <li><a href="#about" data-i18n="nav_about">אודות</a></li>
         <li><a href="blog.html" data-i18n="nav_blog">בלוג ומדריכים</a></li>
+        <li><a href="#testimonials" data-i18n="nav_reviews">ביקורות</a></li>
         <li><a href="#contact" data-i18n="nav_contact">צרו קשר</a></li>
       </ul>
     </nav>
@@ -535,8 +537,66 @@
       </div>
 
       <div class="container reviews-cta-wrap reveal">
+        <button type="button" class="reviews-cta reviews-cta--write" id="openReviewModal" data-i18n="reviews_write_cta">כתיבת ביקורת ✍️</button>
         <!-- TODO: replace href="#" with Uri's Google My Business / Maps review link -->
-        <a href="#" class="reviews-cta" target="_blank" rel="noopener" data-i18n="reviews_cta">לקריאת כל הביקורות וכתיבת המלצה בגוגל 🌟</a>
+        <a href="#" class="reviews-cta reviews-cta--ghost" target="_blank" rel="noopener" data-i18n="reviews_cta">לקריאת כל הביקורות וכתיבת המלצה בגוגל 🌟</a>
+      </div>
+
+      <!-- ===== WRITE-A-REVIEW MODAL ===== -->
+      <div class="review-modal" id="reviewModal" hidden>
+        <div class="review-modal__overlay" data-review-close></div>
+        <div class="review-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle" dir="rtl">
+          <button type="button" class="review-modal__close" aria-label="סגירת החלון" data-review-close>&times;</button>
+
+          <!-- FORM STATE -->
+          <div id="reviewFormState">
+            <h3 class="review-modal__title" id="reviewModalTitle" data-i18n="review_modal_title">כתיבת ביקורת</h3>
+            <p class="review-modal__sub" data-i18n="review_modal_sub">נשמח לשמוע על החוויה שלכם. הביקורת תפורסם באתר לאחר אישור.</p>
+
+            <form class="review-form" id="reviewForm" novalidate>
+              <div class="field">
+                <label for="rv-name">שם פרטי ושם משפחה:</label>
+                <input type="text" id="rv-name" name="first_last_name" autocomplete="name" required />
+              </div>
+
+              <div class="field">
+                <label for="rv-date">תאריך עבודה:</label>
+                <input type="text" id="rv-date" name="job_date" placeholder="לדוגמה: יוני 2024" required />
+              </div>
+
+              <div class="field">
+                <label for="rv-type">סוג עבודה:</label>
+                <input type="text" id="rv-type" name="job_type" placeholder="לדוגמה: ליטוש שיש והברקה קריסטלית" required />
+              </div>
+
+              <div class="field">
+                <label for="rv-text">כתיבת ביקורת:</label>
+                <textarea id="rv-text" name="review_text" rows="4" required></textarea>
+              </div>
+
+              <!-- Honeypot for spam protection -->
+              <div class="hp-field" aria-hidden="true">
+                <label for="rv-website">אל תמלאו שדה זה</label>
+                <input type="text" id="rv-website" name="website" tabindex="-1" autocomplete="off" />
+              </div>
+
+              <button type="submit" class="btn btn-lg btn-block form-submit-btn">
+                <span class="label" data-i18n="review_submit">שליחת הביקורת</span>
+              </button>
+              <p class="form-status" id="reviewStatus" role="status" aria-live="polite"></p>
+            </form>
+          </div>
+
+          <!-- SUCCESS STATE -->
+          <div id="reviewSuccessState" hidden>
+            <div class="review-success__icon" aria-hidden="true">✓</div>
+            <h3 class="review-modal__title" data-i18n="review_success_title">תודה רבה!</h3>
+            <p class="review-success__msg" data-i18n="review_success_msg">ההמלצה שלך נשמרה בהצלחה! נשמח מאוד אם תוכל להעתיק אותה ולשתף אותה גם בעמוד הגוגל מפות שלנו כדי לעזור לנו לצמוח.</p>
+            <!-- TODO: replace placeid with Uri's real Google Place ID -->
+            <a class="btn btn-lg btn-block btn-gold review-success__cta" href="https://search.google.com/local/writereview?placeid=YOUR_GOOGLE_PLACE_ID_HERE" target="_blank" rel="noopener" data-i18n="review_success_cta">שיתוף המלצה בגוגל מפות 🌟</a>
+            <button type="button" class="review-modal__dismiss" data-review-close data-i18n="review_success_dismiss">סגירה</button>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -663,6 +723,7 @@
           <li><a href="#faq-tabs" data-i18n="nav_faq">שאלות נפוצות</a></li>
           <li><a href="#about" data-i18n="nav_about">אודות</a></li>
           <li><a href="blog.html" data-i18n="nav_blog">בלוג ומדריכים</a></li>
+          <li><a href="#testimonials" data-i18n="nav_reviews">ביקורות</a></li>
         </ul>
       </div>
 

@@ -134,6 +134,7 @@
     nav_about: "About",
     nav_faq: "FAQ",
     nav_blog: "Blog &amp; Guides",
+    nav_reviews: "Reviews",
     nav_contact: "Contact",
     header_call: "052-9534540",
 
@@ -211,6 +212,14 @@
     testi6_quote: "\"Excellent work by a professional team that works from the heart — amazing people! Thank you so much for everything!\"",
     testi6_author: "- <bdi>Ben Atia</bdi> · <bdi>July 22, 2016</bdi>",
     reviews_cta: "Read all reviews &amp; write a review on Google 🌟",
+    reviews_write_cta: "Write a review ✍️",
+    review_modal_title: "Write a review",
+    review_modal_sub: "We'd love to hear about your experience. Your review will be published on the site after approval.",
+    review_submit: "Submit review",
+    review_success_title: "Thank you!",
+    review_success_msg: "Your review was saved successfully! We'd be thrilled if you could copy it and share it on our Google Maps page too, to help us grow.",
+    review_success_cta: "Share your review on Google Maps 🌟",
+    review_success_dismiss: "Close",
 
     compare_eyebrow: "See the difference",
     compare_title: "Before &amp; After",
@@ -684,7 +693,11 @@
      loops with zero gaps at any width. Constant speed via a
      width-based duration. Pause on hover / touch press-hold.
   --------------------------------------------------------- */
-  (function initMarquee() {
+  var marqueeInited = false;
+  function initMarquee() {
+    if (marqueeInited) return;
+    marqueeInited = true;
+
     var track = document.querySelector(".marquee__track");
     if (!track) return;
     var marquee = track.closest(".marquee");
@@ -713,6 +726,186 @@
     ["pointerup", "pointercancel", "pointerleave"].forEach(function (ev) {
       marquee.addEventListener(ev, function () { marquee.classList.remove("is-held"); });
     });
+  }
+
+  /* ---------------------------------------------------------
+     8c. DYNAMIC REVIEWS — fetch approved reviews from Supabase
+     and prepend them to the static Facebook set, THEN build the
+     marquee (so the clones include the fresh reviews). A network
+     timeout guarantees the marquee still initialises if the fetch
+     hangs or fails, so this can never trap the section empty.
+  --------------------------------------------------------- */
+  (function initDynamicReviews() {
+    var track = document.querySelector(".marquee__track");
+    if (!track) { initMarquee(); return; }
+
+    // Build one .testi card from a Supabase review row. Everything is set via
+    // textContent / DOM nodes (never innerHTML) so user input can't inject markup.
+    function buildCard(r) {
+      var fig = document.createElement("figure");
+      fig.className = "testi";
+
+      var stars = document.createElement("div");
+      stars.className = "testi__stars";
+      stars.setAttribute("role", "img");
+      stars.setAttribute("aria-label", "5 מתוך 5 כוכבים");
+      stars.textContent = "★★★★★";
+      fig.appendChild(stars);
+
+      var quote = document.createElement("blockquote");
+      quote.className = "testi__quote";
+      quote.textContent = '"' + String(r.review_text || "").trim() + '"';
+      fig.appendChild(quote);
+
+      var cap = document.createElement("figcaption");
+      cap.className = "testi__author";
+      cap.appendChild(document.createTextNode("- "));
+      // Each segment is wrapped in <bdi> so mixed HE/EN names + dates never
+      // scramble inside the RTL caption (same fix as the static cards).
+      var parts = [r.first_last_name, r.job_type, r.job_date];
+      var first = true;
+      parts.forEach(function (val) {
+        val = (val == null ? "" : String(val)).trim();
+        if (!val) return;
+        if (!first) cap.appendChild(document.createTextNode(" · "));
+        var bdi = document.createElement("bdi");
+        bdi.textContent = val;
+        cap.appendChild(bdi);
+        first = false;
+      });
+      fig.appendChild(cap);
+      return fig;
+    }
+
+    function injectReviews(rows) {
+      if (!rows || !rows.length) return;
+      var frag = document.createDocumentFragment();
+      rows.forEach(function (r) {
+        if (r && r.review_text) frag.appendChild(buildCard(r));
+      });
+      // Prepend so the newest approved reviews lead the marquee.
+      track.insertBefore(frag, track.firstChild);
+    }
+
+    // Abort the fetch after 4s so a hanging request never blocks the marquee.
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 4000);
+
+    fetch(SUPABASE_URL + "reviews?approved=eq.true&order=created_at.desc", {
+      method: "GET",
+      headers: {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY
+      },
+      signal: ctrl ? ctrl.signal : undefined
+    })
+      .then(function (res) { return res.ok ? res.json() : []; })
+      .then(function (rows) { injectReviews(rows); })
+      .catch(function () { /* offline / blocked / timeout — static reviews still show */ })
+      .then(function () { clearTimeout(timer); initMarquee(); });
+  })();
+
+  /* ---------------------------------------------------------
+     8d. WRITE-A-REVIEW MODAL — opens a form, posts to Supabase
+     ("reviews" table, approved=false by default), then shows a
+     success state that nudges the user to also post on Google Maps.
+  --------------------------------------------------------- */
+  (function initReviewModal() {
+    var modal = document.getElementById("reviewModal");
+    var openBtn = document.getElementById("openReviewModal");
+    if (!modal || !openBtn) return;
+
+    var formState = document.getElementById("reviewFormState");
+    var successState = document.getElementById("reviewSuccessState");
+    var reviewForm = document.getElementById("reviewForm");
+    var reviewStatus = document.getElementById("reviewStatus");
+    var lastFocused = null;
+
+    function openModal() {
+      lastFocused = document.activeElement;
+      // Always open on the form state (reset from any prior success view).
+      if (formState) formState.hidden = false;
+      if (successState) successState.hidden = true;
+      modal.hidden = false;
+      document.body.style.overflow = "hidden";
+      var firstInput = modal.querySelector("input, textarea, button");
+      if (firstInput) firstInput.focus();
+      gaEvent("review_modal_open");
+    }
+
+    function closeModal() {
+      modal.hidden = true;
+      document.body.style.overflow = "";
+      if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+    }
+
+    openBtn.addEventListener("click", openModal);
+
+    modal.querySelectorAll("[data-review-close]").forEach(function (el) {
+      el.addEventListener("click", closeModal);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !modal.hidden) closeModal();
+    });
+
+    if (reviewForm) {
+      reviewForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        if (!reviewStatus) return;
+        reviewStatus.className = "form-status";
+
+        // Honeypot: silently drop bots that fill the hidden field.
+        var hp = document.getElementById("rv-website");
+        if (hp && hp.value) { return; }
+
+        var payload = {
+          first_last_name: (reviewForm.first_last_name.value || "").trim(),
+          job_date: (reviewForm.job_date.value || "").trim(),
+          job_type: (reviewForm.job_type.value || "").trim(),
+          review_text: (reviewForm.review_text.value || "").trim()
+        };
+
+        if (!payload.first_last_name || !payload.review_text) {
+          reviewStatus.textContent = t("Please fill in your name and review.", "נא למלא שם וכתיבת ביקורת.");
+          reviewStatus.classList.add("err");
+          return;
+        }
+
+        var submitBtn = reviewForm.querySelector("button[type=submit]");
+        if (submitBtn) submitBtn.disabled = true;
+        reviewStatus.textContent = t("Sending…", "שולח…");
+
+        fetch(SUPABASE_URL + "reviews", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "Prefer": "return=minimal"
+          },
+          body: JSON.stringify(payload)
+        })
+          .then(function (res) {
+            if (!res.ok) throw new Error("bad status " + res.status);
+            gaEvent("review_submit");
+            reviewForm.reset();
+            reviewStatus.textContent = "";
+            // Swap to the success / Google Maps nudge state.
+            if (formState) formState.hidden = true;
+            if (successState) successState.hidden = false;
+          })
+          .catch(function () {
+            reviewStatus.textContent = t(
+              "Something went wrong. Please try again.",
+              "משהו השתבש. אנא נסו שוב."
+            );
+            reviewStatus.classList.add("err");
+          })
+          .then(function () {
+            if (submitBtn) submitBtn.disabled = false;
+          });
+      });
+    }
   })();
 
   /* ---------------------------------------------------------
