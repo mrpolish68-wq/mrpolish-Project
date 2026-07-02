@@ -162,6 +162,43 @@
     </div>
   </footer>
 
+  <!-- ============================================================
+       SEO: per-post canonical + single-H1 fix for the blog SPA.
+       The Soro embed injects each article's title, <h1> and
+       BlogPosting schema but leaves the canonical on the generic
+       index. On a ?post=<slug> view we (1) point the canonical +
+       og:url at that post's own URL so Google indexes it as a
+       unique page, and (2) demote the generic hero <h1> to a <p>
+       so the injected article title is the page's only <h1>.
+       Runs synchronously here (hero already parsed above), before
+       the deferred embed loads.
+  ============================================================ -->
+  <script>
+    (function () {
+      var slug = new URLSearchParams(location.search).get("post");
+      if (!slug) return; // blog index: keep static H1 + self-canonical as-is
+
+      var postUrl = "https://mr-polishes.com/blog.html?post=" + encodeURIComponent(slug);
+
+      var canonical = document.querySelector('link[rel="canonical"]');
+      if (canonical) canonical.setAttribute("href", postUrl);
+      var ogUrl = document.querySelector('meta[property="og:url"]');
+      if (ogUrl) ogUrl.setAttribute("content", postUrl);
+
+      var heroH1 = document.querySelector(".legal-hero h1");
+      if (heroH1) {
+        var p = document.createElement("p");
+        p.className = "blog-hero-heading";
+        for (var i = 0; i < heroH1.attributes.length; i++) {
+          var attr = heroH1.attributes[i];
+          if (attr.name !== "class") p.setAttribute(attr.name, attr.value);
+        }
+        p.textContent = heroH1.textContent;
+        heroH1.replaceWith(p);
+      }
+    })();
+  </script>
+
   <script src="main.js"></script>
 </body>
 </html>

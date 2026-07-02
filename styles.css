@@ -1108,6 +1108,9 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 }
 .legal-hero .eyebrow { color: var(--gold-500); }
 .legal-hero h1 { color: var(--white); font-size: clamp(1.9rem, 5vw, 3rem); margin-block: 10px 0; }
+/* Blog hero title after it's demoted from <h1> on individual post pages
+   (so the article title stays the single page <h1>) — keeps the same look. */
+.legal-hero .blog-hero-heading { color: var(--white); font-size: clamp(1.9rem, 5vw, 3rem); font-weight: 800; line-height: 1.15; margin-block: 10px 0; }
 .legal-hero p { color: oklch(0.85 0.01 264); margin-block-start: 12px; }
 
 .legal-main { padding-block: clamp(40px, 7vw, 72px); }

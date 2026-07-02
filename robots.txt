@@ -1,0 +1,10 @@
+# robots.txt — mr-polishes.com
+User-agent: *
+Allow: /
+
+# Keep private/utility pages out of the index
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+Sitemap: https://mr-polishes.com/sitemap.xml
