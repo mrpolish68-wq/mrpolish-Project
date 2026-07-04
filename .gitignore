@@ -19,3 +19,6 @@ npm-debug.log*
 # Local verification artifacts (Playwright / screenshots)
 .playwright-mcp/
 *.tmp
+
+.vercel
+.env*
