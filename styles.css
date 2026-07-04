@@ -221,8 +221,19 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 }
 .container-narrow { max-width: 800px; }
 
-.section { padding-block: clamp(48px, 8vw, 96px); }
+.section {
+  padding-block: clamp(48px, 8vw, 96px);
+  /* Perf: skip layout/paint/animation work for below-the-fold sections
+     (several run infinite animations) until they near the viewport.
+     "auto" remembers each section's real height after its first render,
+     so the 600px guess only affects the very first scroll pass. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 600px;
+}
 .section-alt { background: var(--marble-100); }
+/* Taller than the shared 600px guess (12-card grid) — closer estimate
+   avoids a visible scrollbar/layout jump on first visit to the section. */
+.services { contain-intrinsic-size: auto 1200px; }
 
 .section-head { text-align: center; max-width: 680px; margin-inline: auto; margin-block-end: clamp(28px, 5vw, 52px); }
 .section-head h2 { font-size: clamp(1.7rem, 4.5vw, 2.6rem); margin-block: 10px; }
@@ -1322,7 +1333,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
   color: var(--white);
   /* static fallback (first paint, video blocked, or reduced-motion) */
   background: var(--char-900)
-    url("https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=70") center/cover no-repeat;
+    url("assets/hero-poster.jpg") center/cover no-repeat;
   text-align: center;
   padding-block: 80px 100px;
   overflow: hidden;

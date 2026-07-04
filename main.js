@@ -670,10 +670,29 @@
     window.addEventListener("pointerup", endDrag);
     window.addEventListener("pointercancel", endDrag);
 
-    /* ----- Boot ----- */
-    if (tabsEl && dotsEl && beforeImg && afterImg) {
+    /* ----- Boot -----
+       Perf: the gallery is below the fold and its first project alone is
+       ~2.7MB of images, competing with the preloader/hero video on first
+       visit. Defer fetching until the section is about to scroll into view. */
+    function boot() {
       renderTabs();
       selectProject(0);
+    }
+    if (tabsEl && dotsEl && beforeImg && afterImg) {
+      var section = document.getElementById("compare");
+      if (section && "IntersectionObserver" in window) {
+        var compareIO = new IntersectionObserver(function (entries, obs) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              boot();
+              obs.disconnect();
+            }
+          });
+        }, { rootMargin: "600px 0px" });
+        compareIO.observe(section);
+      } else {
+        boot();
+      }
     }
   })();
 
@@ -864,8 +883,33 @@
     modal.querySelectorAll("[data-review-close]").forEach(function (el) {
       el.addEventListener("click", closeModal);
     });
+
+    // Focus trap: only the currently-visible state (form or success) is
+    // considered, and elements with tabindex="-1" (the honeypot) are excluded.
+    function getFocusable() {
+      var selector = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]';
+      return Array.prototype.filter.call(modal.querySelectorAll(selector), function (el) {
+        if (el.tabIndex < 0) return false;
+        return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+      });
+    }
+
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !modal.hidden) closeModal();
+      if (modal.hidden) return;
+      if (e.key === "Escape") { closeModal(); return; }
+      if (e.key !== "Tab") return;
+
+      var focusable = getFocusable();
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     });
 
     if (reviewForm) {

@@ -31,7 +31,11 @@
   <meta property="og:image" content="https://mr-polishes.com/logo.jpg" />
   <meta property="og:url" content="https://mr-polishes.com/" />
 
-  <link rel="icon" type="image/jpeg" href="favicon.jpg" />
+  <link rel="icon" type="image/webp" href="favicon.webp" />
+
+  <!-- Perf: preload the hero's LCP image (video poster) so it paints
+       immediately instead of waiting on CSS/video discovery. -->
+  <link rel="preload" as="image" href="assets/hero-poster.jpg" />
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -216,13 +220,13 @@
     <!-- No autoplay / src here on purpose: the ~2.9MB video is attached by JS
          only on the first visit of a session, so repeat views never fetch it. -->
     <video class="preloader-video" id="preloaderVideo"
-           muted playsinline preload="none" poster="logo.jpg">
+           muted playsinline preload="none" poster="logo.webp">
       <source data-src="preloader.mp4" type="video/mp4" />
     </video>
 
     <div class="preloader-content" aria-hidden="true">
       <div class="preloader-brand">
-        <img class="preloader-logo" src="logo.jpg" alt="" />
+        <img class="preloader-logo" src="logo.webp" alt="" />
         <div class="preloader-title">
           <span class="pt-en" dir="ltr">Mr. Polish</span>
           <span class="pt-sep" aria-hidden="true">|</span>
@@ -241,7 +245,7 @@
   <header class="site-header" id="top">
     <div class="container header-inner">
       <a href="#top" class="brand" aria-label="מיסטר פוליש - דף הבית">
-        <img src="logo.jpg" alt="מיסטר פוליש - אורי מרגלית, ליטוש וחידוש מרצפות" class="brand-logo" />
+        <img src="logo.webp" alt="מיסטר פוליש - אורי מרגלית, ליטוש וחידוש מרצפות" class="brand-logo" />
       </a>
 
       <nav class="main-nav" aria-label="ניווט ראשי">
@@ -293,8 +297,8 @@
   <main id="main">
     <!-- ============ HERO ============ -->
     <section class="hero" aria-labelledby="hero-title">
-      <video class="hero-video" autoplay muted loop playsinline preload="auto"
-             poster="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1600&q=70" aria-hidden="true">
+      <video class="hero-video" autoplay muted loop playsinline preload="metadata"
+             poster="assets/hero-poster.jpg" aria-hidden="true">
         <source src="assets/hero-bg.mp4" type="video/mp4" />
       </video>
       <div class="hero-overlay"></div>
@@ -711,7 +715,7 @@
     <section class="about section" id="about" aria-labelledby="about-title">
       <div class="container about-inner">
         <div class="about-media reveal">
-          <img src="logo.jpg" alt="לוגו מיסטר פוליש - אורי מרגלית" loading="lazy" />
+          <img src="logo.webp" alt="לוגו מיסטר פוליש - אורי מרגלית" loading="lazy" />
           <span class="about-badge"><strong>30+</strong> <span data-i18n="about_years">שנות מומחיות</span></span>
         </div>
         <div class="about-text reveal">
@@ -818,7 +822,7 @@
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-col">
-        <img src="logo.jpg" alt="מיסטר פוליש" class="footer-logo" />
+        <img src="logo.webp" alt="מיסטר פוליש" class="footer-logo" />
         <p data-i18n="footer_about">מיסטר פוליש - אורי מרגלית. ליטוש וחידוש מרצפות, אבן, שיש ובטון עם 30 שנות ניסיון.</p>
         <div class="footer-social">
           <span class="social-follow-label" data-i18n="social_follow">עקבו אחרינו</span>
@@ -883,7 +887,7 @@
 
   <!-- ============ STICKY MOBILE ACTION BAR ============ -->
   <nav class="mobile-bar" aria-label="פעולות מהירות">
-    <a href="tel:0529534540" class="mobile-bar-btn mb-call">
+    <a href="tel:+972529534540" class="mobile-bar-btn mb-call">
       <span aria-hidden="true">📞</span>
       <span data-i18n="bar_call">חייג עכשיו</span>
     </a>
