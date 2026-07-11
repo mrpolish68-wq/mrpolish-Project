@@ -4,14 +4,14 @@ _Last updated: 2026-07-11. Read this file first in a new chat session — it has
 
 ## 1. Project Context
 
-**Mr. Polish (מיסטר פוליש)** is the business site + management dashboard for Uri Margalit (אורי מרגלית), a floor-polishing / stone & marble restoration professional (30 years experience) based in Netanya, serving nationwide. The public site (`index.html`) is a marketing/lead-gen page (Hebrew RTL, English-ready). The **admin dashboard** (`admin.html`) is Uri's private back-office tool: leads, calendar, work-order PDF generation, business expense tracking with accountant Excel export, and (as of this handoff) **a live Facebook + Instagram engagement snapshot**.
+**Mr. Polish (מיסטר פוליש)** is the business site + management dashboard for Uri Margalit (אורי מרגלית), a floor-polishing / stone & marble restoration professional (30 years experience) based in Netanya, serving nationwide. The public site (`index.html`) is a marketing/lead-gen page (Hebrew RTL, English-ready). The **admin dashboard** (`admin.html`) is Uri's private back-office tool: leads, calendar, work-order PDF generation, business expense tracking with accountant Excel export, a live Facebook + Instagram engagement snapshot, and (as of this handoff) **a content approval + scheduled auto-publishing pipeline for Facebook/Instagram**.
 
 **Stack — read this before assuming anything about tooling:**
 - Plain static HTML/CSS/vanilla JS. **No build step, no bundler, no `package.json`, no npm** for the main site.
 - Every third-party library is loaded via a CDN `<script>` tag directly in each HTML file's `<head>` (supabase-js, html2canvas, jsPDF, ExcelJS).
 - All page-specific CSS lives inline in a `<style>` block inside each HTML file. `styles.css` is the one shared stylesheet (design tokens + components used across pages).
 - All page-specific JS lives inline in a `<script>` block, wrapped in `(function () { "use strict"; ... })();` IIFEs. No TypeScript.
-- Deployed on **Vercel**, mostly as a static site (`.vercel/` project link present, project name `mrpolish-project`), **plus one serverless function** as of this session: `api/social-snapshot.js` (see §3 and §6) — the first departure from pure-static, added specifically because a real secret (Meta access token) can't safely live in client-side JS the way the Supabase anon key does.
+- Deployed on **Vercel**, mostly as a static site (`.vercel/` project link present, project name `mrpolish-project`), **plus serverless functions** under `api/` — the first departure from pure-static, added specifically because real secrets (Meta access token, Supabase service_role key) can't safely live in client-side JS the way the Supabase anon key does: `api/social-snapshot.js` (read-only Graph API proxy, see §3/§6) and `api/publish-scheduled-content.js` (cron-triggered publisher, see §7). `vercel.json` configures the cron schedule for the latter.
 - Backend: **Supabase** (project ref `mmognkxkglkotzkuxzly`, URL `https://mmognkxkglkotzkuxzly.supabase.co`). The anon key is hardcoded inline in `admin.html` / `login.html` / `main.js` (not an env var — that's the established convention here, don't "fix" it by introducing `.env` handling unless asked). This is safe specifically because Supabase Row-Level Security gates every table — there's no equivalent safety net for the Meta token (see §6), so that one genuinely must stay server-side.
 - Auth: Supabase Auth (email/password), single admin user (Uri) created manually in the Supabase Dashboard → Authentication → Users. `login.html` signs in; `admin.html` guards every load with a `localStorage` pre-check + a real `sb.auth.getUser()` server-side validation.
 
@@ -61,6 +61,40 @@ RLS: **no `anon` policy at all** — only `authenticated` (Uri's logged-in sessi
 
 **⚠️ This migration has not been run yet** — you (or Uri) must execute `supabase-business-expenses.sql` in the Supabase SQL Editor before the new dashboard tab will show real data (it will show a load error until then).
 
+### `public.content_queue` — **NEW**, content approval + publishing pipeline (file: `supabase-content-queue.sql`)
+```sql
+create type public.content_platform as enum ('facebook', 'instagram', 'both');
+create type public.content_media_type as enum ('image', 'video', 'reel', 'story');
+create type public.content_status as enum (
+  'pending_approval', 'approved', 'rejected', 'published', 'failed'
+);
+
+create table public.content_queue (
+  id             uuid primary key default gen_random_uuid(),
+  title          text,                     -- internal label only, never posted
+  caption        text not null,            -- the Hebrew copy that gets published
+  media_type     public.content_media_type not null,
+  media_url      text not null,            -- public URL Meta fetches the asset from
+  thumbnail_url  text,
+  platform       public.content_platform not null default 'both',
+  scheduled_for  timestamptz not null,
+  status         public.content_status not null default 'pending_approval',
+  approved_at    timestamptz,
+  published_at   timestamptz,
+  fb_post_id     text,
+  ig_post_id     text,
+  publish_error  text,
+  notes          text,
+  created_at     timestamptz not null default now()
+);
+```
+Index: `content_queue_status_scheduled_idx` on `(status, scheduled_for)`.
+RLS: `authenticated`-only for the dashboard (same pattern as `business_expenses`) — **but the publishing cron job is not an authenticated user**, so `api/publish-scheduled-content.js` uses the Supabase **service_role key** (bypasses RLS) instead, via raw REST calls, never via the dashboard's session.
+
+The same migration file also creates a public Supabase Storage bucket `content-media` (for future generated/uploaded media) — not needed for the pilot batch, which reuses images already publicly served from `assets/gallery/` on the live site.
+
+**⚠️ Two migrations have not been run yet**: `supabase-content-queue.sql` (schema), then `supabase-content-queue-pilot-seed.sql` (7 real pilot posts, see §7) — run both, in that order, in the Supabase SQL Editor.
+
 ## 3. Key Features (active)
 
 Dashboard tabs (`admin.html`, sidebar `data-view` → `#view-*`):
@@ -90,6 +124,13 @@ All the expenses JS lives in one `var loadExpenses = (function () { ... return f
    - A unified, chronologically-sorted table of the last ~10 posts from **both** platforms (platform badge, date, clickable caption snippet linking to the live post, likes, comments, shares — Instagram has no "shares" concept so that column shows "—" for IG rows).
    - "🔄 רענון נתונים" button re-fetches on demand; the tab also lazy-loads once on first open (same `loadX = (function(){... return function loadX(){ if(loaded) return; ...} })()` pattern as every other tab, except the refresh button bypasses the `loaded` guard deliberately so manual refresh always works).
    - **Unlike every other tab, this one does NOT call Supabase or the Meta Graph API directly from the browser** — it calls `fetch("/api/social-snapshot")`, a new Vercel serverless function. See §6 for exactly why, and for the required production setup step that is **not yet done**.
+
+7. **`content`** (🗂️ ניהול תוכן) — **NEW, this session — approval workflow only, see §7 for the full pipeline:**
+   - Card-grid layout (not a table — content needs visual preview), one card per queued post: thumbnail, status badge (color-coded), platform badge, scheduled date/time, truncated caption, and status-appropriate actions.
+   - Filters: status + platform dropdowns, same toolbar pattern as other tabs.
+   - **"👁 תצוגה"** opens a preview/edit modal (`#cqModal`) — full-size image, editable caption + date/time, with three actions: **"💾 שמירת שינויים"** (save edits, stay pending), **"✅ אשר ותזמן"** (save edits + approve in one step), **"✋ דחה"** (reject).
+   - Card-level quick actions: **"✅ אשר"** / **"✋ דחה"** on `pending_approval`/`failed` cards; **"✋ ביטול אישור"** on `approved` cards (cancel before the cron publishes it); `published`/`rejected` cards only get the preview button.
+   - **Approving only sets `status = 'approved'` in Supabase — it never calls Meta.** The actual publish happens later, server-side, when `api/publish-scheduled-content.js` runs on its cron schedule and finds the row's `scheduled_for` has arrived. This is the one hard rule of the whole feature: **nothing publishes without this explicit approval step.**
 
 ## 4. Asset References
 
@@ -145,8 +186,42 @@ Ori asked for a verified connection to the Mr. Polish Facebook Page, followed by
 
 **Audit findings (2026-07-11, worth knowing before recommending content changes):** Facebook has 309 followers but essentially flat engagement — 16 likes, **0 comments**, 1 share across the last 15 posts (2026-06-28 to 07-03, ~2.5 posts/day). Instagram has only 9 followers but punched above its weight — 26 likes + 1 comment across 13 posts, meaning most of that engagement came from non-followers via Explore/Reels discovery, not the tiny follower base itself. Two "blog teaser" screenshot-style posts got 0 likes each vs. native video Reels performing consistently better. `rating_count: 0` on the Facebook Page (no live Facebook recommendations yet, unlike the Google-reviews pipeline already built into the site).
 
+**✅ Resolved:** `META_PAGE_ACCESS_TOKEN` / `META_PAGE_ID` / `META_IG_USER_ID` are confirmed set correctly in Vercel's Project Settings and working in production — verified by curling the live `https://mr-polishes.com/api/social-snapshot` endpoint directly and getting real follower counts back with no errors.
+
+## 7. Content Automation Pipeline — NEW, this session
+
+Ori asked for a full "Content Automation Agent" (generate a month of content, approval workflow, scheduled auto-publish). Scoped down deliberately, by his own call, to: build the infrastructure now, pilot with a 1-week / 7-piece batch using only real existing photos, and hold off on any AI-generated content until the pipeline is proven end-to-end.
+
+**Architecture:**
+- `content_queue` table (§2) holds every piece: caption, media_url, platform, scheduled_for, status.
+- Dashboard's "ניהול תוכן" tab (§3, item 7) is **approval-only** — Ori reviews/edits/approves/rejects; it never calls Meta directly.
+- `api/publish-scheduled-content.js`, triggered by Vercel Cron (`vercel.json`), is the **only** thing that ever calls Meta to publish. It:
+  1. Verifies the request via `CRON_SECRET` (Vercel automatically sends `Authorization: Bearer {CRON_SECRET}` for configured cron jobs — anyone else hitting the URL gets 401).
+  2. Queries Supabase (via the **service_role key**, raw REST calls — no supabase-js, same no-dependency approach as `main.js`) for rows where `status = 'approved' AND scheduled_for <= now()`.
+  3. Publishes each due row to Facebook and/or Instagram per its `platform` field, using the media-type logic below.
+  4. Writes back `status = 'published'` + `fb_post_id`/`ig_post_id`/`published_at`, or `status = 'failed'` + `publish_error` — nothing disappears silently; failed rows are retryable from the dashboard.
+
+**Publishing logic by media type** (exact endpoints are commented in the file header of `api/publish-scheduled-content.js`):
+- **Image**: Facebook `POST /{page-id}/photos` with `url` + `caption`. Instagram is always a 2-step dance regardless of type: `POST /{ig-id}/media` (create a container) → poll `status_code` → `POST /{ig-id}/media_publish`.
+- **Video/Reel**: Facebook `POST /{page-id}/videos` with `file_url` (a *simple* video post — true Reels-placement needs a more complex resumable-upload flow, not implemented). Instagram: same 2-step dance with `media_type=REELS` + `video_url`.
+- **Story**: Instagram-only in v1 (`media_type=STORIES`) — Facebook Page Stories via API are unreliably documented for most apps, scoped out for now.
+- **⚠️ Known scope limit:** the Instagram polling loop only waits ~10s (5×2s) before giving up — fine for images (this pilot's only media type), but video/Reel processing on Instagram can take much longer than one function invocation should reasonably block for. Before any video/Reel content goes through this pipeline, it needs a two-phase redesign (create the container on one cron tick, check-and-publish on a later tick) instead of the current synchronous poll-and-publish.
+- **Instagram has no native "scheduled publish"** — every IG call publishes immediately. So the cron itself is the *only* scheduler for both platforms (checks `scheduled_for <= now()`, publishes right then) rather than relying on Facebook's separate native scheduling mechanism — keeps both platforms' behavior consistent instead of split across two different systems.
+
+**New env vars this feature needs** (add to Vercel Project Settings; `SUPABASE_SERVICE_ROLE_KEY` should also go in the local `.env` if testing the publish function locally):
+- `SUPABASE_SERVICE_ROLE_KEY` — from Supabase Dashboard → Project Settings → API → `service_role` key. **Bypasses every RLS policy in the database** — treat it with at least as much care as the Meta token; Vercel env var only, never client-side, never committed.
+- `CRON_SECRET` — any random string (e.g. generate via `openssl rand -hex 32`); set the same value in Vercel. Vercel sends it automatically as a bearer token when triggering the cron job.
+- Reuses `META_PAGE_ACCESS_TOKEN` / `META_PAGE_ID` / `META_IG_USER_ID` already configured for `api/social-snapshot.js`.
+
+**Cron schedule (`vercel.json`):** currently `"0 15 * * *"` (15:00 UTC daily = 18:00 Israel time) — chosen to land on the pilot batch's exact posting time. **This is a coarse, Hobby-plan-safe default**; Vercel Hobby cron jobs are limited to once/day and may not fire at the exact minute. If the account is on a Pro plan, tighten this to every 5–15 minutes for real scheduling precision across arbitrary times of day (one-line change in `vercel.json`).
+
+**The 1-week pilot batch** (`supabase-content-queue-pilot-seed.sql`, 7 rows, all `status = 'pending_approval'`): all real photos from `assets/gallery/`, referenced by their already-public site URLs (`https://mr-polishes.com/assets/gallery/...`) — no Supabase Storage upload needed for this batch. One post/day, 2026-07-12 through 2026-07-18, 15:00 UTC, covering all 5 real projects plus one educational "weekly tip" post, in native Hebrew matching the brand voice already observed in Ori's real published posts (hook line → problem → result → CTA with mr-polishes.com). **Double-check none of these dates land on Shabbat before approving** — nudge via the "עריכה" preview/edit action in the tab if so.
+
+**Explicitly NOT built yet, per Ori's own scoping decision:** any AI/generative content creation (Higgsfield or otherwise). The plan is to prove the whole pipeline end-to-end on this real-photo pilot first, then decide separately whether/how much AI-generated video enters future weeks.
+
 ### Outstanding follow-ups
-- **Run `supabase-business-expenses.sql`** in the Supabase SQL Editor — the expenses tab UI is complete but the table doesn't exist in the live database yet.
-- **Add `META_PAGE_ACCESS_TOKEN`, `META_PAGE_ID`, and `META_IG_USER_ID` to Vercel's Project Settings → Environment Variables** (project `mrpolish-project`) — `api/social-snapshot.js` will 500 in production without these; they currently only exist in the local, gitignored `.env`.
-- The Meta tokens in `.env` are not confirmed long-lived — if the Social tab starts failing with an auth error, regenerate a User token via Graph API Explorer (with the app's "Manage everything on your Page" use case already configured) and rerun `node tools/fetch-page-access-token.js`.
+- **Run 4 SQL files, in this order**, in the Supabase SQL Editor (none have been run yet as of this writing): `supabase-business-expenses.sql` → `supabase-content-queue.sql` → `supabase-content-queue-pilot-seed.sql`. (`supabase-reviews.sql` was already run in an earlier session.)
+- **Add `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` to Vercel's Project Settings → Environment Variables** (project `mrpolish-project`) — `api/publish-scheduled-content.js` will fail without these.
+- **Go review the 7 pilot posts in the "ניהול תוכן" tab and approve/reject each one** — nothing publishes until you do this explicitly, by design.
+- The Meta tokens in `.env`/Vercel are not confirmed long-lived — if any Meta-dependent tab starts failing with an auth error, regenerate a User token via Graph API Explorer (with the app's "Manage everything on your Page" use case already configured) and rerun `node tools/fetch-page-access-token.js`.
 - Per `CLAUDE.md` rule #5: commit and push this milestone to GitHub to update the live Vercel deployment once verified.

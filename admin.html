@@ -305,6 +305,61 @@
     }
     @keyframes expToastIn { from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:none;} }
 
+    /* ===== Tab 7: Content Management ===== */
+    .cq-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-block-end:16px; }
+    .cq-filters { display:flex; gap:10px; flex-wrap:wrap; }
+    .cq-filters select {
+      font-family:var(--font-base); font-size:.9rem;
+      padding:10px 12px; border:1.5px solid var(--marble-200); border-radius:var(--radius);
+      background:var(--marble-50); color:var(--char-900);
+    }
+    .cq-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:18px; }
+    .cq-empty { grid-column:1/-1; text-align:center; color:var(--ink-500); padding:40px 14px; font-weight:600; background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); }
+    .cq-card { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-sm); display:flex; flex-direction:column; transition:transform .2s, box-shadow .2s; }
+    .cq-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); }
+    .cq-card-media { position:relative; aspect-ratio:4/3; background:var(--marble-100); overflow:hidden; }
+    .cq-card-media img { width:100%; height:100%; object-fit:cover; display:block; }
+    .cq-badge { position:absolute; inset-block-start:10px; inset-inline-end:10px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:700; color:var(--white); }
+    .cq-badge.st-pending_approval { background:oklch(0.72 0.14 70); }
+    .cq-badge.st-approved { background:oklch(0.6 0.14 150); }
+    .cq-badge.st-published { background:oklch(0.5 0.12 250); }
+    .cq-badge.st-failed { background:oklch(0.55 0.18 25); }
+    .cq-badge.st-rejected { background:var(--ink-500); }
+    .cq-card-body { padding:16px; display:flex; flex-direction:column; gap:10px; flex:1; }
+    .cq-card-meta { display:flex; justify-content:space-between; align-items:center; font-size:.8rem; color:var(--ink-500); }
+    .cq-caption {
+      font-size:.9rem; color:var(--ink-700); line-height:1.6; flex:1;
+      display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .cq-card-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .cq-error { font-size:.78rem; color:oklch(0.55 0.18 25); background:oklch(0.55 0.18 25 / 0.08); border-radius:8px; padding:8px 10px; }
+
+    /* Preview/edit modal */
+    .cq-modal { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; }
+    .cq-modal[hidden] { display:none; }
+    .cq-modal__overlay { position:absolute; inset:0; background:oklch(0.15 0.02 264 / 0.6); backdrop-filter:blur(3px); }
+    .cq-modal__dialog {
+      position:relative; width:min(560px,100%); max-height:calc(100dvh - 40px); overflow-y:auto;
+      background:var(--white); color:var(--ink-900); border-radius:var(--radius-lg);
+      box-shadow:var(--shadow-lg, 0 30px 80px rgba(0,0,0,.35)); padding:clamp(24px,5vw,32px);
+    }
+    .cq-modal__close {
+      position:absolute; inset-block-start:12px; inset-inline-end:14px; background:transparent; border:0;
+      font-size:1.9rem; line-height:1; color:var(--ink-700); cursor:pointer; padding:4px 8px; border-radius:8px;
+    }
+    .cq-modal__close:hover { color:var(--ink-900); background:var(--marble-100); }
+    .cq-modal__title { font-size:1.2rem; color:var(--char-900); margin-block-end:14px; }
+    .cq-modal__media { width:100%; border-radius:12px; margin-block-end:16px; max-height:340px; object-fit:cover; }
+    .cq-modal-field { margin-block-end:14px; }
+    .cq-modal-field label { display:block; font-size:.85rem; font-weight:700; color:var(--char-800); margin-block-end:6px; }
+    .cq-modal-field textarea, .cq-modal-field input {
+      width:100%; font-family:var(--font-base); font-size:.95rem; padding:11px 13px;
+      border:1.5px solid var(--marble-200); border-radius:var(--radius); background:var(--marble-50); color:var(--char-900);
+    }
+    .cq-modal-field textarea { min-height:140px; resize:vertical; line-height:1.6; }
+    .cq-modal-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .cq-modal-actions { display:flex; gap:10px; flex-wrap:wrap; margin-block-start:6px; }
+
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
@@ -338,6 +393,7 @@
         <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
         <button data-view="expenses"><span class="ic" aria-hidden="true">💰</span> הוצאות עסק</button>
         <button data-view="social"><span class="ic" aria-hidden="true">📱</span> רשתות חברתיות</button>
+        <button data-view="content"><span class="ic" aria-hidden="true">🗂️</span> ניהול תוכן</button>
       </nav>
       <button class="admin-logout" id="logoutBtn">התנתקות</button>
     </aside>
@@ -570,8 +626,65 @@
             </div>
           </div>
         </section>
+
+        <!-- Tab 7: Content Management -->
+        <section class="admin-view" id="view-content">
+          <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p></div>
+
+          <div class="cq-toolbar">
+            <div class="cq-filters">
+              <select id="cqFilterStatus">
+                <option value="">כל הסטטוסים</option>
+                <option value="pending_approval">ממתין לאישור</option>
+                <option value="approved">מאושר</option>
+                <option value="published">פורסם</option>
+                <option value="failed">נכשל</option>
+                <option value="rejected">נדחה</option>
+              </select>
+              <select id="cqFilterPlatform">
+                <option value="">כל הפלטפורמות</option>
+                <option value="facebook">פייסבוק</option>
+                <option value="instagram">אינסטגרם</option>
+                <option value="both">שתיהן</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="cq-grid" id="cqGrid">
+            <div class="cq-empty">טוען תוכן…</div>
+          </div>
+        </section>
       </div>
     </main>
+  </div>
+
+  <!-- Content preview/edit modal -->
+  <div class="cq-modal" id="cqModal" hidden>
+    <div class="cq-modal__overlay" data-cq-close></div>
+    <div class="cq-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="cqModalTitle">
+      <button type="button" class="cq-modal__close" data-cq-close aria-label="סגירה">&times;</button>
+      <h3 class="cq-modal__title" id="cqModalTitle">תצוגה מקדימה</h3>
+      <img class="cq-modal__media" id="cqModalImg" src="" alt="" />
+      <div class="cq-modal-field">
+        <label for="cqModalCaption">כיתוב</label>
+        <textarea id="cqModalCaption"></textarea>
+      </div>
+      <div class="cq-modal-row">
+        <div class="cq-modal-field">
+          <label for="cqModalDate">תאריך פרסום</label>
+          <input type="date" id="cqModalDate" />
+        </div>
+        <div class="cq-modal-field">
+          <label for="cqModalTime">שעה</label>
+          <input type="time" id="cqModalTime" />
+        </div>
+      </div>
+      <div class="cq-modal-actions">
+        <button class="btn btn-navy btn-sm" id="cqModalSave">💾 שמירת שינויים</button>
+        <button class="btn btn-shimmer btn-sm" id="cqModalApprove">✅ אשר ותזמן</button>
+        <button class="btn btn-navy btn-sm" id="cqModalReject">✋ דחה</button>
+      </div>
+    </div>
   </div>
 
   <!-- Add-expense modal -->
@@ -630,7 +743,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה", expenses: "הוצאות עסק", social: "רשתות חברתיות" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה", expenses: "הוצאות עסק", social: "רשתות חברתיות", content: "ניהול תוכן" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -641,6 +754,7 @@
         if (v === "leads") loadLeads(); // lazy-load on first open
         if (v === "expenses") loadExpenses(); // lazy-load on first open
         if (v === "social") loadSocial(); // lazy-load on first open
+        if (v === "content") loadContentQueue(); // lazy-load on first open
       });
 
       /* ---------- Logout ---------- */
@@ -1547,6 +1661,196 @@
           if (loaded) return;
           loaded = true;
           fetchAndRender();
+        };
+      })();
+
+      /* ---------- Tab 7: Content Management ----------
+         Approval workflow only: this tab never calls Meta directly.
+         Approving a row just sets status = "approved" in Supabase; the
+         actual publish happens server-side, on schedule, in
+         api/publish-scheduled-content.js (a Vercel cron job). */
+      var loadContentQueue = (function () {
+        var grid = document.getElementById("cqGrid");
+        var filterStatus = document.getElementById("cqFilterStatus");
+        var filterPlatform = document.getElementById("cqFilterPlatform");
+        var modal = document.getElementById("cqModal");
+        var modalImg = document.getElementById("cqModalImg");
+        var modalCaption = document.getElementById("cqModalCaption");
+        var modalDate = document.getElementById("cqModalDate");
+        var modalTime = document.getElementById("cqModalTime");
+        var modalSaveBtn = document.getElementById("cqModalSave");
+        var modalApproveBtn = document.getElementById("cqModalApprove");
+        var modalRejectBtn = document.getElementById("cqModalReject");
+
+        var allContent = [];
+        var loaded = false;
+        var activeId = null;
+
+        var STATUS_LABELS = {
+          pending_approval: "ממתין לאישור", approved: "מאושר",
+          published: "פורסם", failed: "נכשל", rejected: "נדחה"
+        };
+        var PLATFORM_LABELS = { facebook: "📘 פייסבוק", instagram: "📸 אינסטגרם", both: "📘📸 שתיהן" };
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+        function fmtDateTime(iso) {
+          var d = new Date(iso);
+          if (isNaN(d)) return "";
+          var p = function (n) { return (n < 10 ? "0" : "") + n; };
+          return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear() + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+        }
+
+        function currentRows() {
+          var st = filterStatus.value, pl = filterPlatform.value;
+          return allContent.filter(function (r) {
+            if (st && r.status !== st) return false;
+            if (pl && r.platform !== pl) return false;
+            return true;
+          });
+        }
+        function findById(id) {
+          for (var i = 0; i < allContent.length; i++) if (allContent[i].id === id) return allContent[i];
+          return null;
+        }
+
+        function render() {
+          var rows = currentRows();
+          if (!rows.length) {
+            grid.innerHTML = '<div class="cq-empty">' + (allContent.length ? "אין תוכן התואם את הסינון." : "אין עדיין תוכן בתור.") + "</div>";
+            return;
+          }
+          grid.innerHTML = rows.map(function (r) {
+            var errorHtml = r.publish_error ? '<div class="cq-error">⚠️ ' + esc(r.publish_error) + "</div>" : "";
+            var actionsHtml = "";
+            if (r.status === "pending_approval" || r.status === "failed") {
+              actionsHtml =
+                '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>' +
+                '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ דחה</button>';
+            } else if (r.status === "approved") {
+              actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
+            }
+            return '<article class="cq-card" data-id="' + esc(r.id) + '">' +
+              '<div class="cq-card-media">' +
+                '<img src="' + esc(r.thumbnail_url || r.media_url) + '" alt="" loading="lazy" />' +
+                '<span class="cq-badge st-' + esc(r.status) + '">' + esc(STATUS_LABELS[r.status] || r.status) + "</span>" +
+              "</div>" +
+              '<div class="cq-card-body">' +
+                '<div class="cq-card-meta"><span>' + (PLATFORM_LABELS[r.platform] || r.platform) + "</span><span>" + esc(fmtDateTime(r.scheduled_for)) + "</span></div>" +
+                '<p class="cq-caption">' + esc(r.caption) + "</p>" +
+                errorHtml +
+                '<div class="cq-card-actions">' +
+                  '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 תצוגה</button>' +
+                  actionsHtml +
+                "</div>" +
+              "</div>" +
+            "</article>";
+          }).join("");
+        }
+
+        [filterStatus, filterPlatform].forEach(function (el) { el.addEventListener("change", render); });
+
+        function updateRow(id, patch) {
+          return sb.from("content_queue").update(patch).eq("id", id).select().then(function (res) {
+            if (res.error || !res.data || !res.data[0]) {
+              alert("שגיאה בעדכון התוכן. נסו שוב.");
+              return null;
+            }
+            var updated = res.data[0];
+            allContent = allContent.map(function (r) { return r.id === id ? updated : r; });
+            render();
+            return updated;
+          });
+        }
+
+        function approve(id) { updateRow(id, { status: "approved", approved_at: new Date().toISOString() }); }
+        function reject(id) {
+          if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
+          updateRow(id, { status: "rejected" });
+        }
+
+        grid.addEventListener("click", function (e) {
+          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview]");
+          if (!btn) return;
+          if (btn.hasAttribute("data-cq-approve")) approve(btn.getAttribute("data-cq-approve"));
+          else if (btn.hasAttribute("data-cq-reject")) reject(btn.getAttribute("data-cq-reject"));
+          else openPreview(btn.getAttribute("data-cq-preview"));
+        });
+
+        /* ---------- Preview/edit modal ---------- */
+        var lastFocused = null;
+        function openPreview(id) {
+          var row = findById(id);
+          if (!row) return;
+          activeId = id;
+          lastFocused = document.activeElement;
+          modalImg.src = row.media_url;
+          modalCaption.value = row.caption;
+          var d = new Date(row.scheduled_for);
+          var p = function (n) { return (n < 10 ? "0" : "") + n; };
+          modalDate.value = d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+          modalTime.value = p(d.getHours()) + ":" + p(d.getMinutes());
+          modal.hidden = false;
+          document.body.style.overflow = "hidden";
+        }
+        function closeModal() {
+          modal.hidden = true;
+          document.body.style.overflow = "";
+          activeId = null;
+          if (lastFocused) lastFocused.focus();
+        }
+        Array.prototype.forEach.call(modal.querySelectorAll("[data-cq-close]"), function (el) {
+          el.addEventListener("click", closeModal);
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && !modal.hidden) closeModal();
+        });
+
+        function scheduledFromModal() {
+          if (!modalDate.value || !modalTime.value) return null;
+          var d = new Date(modalDate.value + "T" + modalTime.value + ":00");
+          return isNaN(d) ? null : d.toISOString();
+        }
+
+        modalSaveBtn.addEventListener("click", function () {
+          if (!activeId) return;
+          var scheduled = scheduledFromModal();
+          if (!scheduled) { alert("תאריך/שעה לא תקינים."); return; }
+          updateRow(activeId, { caption: modalCaption.value, scheduled_for: scheduled }).then(function () { closeModal(); });
+        });
+        modalApproveBtn.addEventListener("click", function () {
+          if (!activeId) return;
+          var scheduled = scheduledFromModal();
+          if (!scheduled) { alert("תאריך/שעה לא תקינים."); return; }
+          updateRow(activeId, {
+            caption: modalCaption.value, scheduled_for: scheduled,
+            status: "approved", approved_at: new Date().toISOString()
+          }).then(function () { closeModal(); });
+        });
+        modalRejectBtn.addEventListener("click", function () {
+          if (!activeId) return;
+          if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
+          updateRow(activeId, { status: "rejected" }).then(function () { closeModal(); });
+        });
+
+        return function loadContentQueue() {
+          if (loaded) return;
+          loaded = true;
+          sb.from("content_queue")
+            .select("*")
+            .order("scheduled_for", { ascending: true })
+            .then(function (res) {
+              if (res.error) {
+                loaded = false;
+                grid.innerHTML = '<div class="cq-empty">שגיאה בטעינת התוכן. נסו לרענן.</div>';
+                return;
+              }
+              allContent = res.data || [];
+              render();
+            });
         };
       })();
     })();
