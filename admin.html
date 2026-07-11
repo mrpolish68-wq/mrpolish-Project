@@ -337,6 +337,7 @@
         <button data-view="calendar"><span class="ic" aria-hidden="true">📅</span> יומן פגישות</button>
         <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
         <button data-view="expenses"><span class="ic" aria-hidden="true">💰</span> הוצאות עסק</button>
+        <button data-view="social"><span class="ic" aria-hidden="true">📱</span> רשתות חברתיות</button>
       </nav>
       <button class="admin-logout" id="logoutBtn">התנתקות</button>
     </aside>
@@ -525,6 +526,50 @@
             </div>
           </div>
         </section>
+
+        <!-- Tab 6: Social Snapshot (Facebook + Instagram) -->
+        <section class="admin-view" id="view-social">
+          <div class="view-head"><h2>רשתות חברתיות</h2><p>סקירת ביצועים אחרונים בעמוד הפייסבוק ובאינסטגרם.</p></div>
+
+          <div class="metric-grid">
+            <div class="metric">
+              <div class="ic">📘</div>
+              <div class="num" id="socialFbFollowers">—</div>
+              <div class="lbl">עוקבים בפייסבוק</div>
+            </div>
+            <div class="metric">
+              <div class="ic">📸</div>
+              <div class="num" id="socialIgFollowers">—</div>
+              <div class="lbl">עוקבים באינסטגרם</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="exp-toolbar">
+              <div class="exp-filters"></div>
+              <div class="exp-actions">
+                <button class="btn btn-navy btn-sm" id="socialRefreshBtn">🔄 רענון נתונים</button>
+              </div>
+            </div>
+            <div class="leads-table-wrap">
+              <table class="leads-table exp-table">
+                <thead>
+                  <tr>
+                    <th>פלטפורמה</th>
+                    <th>תאריך</th>
+                    <th>תוכן</th>
+                    <th>לייקים</th>
+                    <th>תגובות</th>
+                    <th>שיתופים</th>
+                  </tr>
+                </thead>
+                <tbody id="socialBody">
+                  <tr><td colspan="6" class="leads-empty">טוען נתונים…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -585,7 +630,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה", expenses: "הוצאות עסק" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה", expenses: "הוצאות עסק", social: "רשתות חברתיות" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -595,6 +640,7 @@
         document.getElementById("topTitle").textContent = titles[v];
         if (v === "leads") loadLeads(); // lazy-load on first open
         if (v === "expenses") loadExpenses(); // lazy-load on first open
+        if (v === "social") loadSocial(); // lazy-load on first open
       });
 
       /* ---------- Logout ---------- */
@@ -1420,6 +1466,87 @@
               allExpenses = res.data || [];
               renderAll();
             });
+        };
+      })();
+
+      /* ---------- Tab 6: Social Snapshot (Facebook + Instagram) ----------
+         Reads from /api/social-snapshot (a Vercel serverless function),
+         never calls the Meta Graph API directly from the browser — the
+         Page/Instagram access token is a real credential and must stay
+         server-side (see api/social-snapshot.js for why). */
+      var loadSocial = (function () {
+        var body = document.getElementById("socialBody");
+        var fbFollowersEl = document.getElementById("socialFbFollowers");
+        var igFollowersEl = document.getElementById("socialIgFollowers");
+        var refreshBtn = document.getElementById("socialRefreshBtn");
+        var loaded = false;
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+        function fmtDateTime(iso) {
+          var d = new Date(iso);
+          if (isNaN(d)) return "";
+          var p = function (n) { return (n < 10 ? "0" : "") + n; };
+          return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear();
+        }
+        function snippet(text) {
+          var t = String(text || "").replace(/\s+/g, " ").trim();
+          return t.length > 90 ? t.slice(0, 90) + "…" : t;
+        }
+
+        function render(data) {
+          fbFollowersEl.textContent = (data.facebook && data.facebook.followers != null)
+            ? data.facebook.followers.toLocaleString("he-IL") : "—";
+          igFollowersEl.textContent = (data.instagram && data.instagram.followers != null)
+            ? data.instagram.followers.toLocaleString("he-IL") : "—";
+
+          var rows = data.posts || [];
+          if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="6" class="leads-empty">אין עדיין פוסטים להצגה.</td></tr>';
+            return;
+          }
+          body.innerHTML = rows.map(function (r) {
+            var badge = r.platform === "instagram" ? "📸 אינסטגרם" : "📘 פייסבוק";
+            var text = snippet(r.text);
+            var content = r.permalink
+              ? '<a href="' + esc(r.permalink) + '" target="_blank" rel="noopener">' + (text ? esc(text) : "צפייה בפוסט") + "</a>"
+              : (text ? esc(text) : '<span class="leads-muted">—</span>');
+            return "<tr>" +
+              "<td>" + badge + "</td>" +
+              "<td>" + esc(fmtDateTime(r.date)) + "</td>" +
+              '<td class="col-desc">' + content + "</td>" +
+              '<td class="col-amount">' + (r.likes || 0) + "</td>" +
+              '<td class="col-amount">' + (r.comments || 0) + "</td>" +
+              '<td class="col-amount">' + (r.shares == null ? '<span class="leads-muted">—</span>' : r.shares) + "</td>" +
+              "</tr>";
+          }).join("");
+        }
+
+        function fetchAndRender() {
+          body.innerHTML = '<tr><td colspan="6" class="leads-empty">טוען נתונים…</td></tr>';
+          fetch("/api/social-snapshot")
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+              if (data.error) {
+                body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה: ' + esc(data.error) + "</td></tr>";
+                return;
+              }
+              render(data);
+            })
+            .catch(function () {
+              body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה בטעינת הנתונים. נסו לרענן.</td></tr>';
+            });
+        }
+
+        refreshBtn.addEventListener("click", fetchAndRender);
+
+        return function loadSocial() {
+          if (loaded) return;
+          loaded = true;
+          fetchAndRender();
         };
       })();
     })();
