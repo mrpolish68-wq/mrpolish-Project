@@ -91,6 +91,23 @@ create table public.content_queue (
 Index: `content_queue_status_scheduled_idx` on `(status, scheduled_for)`.
 RLS: `authenticated`-only for the dashboard (same pattern as `business_expenses`) — **but the publishing cron job is not an authenticated user**, so `api/publish-scheduled-content.js` uses the Supabase **service_role key** (bypasses RLS) instead, via raw REST calls, never via the dashboard's session.
 
+**Upgrade (file: `supabase-content-queue-upgrade.sql`, run after the two files above) — adds categorization + stored AI analysis:**
+```sql
+create type public.content_category as enum ('ad', 'post', 'reel', 'story');
+
+alter table public.content_queue
+  add column if not exists content_category public.content_category not null default 'post',
+  add column if not exists ai_reach_forecast text,
+  add column if not exists ai_why_it_works text,
+  add column if not exists ai_brand_contribution text,
+  add column if not exists ai_generated_at timestamptz;
+```
+`content_category` is a **separate dimension from `media_type`**: `media_type` (image/video/reel/story) drives the *technical* publish path in `api/publish-scheduled-content.js` (which Graph API call gets made); `content_category` (ad/post/reel/story) is the *marketing* classification the dashboard filters by — e.g. a video Reel could be `category='reel'` (organic) or `category='ad'` (a candidate to boost manually later) independent of its technical format. **`content_category='ad'` is currently just an internal planning label — no Meta Marketing API (real paid ads/campaigns/billing) is wired up.** That would be a separate, materially larger integration if ever wanted.
+
+The `ai_*` columns hold a **one-time, authored-at-content-creation-time** analysis (not a live per-view AI call) — populated by hand (same care as the pilot captions: grounded in the real audit numbers, not invented figures) when content is queued, then just displayed read-only in the preview modal. **Not yet populated for the pilot batch, and the modal doesn't render them yet** — both are follow-up work once this schema lands.
+
+**⚠️ Not run yet** — same as the other two `content_queue` files, execute this in the Supabase SQL Editor.
+
 The same migration file also creates a public Supabase Storage bucket `content-media` (for future generated/uploaded media) — not needed for the pilot batch, which reuses images already publicly served from `assets/gallery/` on the live site.
 
 **⚠️ Two migrations have not been run yet**: `supabase-content-queue.sql` (schema), then `supabase-content-queue-pilot-seed.sql` (7 real pilot posts, see §7) — run both, in that order, in the Supabase SQL Editor.
@@ -100,9 +117,8 @@ The same migration file also creates a public Supabase Storage bucket `content-m
 Dashboard tabs (`admin.html`, sidebar `data-view` → `#view-*`):
 1. **`dash`** (📊 לוח בקרה ופעילות) — live metric cards (visits, leads, form submissions, WhatsApp clicks) + recent activity feed, from `site_stats` + `leads`.
 2. **`leads`** (📋 ניהול לידים) — full searchable/sortable leads table (client-side filter/sort over a one-time fetch).
-3. **`calendar`** (📅 יומן פגישות) — month calendar, notes in **`localStorage`** (`mrp_cal_notes`), not Supabase.
-4. **`ai`** (🧾 הזמנות עבודה) — work-order form + price calculator → **PDF** via `html2canvas` + `jsPDF` (off-screen iframe render, hex-only CSS because html2canvas 1.4.1 can't handle `oklch()`).
-5. **`expenses`** (💰 הוצאות עסק) — **NEW, this session:**
+3. **`ai`** (🧾 הזמנות עבודה) — work-order form + price calculator → **PDF** via `html2canvas` + `jsPDF` (off-screen iframe render, hex-only CSS because html2canvas 1.4.1 can't handle `oklch()`).
+4. **`expenses`** (💰 הוצאות עסק) — **NEW, this session:**
    - Summary card: total of all expenses dated `>= 2026-03-01` (the `EXPENSES_SINCE` constant in the JS — change this one line if the tracking start date needs to move).
    - Filterable table: category dropdown + from/to date range, client-side filtering over a one-time fetch (same pattern as the leads tab).
    - "➕ הוספת הוצאה" button opens a modal (`#expModal`) — date, category (4-option enum dropdown), amount, optional description → `INSERT` into `business_expenses`.
@@ -119,18 +135,23 @@ Dashboard tabs (`admin.html`, sidebar `data-view` → `#view-*`):
 
 All the expenses JS lives in one `var loadExpenses = (function () { ... return function loadExpenses() {...}; })();` block near the end of `admin.html`'s `<script>`, mirroring the existing `loadLeads` pattern exactly (lazy-loaded on first tab click, fetch-once, client-side filter/render).
 
-6. **`social`** (📱 רשתות חברתיות) — **NEW, this session:**
+5. **`social`** (📱 רשתות חברתיות) — **NEW, this session:**
    - Two summary cards: live Facebook Page follower count and Instagram follower count.
    - A unified, chronologically-sorted table of the last ~10 posts from **both** platforms (platform badge, date, clickable caption snippet linking to the live post, likes, comments, shares — Instagram has no "shares" concept so that column shows "—" for IG rows).
    - "🔄 רענון נתונים" button re-fetches on demand; the tab also lazy-loads once on first open (same `loadX = (function(){... return function loadX(){ if(loaded) return; ...} })()` pattern as every other tab, except the refresh button bypasses the `loaded` guard deliberately so manual refresh always works).
    - **Unlike every other tab, this one does NOT call Supabase or the Meta Graph API directly from the browser** — it calls `fetch("/api/social-snapshot")`, a new Vercel serverless function. See §6 for exactly why, and for the required production setup step that is **not yet done**.
 
-7. **`content`** (🗂️ ניהול תוכן) — **NEW, this session — approval workflow only, see §7 for the full pipeline:**
+6. **`content`** (🗂️ ניהול תוכן) — approval workflow only, see §7 for the full pipeline:
    - Card-grid layout (not a table — content needs visual preview), one card per queued post: thumbnail, status badge (color-coded), platform badge, scheduled date/time, truncated caption, and status-appropriate actions.
    - Filters: status + platform dropdowns, same toolbar pattern as other tabs.
    - **"👁 תצוגה"** opens a preview/edit modal (`#cqModal`) — full-size image, editable caption + date/time, with three actions: **"💾 שמירת שינויים"** (save edits, stay pending), **"✅ אשר ותזמן"** (save edits + approve in one step), **"✋ דחה"** (reject).
    - Card-level quick actions: **"✅ אשר"** / **"✋ דחה"** on `pending_approval`/`failed` cards; **"✋ ביטול אישור"** on `approved` cards (cancel before the cron publishes it); `published`/`rejected` cards only get the preview button.
    - **Approving only sets `status = 'approved'` in Supabase — it never calls Meta.** The actual publish happens later, server-side, when `api/publish-scheduled-content.js` runs on its cron schedule and finds the row's `scheduled_for` has arrived. This is the one hard rule of the whole feature: **nothing publishes without this explicit approval step.**
+
+7. **`content-calendar`** (🗓️ לוח תוכן) — **NEW, this session, replaces the old meetings calendar entirely** (the old `יומן פגישות` tab — month grid + `localStorage` notes, `mrp_cal_notes` — is **gone**, not kept alongside; Ori didn't need it and asked for a full repurpose). Grouped directly after "ניהול תוכן" in the sidebar — both nav buttons sit at the bottom of the list, adjacent, by design.
+   - Same month-grid component the old calendar used (`.cal`/`.cal-grid`/`.cal-day` CSS classes kept, rendering logic fully replaced) — prev/next month nav, but each day cell now shows a small colored dot per `content_queue` row scheduled that day (color matches the grid view's status badges; 5+ posts on one day show a `+N` overflow instead of more dots). A legend below the grid spells out what each color means.
+   - Clicking a day renders that day's post(s) below the grid (`#ccalDayDetail`), using the **exact same card markup and approve/reject/preview actions** as the grid view.
+   - **Shares one Supabase fetch with the `content` tab** — both are driven by the same `allContent` array inside a single enclosing IIFE that exposes two entry points, `loadContentQueue` and `loadContentCalendar` (see the code comment above that IIFE in `admin.html`). Whichever tab opens first fetches; the other reads the same in-memory data. Approving/rejecting from *either* view's UI updates both instantly (verified: approved a post from the calendar's day-detail panel, switched to the grid tab, saw the updated status with no refetch).
 
 ## 4. Asset References
 
@@ -180,7 +201,8 @@ Ori asked for a verified connection to the Mr. Polish Facebook Page, followed by
 
 **Tools (all in `tools/`, plain Node, no dependencies, run with `node tools/<file>.js`):**
 - `verify-facebook-token.js` — quick sanity check, prints the connected Page's name/ID (tries `META_ACCESS_TOKEN` + `META_PAGE_ID` first, falls back to the App-Token public-metadata path).
-- `fetch-page-access-token.js` — exchanges `META_ACCESS_TOKEN` for the real Page token via `/me/accounts`, writes it to `.env` as `META_PAGE_ACCESS_TOKEN`, **never prints the token value itself**.
+- `exchange-long-lived-token.js` — **run this first** on a fresh short-lived User token from Graph API Explorer: exchanges it for a ~60-day long-lived one via `/oauth/access_token?grant_type=fb_exchange_token`, writes it back to `.env` as `META_ACCESS_TOKEN`. Never prints the token value.
+- `fetch-page-access-token.js` — **run this second**, on the now-long-lived `META_ACCESS_TOKEN`: exchanges it for the real Page token via `/me/accounts`, writes it to `.env` as `META_PAGE_ACCESS_TOKEN`, **never prints the token value itself**. A Page token derived from a long-lived User token can come back non-expiring (`debug_token` shows `expires_at: 0`) — confirmed for the current production token.
 
 **`api/social-snapshot.js`** — the new Vercel serverless function. Reads `META_PAGE_ACCESS_TOKEN` / `META_PAGE_ID` / `META_IG_USER_ID` from `process.env` (Vercel's own env vars, NOT the local `.env` file — see the outstanding follow-up below), fetches the last ~10 Facebook posts + ~10 Instagram posts with engagement counts, merges and sorts them by date, and returns follower counts for both platforms. `admin.html`'s Social tab calls `fetch("/api/social-snapshot")` — it never touches the Meta token directly.
 
@@ -219,9 +241,12 @@ Ori asked for a full "Content Automation Agent" (generate a month of content, ap
 
 **Explicitly NOT built yet, per Ori's own scoping decision:** any AI/generative content creation (Higgsfield or otherwise). The plan is to prove the whole pipeline end-to-end on this real-photo pilot first, then decide separately whether/how much AI-generated video enters future weeks.
 
-### Outstanding follow-ups
-- **Run 4 SQL files, in this order**, in the Supabase SQL Editor (none have been run yet as of this writing): `supabase-business-expenses.sql` → `supabase-content-queue.sql` → `supabase-content-queue-pilot-seed.sql`. (`supabase-reviews.sql` was already run in an earlier session.)
-- **Add `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` to Vercel's Project Settings → Environment Variables** (project `mrpolish-project`) — `api/publish-scheduled-content.js` will fail without these.
-- **Go review the 7 pilot posts in the "ניהול תוכן" tab and approve/reject each one** — nothing publishes until you do this explicitly, by design.
-- The Meta tokens in `.env`/Vercel are not confirmed long-lived — if any Meta-dependent tab starts failing with an auth error, regenerate a User token via Graph API Explorer (with the app's "Manage everything on your Page" use case already configured) and rerun `node tools/fetch-page-access-token.js`.
+### Status as of 2026-07-11 (what's actually done vs. still open)
+**✅ Done:** `supabase-business-expenses.sql`, `supabase-content-queue.sql`, and `supabase-content-queue-pilot-seed.sql` have all been run by Ori. `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` are set in Vercel. The Meta token saga (see §6) resolved with a genuine long-lived, non-expiring **Page** token (`debug_token` confirmed `"type": "PAGE"`, `"expires_at": 0`) — both `META_ACCESS_TOKEN` (long-lived User token, exchanged via the new `tools/exchange-long-lived-token.js`) and `META_PAGE_ACCESS_TOKEN` (derived from it) are current and verified working in production as of this writing.
+
+**⚠️ Still outstanding:**
+- **Run `supabase-content-queue-upgrade.sql`** in the Supabase SQL Editor (adds `content_category` + the `ai_*` columns) — not run yet as of this writing.
+- **Go review the 7 pilot posts in "ניהול תוכן" (or the new "לוח תוכן" calendar view) and approve/reject each one** — the first is scheduled 2026-07-12; nothing publishes until approved, by design.
+- **Deferred by explicit scoping decision, not yet built:** the FB-vs-Instagram visual mockup preview in the modal, and authoring the `ai_reach_forecast`/`ai_why_it_works`/`ai_brand_contribution` copy for the 7 pilot posts (the schema now supports it; the content itself and the modal UI to show it are the next slice of work).
+- If any Meta-dependent tab starts failing with an auth error again despite the long-lived token: `debug_token` first (see §6, lesson 1) to see what actually changed before assuming the whole token-refresh dance needs repeating.
 - Per `CLAUDE.md` rule #5: commit and push this milestone to GitHub to update the live Vercel deployment once verified.
