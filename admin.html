@@ -341,6 +341,32 @@
     }
     .cq-card-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .cq-error { font-size:.78rem; color:oklch(0.55 0.18 25); background:oklch(0.55 0.18 25 / 0.08); border-radius:8px; padding:8px 10px; }
+    .cq-card-check { position:absolute; inset-block-start:10px; inset-inline-start:10px; width:19px; height:19px; z-index:2; cursor:pointer; accent-color:var(--gold-600); }
+    .cq-card-rating {
+      position:absolute; inset-block-start:10px; inset-inline-start:36px; z-index:2;
+      background:oklch(0.15 0.02 264 / 0.72); color:var(--white); font-size:.72rem; font-weight:800;
+      padding:3px 8px; border-radius:999px;
+    }
+
+    /* Content Health summary widget */
+    .cq-health { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:18px 20px; box-shadow:var(--shadow-sm); margin-block-end:18px; }
+    .cq-health-stats { display:flex; gap:28px; margin-block-end:14px; }
+    .cq-health-stat { display:flex; flex-direction:column; }
+    .cq-health-stat .num { font-family:var(--font-display); font-weight:800; font-size:1.7rem; color:var(--char-900); }
+    .cq-health-stat .lbl { font-size:.8rem; color:var(--ink-500); font-weight:600; }
+    .cq-health-bars { display:flex; flex-direction:column; gap:8px; }
+    .cq-health-bar-row { display:flex; align-items:center; gap:10px; font-size:.8rem; color:var(--ink-700); }
+    .cq-health-bar-label { flex:0 0 90px; font-weight:600; }
+    .cq-health-bar-track { flex:1; height:10px; background:var(--marble-100); border-radius:999px; overflow:hidden; }
+    .cq-health-bar-fill { height:100%; background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); border-radius:999px; }
+    .cq-health-bar-count { flex:0 0 22px; text-align:end; font-weight:700; color:var(--char-800); }
+
+    /* Bulk-action bar */
+    .cq-bulk-bar { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-block-end:16px; padding:10px 14px; background:var(--marble-50); border:1px solid var(--marble-200); border-radius:12px; }
+    .cq-bulk-selectall { display:flex; align-items:center; gap:8px; font-size:.85rem; font-weight:700; color:var(--char-800); cursor:pointer; }
+    .cq-bulk-count { font-size:.8rem; color:var(--ink-500); font-weight:600; }
+    .cq-bulk-actions { display:flex; gap:8px; flex-wrap:wrap; margin-inline-start:auto; }
+    .cq-bulk-actions button:disabled { opacity:.45; cursor:not-allowed; }
 
     /* Preview/edit modal */
     .cq-modal { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; }
@@ -398,6 +424,8 @@
     .cq-mock-ig-actions { display:flex; gap:14px; padding:10px 14px 4px; font-size:1.1rem; }
     .cq-mock-ig-save { margin-inline-start:auto; }
     .cq-mock-ig-caption { padding:2px 14px 12px; font-size:.85rem; color:var(--ink-800,var(--ink-700)); line-height:1.5; white-space:pre-wrap; }
+    .cq-mock-more { background:transparent; border:0; padding:0; font: inherit; font-weight:700; color:var(--ink-500); cursor:pointer; }
+    .cq-mock-more:hover { color:var(--char-900); text-decoration:underline; }
 
     /* AI Analysis panel */
     .cq-ai { background:var(--marble-50); border:1px solid var(--marble-200); border-radius:12px; padding:16px 18px; margin-block-end:18px; }
@@ -407,6 +435,13 @@
     .cq-ai-block { font-size:.85rem; color:var(--ink-700); line-height:1.6; margin-block-end:8px; }
     .cq-ai-block:last-child { margin-block-end:0; }
     .cq-ai-block b { color:var(--char-800); }
+    .cq-ai-rating { display:flex; align-items:flex-start; gap:10px; margin-block-end:10px; }
+    .cq-ai-rating[hidden] { display:none; }
+    .cq-ai-rating-num {
+      flex-shrink:0; display:inline-grid; place-items:center; width:44px; height:44px; border-radius:50%;
+      background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); color:var(--char-950);
+      font-family:var(--font-display); font-weight:800; font-size:1rem;
+    }
 
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
@@ -681,6 +716,14 @@
         <section class="admin-view" id="view-content">
           <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p></div>
 
+          <div class="cq-health" id="cqHealth">
+            <div class="cq-health-stats">
+              <div class="cq-health-stat"><span class="num" id="cqHealthPending">—</span><span class="lbl">ממתין לאישור</span></div>
+              <div class="cq-health-stat"><span class="num" id="cqHealthWeek">—</span><span class="lbl">מתוזמן השבוע</span></div>
+            </div>
+            <div class="cq-health-bars" id="cqHealthBars"></div>
+          </div>
+
           <div class="cq-toolbar">
             <div class="cq-filters">
               <select id="cqFilterStatus">
@@ -697,6 +740,28 @@
                 <option value="instagram">אינסטגרם</option>
                 <option value="both">שתיהן</option>
               </select>
+              <select id="cqFilterCategory">
+                <option value="">כל הקטגוריות</option>
+                <option value="ad">מודעה</option>
+                <option value="post">פוסט</option>
+                <option value="reel">רילס</option>
+                <option value="story">סטורי</option>
+              </select>
+              <select id="cqSortBy">
+                <option value="date">מיון: תאריך פרסום</option>
+                <option value="rating_desc">מיון: דירוג AI (גבוה לנמוך)</option>
+                <option value="rating_asc">מיון: דירוג AI (נמוך לגבוה)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="cq-bulk-bar" id="cqBulkBar">
+            <label class="cq-bulk-selectall"><input type="checkbox" id="cqSelectAll" /> בחר הכל</label>
+            <span class="cq-bulk-count" id="cqBulkCount">0 נבחרו</span>
+            <div class="cq-bulk-actions">
+              <button type="button" class="btn btn-shimmer btn-sm" id="cqBulkApprove" disabled>✅ אשר נבחרים</button>
+              <button type="button" class="btn btn-navy btn-sm" id="cqBulkReject" disabled>✋ דחה נבחרים</button>
+              <button type="button" class="btn btn-navy btn-sm" id="cqBulkDelete" disabled>🗑 מחק נבחרים</button>
             </div>
           </div>
 
@@ -746,9 +811,14 @@
       <div class="cq-ai" id="cqAiSection" hidden>
         <h4>🧠 ניתוח AI</h4>
         <p class="cq-ai-disclaimer">אומדן כיווני מבוסס על ביצועי העמוד עד כה - לא תחזית מדויקת.</p>
+        <div class="cq-ai-rating" id="cqAiRatingRow" hidden>
+          <span class="cq-ai-rating-num" id="cqAiRatingNum"></span>
+          <span class="cq-ai-block"><b>נימוק הדירוג:</b> <span id="cqAiRatingJustification"></span></span>
+        </div>
         <div class="cq-ai-block"><b>צפי חשיפה/מעורבות:</b> <span id="cqAiReach"></span></div>
         <div class="cq-ai-block"><b>למה זה עובד:</b> <span id="cqAiWhy"></span></div>
         <div class="cq-ai-block"><b>תרומה למותג:</b> <span id="cqAiBrand"></span></div>
+        <div class="cq-ai-block" id="cqAiTimingRow" hidden><b>תזמון אופטימלי:</b> <span id="cqAiTiming"></span></div>
       </div>
 
       <div class="cq-modal-field">
@@ -1699,6 +1769,16 @@
         var grid = document.getElementById("cqGrid");
         var filterStatus = document.getElementById("cqFilterStatus");
         var filterPlatform = document.getElementById("cqFilterPlatform");
+        var filterCategory = document.getElementById("cqFilterCategory");
+        var sortBy = document.getElementById("cqSortBy");
+        var healthPendingEl = document.getElementById("cqHealthPending");
+        var healthWeekEl = document.getElementById("cqHealthWeek");
+        var healthBarsEl = document.getElementById("cqHealthBars");
+        var selectAllCheckbox = document.getElementById("cqSelectAll");
+        var bulkCountEl = document.getElementById("cqBulkCount");
+        var bulkApproveBtn = document.getElementById("cqBulkApprove");
+        var bulkRejectBtn = document.getElementById("cqBulkReject");
+        var bulkDeleteBtn = document.getElementById("cqBulkDelete");
         var modal = document.getElementById("cqModal");
         var modalCaption = document.getElementById("cqModalCaption");
         var modalDate = document.getElementById("cqModalDate");
@@ -1717,6 +1797,11 @@
         var aiReachEl = document.getElementById("cqAiReach");
         var aiWhyEl = document.getElementById("cqAiWhy");
         var aiBrandEl = document.getElementById("cqAiBrand");
+        var aiRatingRow = document.getElementById("cqAiRatingRow");
+        var aiRatingNumEl = document.getElementById("cqAiRatingNum");
+        var aiRatingJustificationEl = document.getElementById("cqAiRatingJustification");
+        var aiTimingRow = document.getElementById("cqAiTimingRow");
+        var aiTimingEl = document.getElementById("cqAiTiming");
 
         var ccalGrid = document.getElementById("ccalGrid");
         var ccalTitle = document.getElementById("ccalTitle");
@@ -1729,6 +1814,8 @@
         var activeId = null;
         var calView = new Date(); calView.setDate(1);
         var selectedDateKey = null;
+        var selectedIds = {}; // id -> true, for bulk actions
+        var CATEGORY_LABELS = { ad: "מודעה", post: "פוסט", reel: "רילס", story: "סטורי" };
 
         var STATUS_LABELS = {
           pending_approval: "ממתין לאישור", approved: "מאושר",
@@ -1773,8 +1860,11 @@
           } else if (r.status === "approved") {
             actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
           }
+          var ratingBadge = (r.ai_rating != null) ? '<span class="cq-card-rating">⭐ ' + esc(r.ai_rating) + "/10</span>" : "";
           return '<article class="cq-card" data-id="' + esc(r.id) + '">' +
             '<div class="cq-card-media">' +
+              '<input type="checkbox" class="cq-card-check" data-select-id="' + esc(r.id) + '" aria-label="בחירת פוסט" />' +
+              ratingBadge +
               '<img src="' + esc(r.thumbnail_url || r.media_url) + '" alt="" loading="lazy" />' +
               '<span class="cq-badge st-' + esc(r.status) + '">' + esc(STATUS_LABELS[r.status] || r.status) + "</span>" +
             "</div>" +
@@ -1784,6 +1874,7 @@
               errorHtml +
               '<div class="cq-card-actions">' +
                 '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 תצוגה</button>' +
+                '<button type="button" class="btn btn-navy btn-sm" data-cq-duplicate="' + esc(r.id) + '">🔁 שכפול</button>' +
                 actionsHtml +
               "</div>" +
             "</div>" +
@@ -1792,22 +1883,163 @@
 
         /* ---------- Grid view (ניהול תוכן) ---------- */
         function currentRows() {
-          var st = filterStatus.value, pl = filterPlatform.value;
-          return allContent.filter(function (r) {
+          var st = filterStatus.value, pl = filterPlatform.value, cat = filterCategory.value, sort = sortBy.value;
+          var rows = allContent.filter(function (r) {
             if (st && r.status !== st) return false;
             if (pl && r.platform !== pl) return false;
+            if (cat && r.content_category !== cat) return false;
             return true;
           });
+          if (sort === "rating_desc" || sort === "rating_asc") {
+            rows = rows.slice().sort(function (a, b) {
+              var av = a.ai_rating == null ? -1 : a.ai_rating, bv = b.ai_rating == null ? -1 : b.ai_rating;
+              return sort === "rating_desc" ? bv - av : av - bv;
+            });
+          }
+          return rows;
         }
         function render() {
           var rows = currentRows();
           if (!rows.length) {
             grid.innerHTML = '<div class="cq-empty">' + (allContent.length ? "אין תוכן התואם את הסינון." : "אין עדיין תוכן בתור.") + "</div>";
-            return;
+          } else {
+            grid.innerHTML = rows.map(cardHtml).join("");
           }
-          grid.innerHTML = rows.map(cardHtml).join("");
+          syncSelectionUI();
         }
-        [filterStatus, filterPlatform].forEach(function (el) { el.addEventListener("change", render); });
+        [filterStatus, filterPlatform, filterCategory, sortBy].forEach(function (el) { el.addEventListener("change", render); });
+
+        /* ---------- Content Health summary widget ---------- */
+        function renderHealth() {
+          var pending = allContent.filter(function (r) { return r.status === "pending_approval"; });
+          var now = new Date();
+          var weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate() + 7);
+          var scheduledThisWeek = allContent.filter(function (r) {
+            var d = new Date(r.scheduled_for);
+            return d >= now && d <= weekEnd;
+          }).length;
+
+          healthPendingEl.textContent = pending.length;
+          healthWeekEl.textContent = scheduledThisWeek;
+
+          var byCat = {};
+          pending.forEach(function (r) { byCat[r.content_category] = (byCat[r.content_category] || 0) + 1; });
+          var maxCount = Math.max.apply(null, Object.keys(byCat).map(function (k) { return byCat[k]; }).concat([1]));
+
+          var order = ["ad", "post", "reel", "story"];
+          var barsHtml = order.filter(function (k) { return byCat[k]; }).map(function (k) {
+            var pct = Math.round((byCat[k] / maxCount) * 100);
+            return '<div class="cq-health-bar-row">' +
+              '<span class="cq-health-bar-label">' + esc(CATEGORY_LABELS[k] || k) + "</span>" +
+              '<span class="cq-health-bar-track"><span class="cq-health-bar-fill" style="width:' + pct + '%"></span></span>' +
+              '<span class="cq-health-bar-count">' + byCat[k] + "</span>" +
+            "</div>";
+          }).join("");
+          healthBarsEl.innerHTML = barsHtml || '<p class="cq-ai-disclaimer">אין תוכן ממתין לאישור כרגע.</p>';
+        }
+
+        /* ---------- Bulk selection + actions ---------- */
+        function syncSelectionUI() {
+          var checkboxes = grid.querySelectorAll(".cq-card-check");
+          var idsOnScreen = Array.prototype.map.call(checkboxes, function (cb) { return cb.getAttribute("data-select-id"); });
+          checkboxes.forEach(function (cb) { cb.checked = !!selectedIds[cb.getAttribute("data-select-id")]; });
+          var selectedCount = Object.keys(selectedIds).length;
+          bulkCountEl.textContent = selectedCount + " נבחרו";
+          bulkApproveBtn.disabled = bulkRejectBtn.disabled = bulkDeleteBtn.disabled = selectedCount === 0;
+          selectAllCheckbox.checked = idsOnScreen.length > 0 && idsOnScreen.every(function (id) { return selectedIds[id]; });
+        }
+        grid.addEventListener("change", function (e) {
+          var cb = e.target.closest(".cq-card-check");
+          if (!cb) return;
+          var id = cb.getAttribute("data-select-id");
+          if (cb.checked) selectedIds[id] = true; else delete selectedIds[id];
+          syncSelectionUI();
+        });
+        selectAllCheckbox.addEventListener("change", function () {
+          var checkboxes = grid.querySelectorAll(".cq-card-check");
+          checkboxes.forEach(function (cb) {
+            var id = cb.getAttribute("data-select-id");
+            if (selectAllCheckbox.checked) selectedIds[id] = true; else delete selectedIds[id];
+          });
+          syncSelectionUI();
+        });
+
+        function clearSelection() { selectedIds = {}; syncSelectionUI(); }
+
+        function bulkApprove() {
+          var ids = Object.keys(selectedIds);
+          if (!ids.length) return;
+          sb.from("content_queue")
+            .update({ status: "approved", approved_at: new Date().toISOString() })
+            .in("id", ids)
+            .select()
+            .then(function (res) {
+              if (res.error) { alert("שגיאה באישור התוכן שנבחר. נסו שוב."); return; }
+              (res.data || []).forEach(function (updated) {
+                allContent = allContent.map(function (r) { return r.id === updated.id ? updated : r; });
+              });
+              clearSelection();
+              renderAll();
+            });
+        }
+        function bulkReject() {
+          var ids = Object.keys(selectedIds);
+          if (!ids.length) return;
+          if (!confirm("לדחות את " + ids.length + " הפוסטים שנבחרו? הם לא יפורסמו.")) return;
+          sb.from("content_queue")
+            .update({ status: "rejected" })
+            .in("id", ids)
+            .select()
+            .then(function (res) {
+              if (res.error) { alert("שגיאה בדחיית התוכן שנבחר. נסו שוב."); return; }
+              (res.data || []).forEach(function (updated) {
+                allContent = allContent.map(function (r) { return r.id === updated.id ? updated : r; });
+              });
+              clearSelection();
+              renderAll();
+            });
+        }
+        function bulkDelete() {
+          var ids = Object.keys(selectedIds);
+          if (!ids.length) return;
+          if (!confirm("למחוק לצמיתות את " + ids.length + " הפוסטים שנבחרו? לא ניתן לשחזר פעולה זו.")) return;
+          sb.from("content_queue").delete().in("id", ids).then(function (res) {
+            if (res.error) { alert("שגיאה במחיקת התוכן שנבחר. נסו שוב."); return; }
+            allContent = allContent.filter(function (r) { return !selectedIds[r.id]; });
+            clearSelection();
+            renderAll();
+          });
+        }
+        bulkApproveBtn.addEventListener("click", bulkApprove);
+        bulkRejectBtn.addEventListener("click", bulkReject);
+        bulkDeleteBtn.addEventListener("click", bulkDelete);
+
+        /* ---------- Duplicate action ---------- */
+        function duplicateRow(id) {
+          var row = findById(id);
+          if (!row) return;
+          var newScheduled = new Date(row.scheduled_for);
+          newScheduled.setDate(newScheduled.getDate() + 1);
+          var payload = {
+            title: (row.title || "") + " (עותק)",
+            caption: row.caption,
+            media_type: row.media_type,
+            media_url: row.media_url,
+            thumbnail_url: row.thumbnail_url,
+            platform: row.platform,
+            content_category: row.content_category,
+            scheduled_for: newScheduled.toISOString(),
+            status: "pending_approval",
+            notes: row.notes
+          };
+          sb.from("content_queue").insert(payload).select().then(function (res) {
+            if (res.error || !res.data || !res.data[0]) { alert("שגיאה בשכפול הפוסט. נסו שוב."); return; }
+            allContent.push(res.data[0]);
+            renderAll();
+          });
+        }
+
+        function renderAll() { render(); renderHealth(); renderCalendar(); if (selectedDateKey) renderDayDetail(selectedDateKey); }
 
         /* ---------- Calendar view (לוח תוכן) ---------- */
         function renderCalendar() {
@@ -1891,9 +2123,7 @@
             }
             var updated = res.data[0];
             allContent = allContent.map(function (r) { return r.id === id ? updated : r; });
-            render();
-            renderCalendar();
-            if (selectedDateKey) renderDayDetail(selectedDateKey);
+            renderAll();
             return updated;
           });
         }
@@ -1903,10 +2133,11 @@
           updateRow(id, { status: "rejected" });
         }
         function handleActionClick(e) {
-          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview]");
+          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview], [data-cq-duplicate]");
           if (!btn) return;
           if (btn.hasAttribute("data-cq-approve")) approve(btn.getAttribute("data-cq-approve"));
           else if (btn.hasAttribute("data-cq-reject")) reject(btn.getAttribute("data-cq-reject"));
+          else if (btn.hasAttribute("data-cq-duplicate")) duplicateRow(btn.getAttribute("data-cq-duplicate"));
           else openPreview(btn.getAttribute("data-cq-preview"));
         }
         grid.addEventListener("click", handleActionClick);
@@ -1914,9 +2145,26 @@
 
         /* ---------- Preview/edit modal ---------- */
         var lastFocused = null;
-        function truncateForMock(text, max) {
-          var t = String(text || "");
-          return t.length > max ? t.slice(0, max).trim() + "… עוד" : t;
+        function renderMockCaption(container, fullText, max) {
+          var text = String(fullText || "");
+          container.innerHTML = "";
+          if (text.length <= max) {
+            container.appendChild(document.createTextNode(text));
+            return;
+          }
+          var textNode = document.createTextNode(text.slice(0, max).trim());
+          container.appendChild(textNode);
+          var moreBtn = document.createElement("button");
+          moreBtn.type = "button";
+          moreBtn.className = "cq-mock-more";
+          moreBtn.textContent = " …עוד";
+          var expanded = false;
+          moreBtn.addEventListener("click", function () {
+            expanded = !expanded;
+            textNode.textContent = expanded ? text : text.slice(0, max).trim();
+            moreBtn.textContent = expanded ? " הצג פחות" : " …עוד";
+          });
+          container.appendChild(moreBtn);
         }
         function setMockPlatform(platform) {
           mockTabs.forEach(function (btn) {
@@ -1939,15 +2187,29 @@
 
           mockFbImg.src = row.media_url;
           mockIgImg.src = row.media_url;
-          mockFbCaption.textContent = truncateForMock(row.caption, 220);
-          mockIgCaption.textContent = truncateForMock(row.caption, 125);
+          renderMockCaption(mockFbCaption, row.caption, 220);
+          renderMockCaption(mockIgCaption, row.caption, 125);
           setMockPlatform("facebook");
 
-          if (row.ai_reach_forecast || row.ai_why_it_works || row.ai_brand_contribution) {
+          if (row.ai_reach_forecast || row.ai_why_it_works || row.ai_brand_contribution || row.ai_rating != null) {
             aiSection.hidden = false;
             aiReachEl.textContent = row.ai_reach_forecast || "—";
             aiWhyEl.textContent = row.ai_why_it_works || "—";
             aiBrandEl.textContent = row.ai_brand_contribution || "—";
+
+            if (row.ai_rating != null) {
+              aiRatingRow.hidden = false;
+              aiRatingNumEl.textContent = row.ai_rating + "/10";
+              aiRatingJustificationEl.textContent = row.ai_rating_justification || "—";
+            } else {
+              aiRatingRow.hidden = true;
+            }
+            if (row.ai_optimal_timing) {
+              aiTimingRow.hidden = false;
+              aiTimingEl.textContent = row.ai_optimal_timing;
+            } else {
+              aiTimingRow.hidden = true;
+            }
           } else {
             aiSection.hidden = true;
           }
@@ -2017,6 +2279,7 @@
           fetchIfNeeded(function (err) {
             if (err) { grid.innerHTML = '<div class="cq-empty">שגיאה בטעינת התוכן. נסו לרענן.</div>'; return; }
             render();
+            renderHealth();
           });
         };
         loadContentCalendar = function loadContentCalendar() {
