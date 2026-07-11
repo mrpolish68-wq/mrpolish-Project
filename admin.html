@@ -851,7 +851,7 @@
           <input type="date" id="cqModalDate" />
         </div>
         <div class="cq-modal-field">
-          <label for="cqModalTime">שעה</label>
+          <label for="cqModalTime">שעה (שעון ישראל)</label>
           <input type="time" id="cqModalTime" />
         </div>
       </div>
@@ -1857,14 +1857,47 @@
           });
         }
         function pad2(n) { return (n < 10 ? "0" : "") + n; }
-        function fmtDateTime(iso) {
+
+        // All scheduled_for values are stored in UTC (Postgres timestamptz) but every
+        // person operating this dashboard is in Israel, and the whole point of the
+        // displayed time is "when will this actually go live" - so every read AND every
+        // edit of scheduled_for goes through Asia/Jerusalem explicitly, rather than
+        // relying on new Date().getHours() (which is only "correct" incidentally, if the
+        // viewing browser's own OS timezone happens to be set to Israel). This also means
+        // DST (Israel shifts +2/+3 across the year) is handled automatically via Intl's
+        // own timezone database, instead of a hardcoded offset that would drift twice a year.
+        var ISRAEL_TZ = "Asia/Jerusalem";
+        function israelParts(iso) {
           var d = new Date(iso);
-          if (isNaN(d)) return "";
-          return pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + "/" + d.getFullYear() + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+          if (isNaN(d)) return null;
+          var fmt = new Intl.DateTimeFormat("en-US", {
+            timeZone: ISRAEL_TZ, hour12: false,
+            year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+          });
+          var map = {};
+          fmt.formatToParts(d).forEach(function (p) { if (p.type !== "literal") map[p.type] = p.value; });
+          var hour = map.hour === "24" ? "00" : map.hour; // some engines report midnight as "24"
+          return { y: +map.year, m: +map.month, d: +map.day, h: +hour, min: +map.minute };
+        }
+        function israelWallTimeToUTCISO(y, m, d, h, min) {
+          // Standard Intl round-trip: guess the instant is UTC, see what Israel wall-clock
+          // time that instant actually renders as, then correct by the difference. Avoids
+          // hardcoding +2/+3 so DST transitions never need manual updates.
+          var guessUTC = Date.UTC(y, m - 1, d, h, min, 0);
+          var parts = israelParts(new Date(guessUTC).toISOString());
+          var guessAsIsraelWall = Date.UTC(parts.y, parts.m - 1, parts.d, parts.h, parts.min, 0);
+          var diff = guessAsIsraelWall - guessUTC;
+          return new Date(guessUTC - diff).toISOString();
+        }
+        function fmtDateTime(iso) {
+          var p = israelParts(iso);
+          if (!p) return "";
+          return pad2(p.d) + "/" + pad2(p.m) + "/" + p.y + " " + pad2(p.h) + ":" + pad2(p.min);
         }
         function dateKey(iso) {
-          var d = new Date(iso);
-          return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+          var p = israelParts(iso);
+          if (!p) return "";
+          return p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
         }
         function findById(id) {
           for (var i = 0; i < allContent.length; i++) if (allContent[i].id === id) return allContent[i];
@@ -2094,7 +2127,8 @@
 
           var firstDow = new Date(y, m, 1).getDay();
           var days = new Date(y, m + 1, 0).getDate();
-          var today = new Date();
+          var todayIsraelParts = israelParts(new Date().toISOString());
+          var todayKey = todayIsraelParts.y + "-" + pad2(todayIsraelParts.m) + "-" + pad2(todayIsraelParts.d);
           for (var i = 0; i < firstDow; i++) {
             var empty = document.createElement("div"); empty.className = "cal-day empty"; ccalGrid.appendChild(empty);
           }
@@ -2104,7 +2138,7 @@
             cell.type = "button";
             var k = y + "-" + pad2(m + 1) + "-" + pad2(d);
             cell.dataset.key = k;
-            if (y === today.getFullYear() && m === today.getMonth() && d === today.getDate()) cell.classList.add("today");
+            if (k === todayKey) cell.classList.add("today");
             if (k === selectedDateKey) cell.classList.add("selected");
 
             var dayNum = document.createElement("span");
@@ -2282,9 +2316,9 @@
           }
 
           modalCaption.value = row.caption;
-          var d = new Date(row.scheduled_for);
-          modalDate.value = d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
-          modalTime.value = pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+          var p = israelParts(row.scheduled_for);
+          modalDate.value = p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
+          modalTime.value = pad2(p.h) + ":" + pad2(p.min);
           modal.hidden = false;
           document.body.style.overflow = "hidden";
         }
@@ -2304,8 +2338,17 @@
 
         function scheduledFromModal() {
           if (!modalDate.value || !modalTime.value) return null;
-          var d = new Date(modalDate.value + "T" + modalTime.value + ":00");
-          return isNaN(d) ? null : d.toISOString();
+          // modalDate/modalTime were populated as Israel wall-clock time (see openPreview),
+          // so they must be interpreted as Israel time on the way back too - not the
+          // browser's own local timezone, which is what `new Date(dateStr+"T"+timeStr)`
+          // would otherwise silently assume.
+          var dp = modalDate.value.split("-");
+          var tp = modalTime.value.split(":");
+          if (dp.length !== 3 || tp.length < 2) return null;
+          var y = +dp[0], m = +dp[1], day = +dp[2], h = +tp[0], min = +tp[1];
+          if (!y || !m || !day || isNaN(h) || isNaN(min)) return null;
+          var iso = israelWallTimeToUTCISO(y, m, day, h, min);
+          return isNaN(new Date(iso).getTime()) ? null : iso;
         }
 
         modalSaveBtn.addEventListener("click", function () {
