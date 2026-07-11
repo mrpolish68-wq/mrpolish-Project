@@ -80,12 +80,20 @@ async function publishFacebook(row, token, pageId) {
   return vData.id;
 }
 
+// Every Story published through this pipeline gets a functional Link sticker pointing
+// here, via the Graph API's `link` container param (Instagram's replacement for the old
+// "swipe up" gesture — available to every professional account, no follower minimum).
+var SITE_URL = "https://mr-polishes.com";
+
 async function publishInstagram(row, token, igUserId) {
   var mediaType = row.media_type === "story" ? "STORIES" : row.media_type === "video" || row.media_type === "reel" ? "REELS" : null;
   var containerParams = { caption: row.caption, access_token: token };
   if (mediaType) containerParams.media_type = mediaType;
   if (row.media_type === "video" || row.media_type === "reel") containerParams.video_url = row.media_url;
   else containerParams.image_url = row.media_url;
+  // Stories have no caption/bio-link surface of their own — the link sticker is the only
+  // way to drive traffic from one, so this is unconditional rather than opt-in per row.
+  if (mediaType === "STORIES") containerParams.link = row.link_url || SITE_URL;
 
   var createUrl = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + igUserId + "/media";
   var createRes = await fetch(createUrl, {

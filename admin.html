@@ -327,6 +327,7 @@
     .cq-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); }
     .cq-card-media { position:relative; aspect-ratio:4/3; background:var(--marble-100); overflow:hidden; }
     .cq-card-media img { width:100%; height:100%; object-fit:cover; display:block; }
+    .cq-card-media-placeholder { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:2.4rem; background:var(--marble-100); }
     .cq-badge { position:absolute; inset-block-start:10px; inset-inline-end:10px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:700; color:var(--white); }
     .cq-badge.st-pending_approval { background:oklch(0.72 0.14 70); }
     .cq-badge.st-approved { background:oklch(0.6 0.14 150); }
@@ -413,14 +414,22 @@
     .cq-mock-fb-meta b { font-size:.88rem; color:var(--char-900); }
     .cq-mock-fb-meta span { font-size:.75rem; color:var(--ink-500); }
     .cq-mock-fb-caption { padding:0 14px 12px; font-size:.86rem; color:var(--ink-800,var(--ink-700)); line-height:1.5; white-space:pre-wrap; }
-    .cq-mock-fb-media { width:100%; max-height:300px; object-fit:cover; display:block; }
+    /* object-fit:contain (not cover) + no fixed crop height so the full asset is always
+       visible instead of being cropped/truncated - only capped so a very tall Story/Reel
+       doesn't blow out the modal (the modal itself scrolls, see .cq-modal__dialog). */
+    .cq-mock-fb-media { width:100%; height:auto; max-height:520px; object-fit:contain; background:var(--char-950); display:block; }
+    .cq-mock-fb-media[hidden] { display:none; }
     .cq-mock-fb-actions { display:flex; justify-content:space-around; padding:10px 8px; border-block-start:1px solid var(--marble-100); font-size:.8rem; color:var(--ink-600,var(--ink-500)); font-weight:600; }
 
     /* Instagram card mock */
     .cq-mock-ig { border:1px solid var(--marble-200); border-radius:10px; overflow:hidden; background:var(--white); box-shadow:var(--shadow-sm); }
     .cq-mock-ig-header { display:flex; align-items:center; gap:10px; padding:10px 12px; }
     .cq-mock-ig-header b { font-size:.85rem; color:var(--char-900); }
-    .cq-mock-ig-media { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+    /* Was a forced 1:1 square + cover, which cropped the real 4:5 portrait assets (ads/
+       reels/stories). Modern Instagram renders portrait posts up to 4:5 uncropped, so this
+       now mirrors that instead of a hard square. */
+    .cq-mock-ig-media { width:100%; height:auto; max-height:520px; object-fit:contain; background:var(--char-950); display:block; }
+    .cq-mock-ig-media[hidden] { display:none; }
     .cq-mock-ig-actions { display:flex; gap:14px; padding:10px 14px 4px; font-size:1.1rem; }
     .cq-mock-ig-save { margin-inline-start:auto; }
     .cq-mock-ig-caption { padding:2px 14px 12px; font-size:.85rem; color:var(--ink-800,var(--ink-700)); line-height:1.5; white-space:pre-wrap; }
@@ -796,6 +805,7 @@
           </div>
           <div class="cq-mock-fb-caption" id="cqMockFbCaption"></div>
           <img class="cq-mock-fb-media" id="cqMockFbImg" src="" alt="" />
+          <video class="cq-mock-fb-media" id="cqMockFbVideo" controls playsinline preload="metadata" hidden></video>
           <div class="cq-mock-fb-actions"><span>👍 אהבתי</span><span>💬 תגובה</span><span>↗️ שיתוף</span></div>
         </div>
       </div>
@@ -803,6 +813,7 @@
         <div class="cq-mock-ig">
           <div class="cq-mock-ig-header"><img class="cq-mock-avatar" src="logo.webp" alt="" /><b>mr.polish.floors</b></div>
           <img class="cq-mock-ig-media" id="cqMockIgImg" src="" alt="" />
+          <video class="cq-mock-ig-media" id="cqMockIgVideo" controls playsinline preload="metadata" hidden></video>
           <div class="cq-mock-ig-actions"><span>❤️</span><span>💬</span><span>✈️</span><span class="cq-mock-ig-save">🔖</span></div>
           <div class="cq-mock-ig-caption"><b>mr.polish.floors</b> <span id="cqMockIgCaption"></span></div>
         </div>
@@ -1790,8 +1801,10 @@
         var mockFb = document.getElementById("cqMockFacebook");
         var mockIg = document.getElementById("cqMockInstagram");
         var mockFbImg = document.getElementById("cqMockFbImg");
+        var mockFbVideo = document.getElementById("cqMockFbVideo");
         var mockFbCaption = document.getElementById("cqMockFbCaption");
         var mockIgImg = document.getElementById("cqMockIgImg");
+        var mockIgVideo = document.getElementById("cqMockIgVideo");
         var mockIgCaption = document.getElementById("cqMockIgCaption");
         var aiSection = document.getElementById("cqAiSection");
         var aiReachEl = document.getElementById("cqAiReach");
@@ -1861,11 +1874,17 @@
             actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
           }
           var ratingBadge = (r.ai_rating != null) ? '<span class="cq-card-rating">⭐ ' + esc(r.ai_rating) + "/10</span>" : "";
+          // Video/Reel rows without a thumbnail_url would otherwise feed an .mp4 straight
+          // into an <img src>, which just renders as a broken-image icon.
+          var thumbSrc = r.thumbnail_url || (isVideoRow(r) ? "" : r.media_url);
+          var thumbHtml = thumbSrc
+            ? '<img src="' + esc(thumbSrc) + '" alt="" loading="lazy" />'
+            : '<div class="cq-card-media-placeholder">🎬</div>';
           return '<article class="cq-card" data-id="' + esc(r.id) + '">' +
             '<div class="cq-card-media">' +
               '<input type="checkbox" class="cq-card-check" data-select-id="' + esc(r.id) + '" aria-label="בחירת פוסט" />' +
               ratingBadge +
-              '<img src="' + esc(r.thumbnail_url || r.media_url) + '" alt="" loading="lazy" />' +
+              thumbHtml +
               '<span class="cq-badge st-' + esc(r.status) + '">' + esc(STATUS_LABELS[r.status] || r.status) + "</span>" +
             "</div>" +
             '<div class="cq-card-body">' +
@@ -2166,6 +2185,9 @@
           });
           container.appendChild(moreBtn);
         }
+        function pauseMockVideos() {
+          [mockFbVideo, mockIgVideo].forEach(function (v) { if (!v.paused) v.pause(); });
+        }
         function setMockPlatform(platform) {
           mockTabs.forEach(function (btn) {
             var active = btn.getAttribute("data-mock-platform") === platform;
@@ -2174,10 +2196,38 @@
           });
           mockFb.hidden = platform !== "facebook";
           mockIg.hidden = platform !== "instagram";
+          // Switching tabs hides the other platform's video, but a hidden <video> keeps
+          // playing (and its audio) in the background unless explicitly paused.
+          pauseMockVideos();
         }
         mockTabs.forEach(function (btn) {
           btn.addEventListener("click", function () { setMockPlatform(btn.getAttribute("data-mock-platform")); });
         });
+
+        // Video/Reel/Story rows point media_url at an .mp4 (see content_queue.media_type),
+        // but the mockups always rendered an <img> for it - browsers show a broken-image
+        // icon for a video src on an <img>, which is why Reels never appeared in preview.
+        // Detect by media_type first, falling back to the URL extension for safety.
+        function isVideoRow(row) {
+          if (row.media_type === "video" || row.media_type === "reel") return true;
+          return /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(row.media_url || "");
+        }
+        function setMockMedia(imgEl, videoEl, row) {
+          if (isVideoRow(row)) {
+            imgEl.hidden = true;
+            imgEl.removeAttribute("src");
+            videoEl.src = row.media_url;
+            if (row.thumbnail_url) videoEl.poster = row.thumbnail_url;
+            videoEl.hidden = false;
+          } else {
+            videoEl.hidden = true;
+            videoEl.pause();
+            videoEl.removeAttribute("src");
+            videoEl.load();
+            imgEl.hidden = false;
+            imgEl.src = row.media_url;
+          }
+        }
 
         function openPreview(id) {
           var row = findById(id);
@@ -2185,8 +2235,8 @@
           activeId = id;
           lastFocused = document.activeElement;
 
-          mockFbImg.src = row.media_url;
-          mockIgImg.src = row.media_url;
+          setMockMedia(mockFbImg, mockFbVideo, row);
+          setMockMedia(mockIgImg, mockIgVideo, row);
           renderMockCaption(mockFbCaption, row.caption, 220);
           renderMockCaption(mockIgCaption, row.caption, 125);
           setMockPlatform("facebook");
@@ -2225,6 +2275,7 @@
           modal.hidden = true;
           document.body.style.overflow = "";
           activeId = null;
+          pauseMockVideos();
           if (lastFocused) lastFocused.focus();
         }
         Array.prototype.forEach.call(modal.querySelectorAll("[data-cq-close]"), function (el) {
