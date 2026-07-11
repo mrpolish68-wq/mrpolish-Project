@@ -368,6 +368,46 @@
     .cq-modal-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     .cq-modal-actions { display:flex; gap:10px; flex-wrap:wrap; margin-block-start:6px; }
 
+    /* Preview modal: FB/Instagram mockup tabs */
+    .cq-mock-tabs { display:flex; gap:8px; margin-block-end:14px; }
+    .cq-mock-tab {
+      flex:1; font-family:var(--font-base); font-weight:700; font-size:.88rem; cursor:pointer;
+      padding:10px 12px; border-radius:10px; border:1.5px solid var(--marble-200);
+      background:var(--marble-50); color:var(--ink-700); transition:background .15s, border-color .15s, color .15s;
+    }
+    .cq-mock-tab.active { background:var(--char-900); border-color:var(--char-900); color:var(--white); }
+    .cq-mock { margin-block-end:18px; }
+    .cq-mock[hidden] { display:none; }
+
+    /* Facebook card mock */
+    .cq-mock-fb { border:1px solid var(--marble-200); border-radius:10px; overflow:hidden; background:var(--white); box-shadow:var(--shadow-sm); }
+    .cq-mock-fb-header { display:flex; align-items:center; gap:10px; padding:12px 14px; }
+    .cq-mock-avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; background:var(--white); border:1px solid var(--marble-200); }
+    .cq-mock-fb-meta { display:flex; flex-direction:column; line-height:1.3; }
+    .cq-mock-fb-meta b { font-size:.88rem; color:var(--char-900); }
+    .cq-mock-fb-meta span { font-size:.75rem; color:var(--ink-500); }
+    .cq-mock-fb-caption { padding:0 14px 12px; font-size:.86rem; color:var(--ink-800,var(--ink-700)); line-height:1.5; white-space:pre-wrap; }
+    .cq-mock-fb-media { width:100%; max-height:300px; object-fit:cover; display:block; }
+    .cq-mock-fb-actions { display:flex; justify-content:space-around; padding:10px 8px; border-block-start:1px solid var(--marble-100); font-size:.8rem; color:var(--ink-600,var(--ink-500)); font-weight:600; }
+
+    /* Instagram card mock */
+    .cq-mock-ig { border:1px solid var(--marble-200); border-radius:10px; overflow:hidden; background:var(--white); box-shadow:var(--shadow-sm); }
+    .cq-mock-ig-header { display:flex; align-items:center; gap:10px; padding:10px 12px; }
+    .cq-mock-ig-header b { font-size:.85rem; color:var(--char-900); }
+    .cq-mock-ig-media { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+    .cq-mock-ig-actions { display:flex; gap:14px; padding:10px 14px 4px; font-size:1.1rem; }
+    .cq-mock-ig-save { margin-inline-start:auto; }
+    .cq-mock-ig-caption { padding:2px 14px 12px; font-size:.85rem; color:var(--ink-800,var(--ink-700)); line-height:1.5; white-space:pre-wrap; }
+
+    /* AI Analysis panel */
+    .cq-ai { background:var(--marble-50); border:1px solid var(--marble-200); border-radius:12px; padding:16px 18px; margin-block-end:18px; }
+    .cq-ai[hidden] { display:none; }
+    .cq-ai h4 { font-size:.95rem; color:var(--char-900); margin-block-end:4px; }
+    .cq-ai-disclaimer { font-size:.74rem; color:var(--ink-500); font-style:italic; margin-block-end:10px; }
+    .cq-ai-block { font-size:.85rem; color:var(--ink-700); line-height:1.6; margin-block-end:8px; }
+    .cq-ai-block:last-child { margin-block-end:0; }
+    .cq-ai-block b { color:var(--char-800); }
+
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
@@ -674,7 +714,43 @@
     <div class="cq-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="cqModalTitle">
       <button type="button" class="cq-modal__close" data-cq-close aria-label="סגירה">&times;</button>
       <h3 class="cq-modal__title" id="cqModalTitle">תצוגה מקדימה</h3>
-      <img class="cq-modal__media" id="cqModalImg" src="" alt="" />
+
+      <div class="cq-mock-tabs" role="tablist">
+        <button type="button" class="cq-mock-tab active" data-mock-platform="facebook" role="tab" aria-selected="true">📘 פייסבוק</button>
+        <button type="button" class="cq-mock-tab" data-mock-platform="instagram" role="tab" aria-selected="false">📸 אינסטגרם</button>
+      </div>
+
+      <div class="cq-mock" id="cqMockFacebook">
+        <div class="cq-mock-fb">
+          <div class="cq-mock-fb-header">
+            <img class="cq-mock-avatar" src="logo.webp" alt="" />
+            <div class="cq-mock-fb-meta">
+              <b>Mr. Polish - מיסטר פוליש</b>
+              <span>לפני רגע · 🌐</span>
+            </div>
+          </div>
+          <div class="cq-mock-fb-caption" id="cqMockFbCaption"></div>
+          <img class="cq-mock-fb-media" id="cqMockFbImg" src="" alt="" />
+          <div class="cq-mock-fb-actions"><span>👍 אהבתי</span><span>💬 תגובה</span><span>↗️ שיתוף</span></div>
+        </div>
+      </div>
+      <div class="cq-mock" id="cqMockInstagram" hidden>
+        <div class="cq-mock-ig">
+          <div class="cq-mock-ig-header"><img class="cq-mock-avatar" src="logo.webp" alt="" /><b>mr.polish.floors</b></div>
+          <img class="cq-mock-ig-media" id="cqMockIgImg" src="" alt="" />
+          <div class="cq-mock-ig-actions"><span>❤️</span><span>💬</span><span>✈️</span><span class="cq-mock-ig-save">🔖</span></div>
+          <div class="cq-mock-ig-caption"><b>mr.polish.floors</b> <span id="cqMockIgCaption"></span></div>
+        </div>
+      </div>
+
+      <div class="cq-ai" id="cqAiSection" hidden>
+        <h4>🧠 ניתוח AI</h4>
+        <p class="cq-ai-disclaimer">אומדן כיווני מבוסס על ביצועי העמוד עד כה - לא תחזית מדויקת.</p>
+        <div class="cq-ai-block"><b>צפי חשיפה/מעורבות:</b> <span id="cqAiReach"></span></div>
+        <div class="cq-ai-block"><b>למה זה עובד:</b> <span id="cqAiWhy"></span></div>
+        <div class="cq-ai-block"><b>תרומה למותג:</b> <span id="cqAiBrand"></span></div>
+      </div>
+
       <div class="cq-modal-field">
         <label for="cqModalCaption">כיתוב</label>
         <textarea id="cqModalCaption"></textarea>
@@ -1624,13 +1700,23 @@
         var filterStatus = document.getElementById("cqFilterStatus");
         var filterPlatform = document.getElementById("cqFilterPlatform");
         var modal = document.getElementById("cqModal");
-        var modalImg = document.getElementById("cqModalImg");
         var modalCaption = document.getElementById("cqModalCaption");
         var modalDate = document.getElementById("cqModalDate");
         var modalTime = document.getElementById("cqModalTime");
         var modalSaveBtn = document.getElementById("cqModalSave");
         var modalApproveBtn = document.getElementById("cqModalApprove");
         var modalRejectBtn = document.getElementById("cqModalReject");
+        var mockTabs = modal.querySelectorAll(".cq-mock-tab");
+        var mockFb = document.getElementById("cqMockFacebook");
+        var mockIg = document.getElementById("cqMockInstagram");
+        var mockFbImg = document.getElementById("cqMockFbImg");
+        var mockFbCaption = document.getElementById("cqMockFbCaption");
+        var mockIgImg = document.getElementById("cqMockIgImg");
+        var mockIgCaption = document.getElementById("cqMockIgCaption");
+        var aiSection = document.getElementById("cqAiSection");
+        var aiReachEl = document.getElementById("cqAiReach");
+        var aiWhyEl = document.getElementById("cqAiWhy");
+        var aiBrandEl = document.getElementById("cqAiBrand");
 
         var ccalGrid = document.getElementById("ccalGrid");
         var ccalTitle = document.getElementById("ccalTitle");
@@ -1828,12 +1914,44 @@
 
         /* ---------- Preview/edit modal ---------- */
         var lastFocused = null;
+        function truncateForMock(text, max) {
+          var t = String(text || "");
+          return t.length > max ? t.slice(0, max).trim() + "… עוד" : t;
+        }
+        function setMockPlatform(platform) {
+          mockTabs.forEach(function (btn) {
+            var active = btn.getAttribute("data-mock-platform") === platform;
+            btn.classList.toggle("active", active);
+            btn.setAttribute("aria-selected", active ? "true" : "false");
+          });
+          mockFb.hidden = platform !== "facebook";
+          mockIg.hidden = platform !== "instagram";
+        }
+        mockTabs.forEach(function (btn) {
+          btn.addEventListener("click", function () { setMockPlatform(btn.getAttribute("data-mock-platform")); });
+        });
+
         function openPreview(id) {
           var row = findById(id);
           if (!row) return;
           activeId = id;
           lastFocused = document.activeElement;
-          modalImg.src = row.media_url;
+
+          mockFbImg.src = row.media_url;
+          mockIgImg.src = row.media_url;
+          mockFbCaption.textContent = truncateForMock(row.caption, 220);
+          mockIgCaption.textContent = truncateForMock(row.caption, 125);
+          setMockPlatform("facebook");
+
+          if (row.ai_reach_forecast || row.ai_why_it_works || row.ai_brand_contribution) {
+            aiSection.hidden = false;
+            aiReachEl.textContent = row.ai_reach_forecast || "—";
+            aiWhyEl.textContent = row.ai_why_it_works || "—";
+            aiBrandEl.textContent = row.ai_brand_contribution || "—";
+          } else {
+            aiSection.hidden = true;
+          }
+
           modalCaption.value = row.caption;
           var d = new Date(row.scheduled_for);
           modalDate.value = d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
