@@ -334,6 +334,15 @@
     .cq-badge.st-published { background:oklch(0.5 0.12 250); }
     .cq-badge.st-failed { background:oklch(0.55 0.18 25); }
     .cq-badge.st-rejected { background:var(--ink-500); }
+    /* Content-type badge (ad/post/reel/story) - stacked directly under the status badge
+       in the same top corner (rather than a free corner) so it reads as "one status
+       column" instead of competing with the checkbox+rating pairing on the other side. */
+    .cq-card-type {
+      position:absolute; inset-block-start:42px; inset-inline-end:10px; z-index:2;
+      padding:3px 10px; border-radius:999px; font-size:.68rem; font-weight:800; letter-spacing:.01em;
+      background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); color:var(--char-950);
+      box-shadow:0 2px 8px oklch(0.15 0.02 264 / 0.25);
+    }
     .cq-card-body { padding:16px; display:flex; flex-direction:column; gap:10px; flex:1; }
     .cq-card-meta { display:flex; justify-content:space-between; align-items:center; font-size:.8rem; color:var(--ink-500); }
     .cq-caption {
@@ -1874,6 +1883,13 @@
             actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
           }
           var ratingBadge = (r.ai_rating != null) ? '<span class="cq-card-rating">⭐ ' + esc(r.ai_rating) + "/10</span>" : "";
+          // Type badge: content_category (ad/post/reel/story), not media_type - media_type
+          // is the technical publish format (image/video/reel/story, see handoff.md §2) and
+          // has no "post"/"ad" values at all, so it can't produce the Post/Ad labels this
+          // badge needs. content_category is the row's actual marketing classification.
+          var typeBadge = r.content_category
+            ? '<span class="cq-card-type">' + esc(CATEGORY_LABELS[r.content_category] || r.content_category) + "</span>"
+            : "";
           // Video/Reel rows without a thumbnail_url would otherwise feed an .mp4 straight
           // into an <img src>, which just renders as a broken-image icon.
           var thumbSrc = r.thumbnail_url || (isVideoRow(r) ? "" : r.media_url);
@@ -1886,6 +1902,7 @@
               ratingBadge +
               thumbHtml +
               '<span class="cq-badge st-' + esc(r.status) + '">' + esc(STATUS_LABELS[r.status] || r.status) + "</span>" +
+              typeBadge +
             "</div>" +
             '<div class="cq-card-body">' +
               '<div class="cq-card-meta"><span>' + (PLATFORM_LABELS[r.platform] || r.platform) + "</span><span>" + esc(fmtDateTime(r.scheduled_for)) + "</span></div>" +
