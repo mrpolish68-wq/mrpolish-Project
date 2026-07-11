@@ -40,6 +40,9 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
+  <!-- Business expenses accountant export: ExcelJS builds the .xlsx client-side (supports embedding the logo image, unlike SheetJS's free build) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+
   <style>
     body { background: var(--marble-100); color: var(--ink-900); }
 
@@ -245,6 +248,63 @@
     .calc-total .val { font-family:var(--font-display); font-weight:800; font-size:2rem; color:var(--gold-400); text-shadow:0 0 18px var(--gold-glow); transition:transform .15s var(--ease-out); }
     .calc-total .val.bump { transform:scale(1.08); }
 
+    /* ===== Tab 5: Business Expenses ===== */
+    .exp-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-block-end:16px; }
+    .exp-toolbar .exp-filters { display:flex; gap:10px; flex-wrap:wrap; flex:1; min-width:220px; }
+    .exp-toolbar select, .exp-toolbar input[type="date"] {
+      font-family:var(--font-base); font-size:.9rem;
+      padding:10px 12px; border:1.5px solid var(--marble-200); border-radius:var(--radius);
+      background:var(--marble-50); color:var(--char-900);
+      transition:border-color .2s, box-shadow .2s, background .2s;
+    }
+    .exp-toolbar select:focus, .exp-toolbar input[type="date"]:focus {
+      outline:0; border-color:var(--gold-500); background:var(--white); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.2);
+    }
+    .exp-toolbar .exp-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .exp-del-btn {
+      background:transparent; border:1px solid oklch(0.7 0.12 25 / 0.35); color:oklch(0.6 0.16 25);
+      border-radius:8px; padding:6px 10px; cursor:pointer; font-size:.85rem; transition:background .15s;
+    }
+    .exp-del-btn:hover { background:oklch(0.6 0.16 25 / 0.1); }
+    .exp-table .col-amount { white-space:nowrap; font-weight:700; color:var(--char-900); }
+    .exp-table .col-desc { max-width:260px; color:var(--ink-500); }
+
+    /* Add-expense modal (self-contained overlay + dialog; mirrors the public review-modal pattern) */
+    .exp-modal { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; padding:20px; }
+    .exp-modal[hidden] { display:none; }
+    .exp-modal__overlay { position:absolute; inset:0; background:oklch(0.15 0.02 264 / 0.6); backdrop-filter:blur(3px); }
+    .exp-modal__dialog {
+      position:relative; width:min(480px,100%); max-height:calc(100dvh - 40px); overflow-y:auto;
+      background:var(--white); color:var(--ink-900); border-radius:var(--radius-lg);
+      box-shadow:var(--shadow-lg, 0 30px 80px rgba(0,0,0,.35)); padding:clamp(24px,5vw,32px);
+    }
+    .exp-modal__close {
+      position:absolute; inset-block-start:12px; inset-inline-end:14px; background:transparent; border:0;
+      font-size:1.9rem; line-height:1; color:var(--ink-700); cursor:pointer; padding:4px 8px; border-radius:8px;
+    }
+    .exp-modal__close:hover { color:var(--ink-900); background:var(--marble-100); }
+    .exp-modal__title { font-size:1.25rem; color:var(--char-900); margin-block-end:18px; }
+    .exp-form { display:grid; gap:16px; text-align:start; }
+    .exp-form label { display:block; font-size:.85rem; font-weight:700; color:var(--char-800); margin-block-end:6px; }
+    .exp-form input, .exp-form select, .exp-form textarea {
+      width:100%; font-family:var(--font-base); font-size:.98rem; padding:11px 13px;
+      border:1.5px solid var(--marble-200); border-radius:var(--radius); background:var(--marble-50); color:var(--char-900);
+      transition:border-color .2s, box-shadow .2s;
+    }
+    .exp-form textarea { min-height:80px; resize:vertical; }
+    .exp-form input:focus, .exp-form select:focus, .exp-form textarea:focus {
+      outline:0; border-color:var(--gold-500); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.22);
+    }
+    .exp-form-hint { font-size:.8rem; color:var(--ink-500); margin-block-start:-4px; }
+    .exp-form-actions { display:flex; gap:10px; flex-wrap:wrap; margin-block-start:6px; }
+    .exp-toast {
+      background:oklch(0.68 0.16 150 / 0.12); border:1px solid oklch(0.68 0.16 150 / 0.4);
+      color:oklch(0.4 0.14 150); font-weight:700; font-size:.9rem;
+      padding:10px 14px; border-radius:10px; margin-block-end:16px;
+      animation: expToastIn .25s var(--ease-out);
+    }
+    @keyframes expToastIn { from{opacity:0; transform:translateY(-6px);} to{opacity:1; transform:none;} }
+
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
@@ -276,6 +336,7 @@
         <button data-view="leads"><span class="ic" aria-hidden="true">📋</span> ניהול לידים</button>
         <button data-view="calendar"><span class="ic" aria-hidden="true">📅</span> יומן פגישות</button>
         <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
+        <button data-view="expenses"><span class="ic" aria-hidden="true">💰</span> הוצאות עסק</button>
       </nav>
       <button class="admin-logout" id="logoutBtn">התנתקות</button>
     </aside>
@@ -414,8 +475,98 @@
           </aside>
           </div>
         </section>
+
+        <!-- Tab 5: Business Expenses -->
+        <section class="admin-view" id="view-expenses">
+          <div class="view-head"><h2>הוצאות עסק</h2><p>ניהול הוצאות העסק, וייצוא קובץ אקסל מסודר עבור טל כרמלי, רואה החשבון.</p></div>
+
+          <div class="metric-grid">
+            <div class="metric">
+              <div class="ic">💰</div>
+              <div class="num" id="expTotal">—</div>
+              <div class="lbl">סה״כ הוצאות (ממרץ 2026)</div>
+              <div class="trend muted" id="expTotalTrend">טוען…</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="exp-toolbar">
+              <div class="exp-filters">
+                <select id="expFilterCategory">
+                  <option value="">כל הקטגוריות</option>
+                  <option value='סעדון יבוא שיווק והדברה בע"מ'>סעדון יבוא שיווק והדברה בע"מ</option>
+                  <option value='אשלי כלי יהלומים בע"מ'>אשלי כלי יהלומים בע"מ</option>
+                  <option value="דלק">דלק</option>
+                  <option value="שונות">שונות</option>
+                </select>
+                <input type="date" id="expFilterFrom" aria-label="מתאריך" />
+                <input type="date" id="expFilterTo" aria-label="עד תאריך" />
+              </div>
+              <div class="exp-actions">
+                <button class="btn btn-shimmer btn-sm" id="expAddBtn">➕ הוספת הוצאה</button>
+                <button class="btn btn-navy btn-sm" id="expExportBtn">📊 ייצוא לאקסל</button>
+              </div>
+            </div>
+            <div class="leads-table-wrap">
+              <table class="leads-table exp-table">
+                <thead>
+                  <tr>
+                    <th>תאריך</th>
+                    <th>קטגוריה</th>
+                    <th>סכום</th>
+                    <th>תיאור</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="expBody">
+                  <tr><td colspan="5" class="leads-empty">טוען נתונים…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
+  </div>
+
+  <!-- Add-expense modal -->
+  <div class="exp-modal" id="expModal" hidden>
+    <div class="exp-modal__overlay" data-exp-close></div>
+    <div class="exp-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="expModalTitle">
+      <button type="button" class="exp-modal__close" data-exp-close aria-label="סגירה">&times;</button>
+      <h3 class="exp-modal__title" id="expModalTitle">הוספת הוצאה</h3>
+      <div class="exp-toast" id="expToast" role="status" aria-live="polite" hidden>✅ ההוצאה נשמרה בהצלחה</div>
+      <form class="exp-form" id="expForm">
+        <div>
+          <label for="expDate">תאריך</label>
+          <input type="date" id="expDate" required />
+        </div>
+        <div>
+          <label for="expCategory">קטגוריה</label>
+          <select id="expCategory" required>
+            <option value="" disabled selected>בחר קטגוריה…</option>
+            <option value='סעדון יבוא שיווק והדברה בע"מ'>סעדון יבוא שיווק והדברה בע"מ</option>
+            <option value='אשלי כלי יהלומים בע"מ'>אשלי כלי יהלומים בע"מ</option>
+            <option value="דלק">דלק</option>
+            <option value="שונות">שונות</option>
+          </select>
+        </div>
+        <div>
+          <label for="expAmount">סכום (₪)</label>
+          <input type="number" id="expAmount" inputmode="decimal" min="0.01" step="0.01" placeholder="0" required />
+        </div>
+        <div>
+          <label for="expDesc">תיאור (לא חובה)</label>
+          <textarea id="expDesc" placeholder="פרטים נוספים על ההוצאה…"></textarea>
+        </div>
+        <p class="exp-form-hint">"שמירה" שומרת ומאפשרת להוסיף הוצאה נוספת באותו תאריך/קטגוריה. לסיום, לחצו "שמירה וסגירה".</p>
+        <div class="exp-form-actions">
+          <button type="submit" class="btn btn-shimmer btn-sm" id="expSaveBtn">שמירה</button>
+          <button type="submit" class="btn btn-navy btn-sm" id="expSaveCloseBtn">שמירה וסגירה</button>
+          <button type="button" class="btn btn-navy btn-sm" data-exp-close>ביטול</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <script>
@@ -434,7 +585,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", calendar: "יומן פגישות", ai: "הזמנות עבודה", expenses: "הוצאות עסק" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -443,6 +594,7 @@
         document.querySelectorAll(".admin-view").forEach(function (s) { s.classList.toggle("active", s.id === "view-" + v); });
         document.getElementById("topTitle").textContent = titles[v];
         if (v === "leads") loadLeads(); // lazy-load on first open
+        if (v === "expenses") loadExpenses(); // lazy-load on first open
       });
 
       /* ---------- Logout ---------- */
@@ -961,6 +1113,315 @@
           setTimeout(render, 6000); // absolute safety net
         });
       });
+
+      /* ---------- Tab 5: Business Expenses ---------- */
+      var loadExpenses = (function () {
+        var EXPENSES_SINCE = "2026-03-01"; // summary card totals from here onward
+        var HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+        var CATEGORY_ORDER = ['סעדון יבוא שיווק והדברה בע"מ', 'אשלי כלי יהלומים בע"מ', "דלק", "שונות"];
+
+        var body = document.getElementById("expBody");
+        var totalEl = document.getElementById("expTotal");
+        var totalTrendEl = document.getElementById("expTotalTrend");
+        var filterCategory = document.getElementById("expFilterCategory");
+        var filterFrom = document.getElementById("expFilterFrom");
+        var filterTo = document.getElementById("expFilterTo");
+        var addBtn = document.getElementById("expAddBtn");
+        var exportBtn = document.getElementById("expExportBtn");
+        var modal = document.getElementById("expModal");
+        var form = document.getElementById("expForm");
+        var saveBtn = document.getElementById("expSaveBtn");
+        var saveCloseBtn = document.getElementById("expSaveCloseBtn");
+        var toast = document.getElementById("expToast");
+        var toastTimer = null;
+
+        var allExpenses = []; // full dataset from Supabase
+        var loaded = false;   // fetch only once
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+        function fmtDate(iso) {
+          // Postgres `date` column arrives as "YYYY-MM-DD"
+          var p = String(iso || "").split("-");
+          return p.length === 3 ? (p[2] + "/" + p[1] + "/" + p[0]) : esc(iso);
+        }
+        function fmtAmount(n) {
+          return "₪" + Number(n || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function currentRows() {
+          var cat = filterCategory.value, from = filterFrom.value, to = filterTo.value;
+          return allExpenses.filter(function (r) {
+            if (cat && r.category !== cat) return false;
+            if (from && r.date < from) return false;
+            if (to && r.date > to) return false;
+            return true;
+          });
+        }
+
+        function renderSummary() {
+          var total = allExpenses
+            .filter(function (r) { return r.date >= EXPENSES_SINCE; })
+            .reduce(function (sum, r) { return sum + Number(r.amount || 0); }, 0);
+          totalEl.textContent = fmtAmount(total);
+          totalTrendEl.textContent = "סה״כ " + allExpenses.length + " רשומות";
+        }
+
+        function render() {
+          var rows = currentRows();
+          if (!rows.length) {
+            body.innerHTML = '<tr><td colspan="5" class="leads-empty">' +
+              (allExpenses.length ? "לא נמצאו הוצאות התואמות את הסינון." : "אין עדיין הוצאות רשומות.") + "</td></tr>";
+            return;
+          }
+          body.innerHTML = rows.map(function (r) {
+            return "<tr>" +
+              "<td>" + fmtDate(r.date) + "</td>" +
+              "<td>" + esc(r.category) + "</td>" +
+              '<td class="col-amount">' + fmtAmount(r.amount) + "</td>" +
+              '<td class="col-desc">' + (r.description ? esc(r.description) : '<span class="leads-muted">—</span>') + "</td>" +
+              '<td><button type="button" class="exp-del-btn" data-id="' + esc(r.id) + '" aria-label="מחיקת הוצאה">🗑</button></td>' +
+              "</tr>";
+          }).join("");
+        }
+
+        function renderAll() { renderSummary(); render(); }
+
+        [filterCategory, filterFrom, filterTo].forEach(function (el) {
+          el.addEventListener("input", render);
+          el.addEventListener("change", render);
+        });
+
+        body.addEventListener("click", function (e) {
+          var btn = e.target.closest(".exp-del-btn");
+          if (!btn) return;
+          var id = btn.getAttribute("data-id");
+          if (!confirm("למחוק את ההוצאה הזו?")) return;
+          btn.disabled = true;
+          sb.from("business_expenses").delete().eq("id", id).then(function (res) {
+            if (res.error) {
+              alert("שגיאה במחיקת ההוצאה. נסו שוב.");
+              btn.disabled = false;
+              return;
+            }
+            allExpenses = allExpenses.filter(function (r) { return r.id !== id; });
+            renderAll();
+          });
+        });
+
+        /* ---------- Add-expense modal ----------
+           "שמירה" saves and keeps the modal open (date + category kept as-is,
+           only amount/description clear) so Ori can log a run of historical
+           expenses for March 2026 onward without reopening the modal each
+           time. "שמירה וסגירה" saves and closes, matching the old behavior. */
+        var lastFocused = null;
+        function showToast() {
+          clearTimeout(toastTimer);
+          toast.hidden = false;
+          toastTimer = setTimeout(function () { toast.hidden = true; }, 2500);
+        }
+        function openModal() {
+          lastFocused = document.activeElement;
+          modal.hidden = false;
+          toast.hidden = true;
+          document.body.style.overflow = "hidden";
+          document.getElementById("expDate").value = new Date().toISOString().slice(0, 10);
+          document.getElementById("expDate").focus();
+        }
+        function closeModal() {
+          modal.hidden = true;
+          document.body.style.overflow = "";
+          clearTimeout(toastTimer);
+          toast.hidden = true;
+          form.reset();
+          if (lastFocused) lastFocused.focus();
+        }
+        // Clears only amount + description; date/category stay for the next entry.
+        function resetForNextEntry() {
+          document.getElementById("expAmount").value = "";
+          document.getElementById("expDesc").value = "";
+          document.getElementById("expAmount").focus();
+        }
+        addBtn.addEventListener("click", openModal);
+        Array.prototype.forEach.call(modal.querySelectorAll("[data-exp-close]"), function (el) {
+          el.addEventListener("click", closeModal);
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && !modal.hidden) closeModal();
+        });
+
+        form.addEventListener("submit", function (e) {
+          e.preventDefault();
+          var closeAfter = e.submitter && e.submitter.id === "expSaveCloseBtn";
+          var date = document.getElementById("expDate").value;
+          var category = document.getElementById("expCategory").value;
+          var amount = parseFloat(document.getElementById("expAmount").value);
+          var description = document.getElementById("expDesc").value.trim();
+          if (!date || !category || !amount || amount <= 0) return;
+
+          saveBtn.disabled = true;
+          saveCloseBtn.disabled = true;
+          var clickedBtn = closeAfter ? saveCloseBtn : saveBtn;
+          var clickedLabel = clickedBtn.textContent;
+          clickedBtn.textContent = "שומר…";
+          sb.from("business_expenses")
+            .insert({ date: date, category: category, amount: amount, description: description || null })
+            .select()
+            .then(function (res) {
+              saveBtn.disabled = false;
+              saveCloseBtn.disabled = false;
+              clickedBtn.textContent = clickedLabel;
+              if (res.error || !res.data || !res.data[0]) {
+                alert("שגיאה בשמירת ההוצאה. נסו שוב.");
+                return;
+              }
+              allExpenses.unshift(res.data[0]);
+              renderAll();
+              showToast();
+              if (closeAfter) closeModal(); else resetForNextEntry();
+            });
+        });
+
+        /* ---------- Excel export for the accountant (Tal Carmeli) ----------
+           One worksheet per calendar month that has expenses (e.g. "מרץ 2026"),
+           each grouped by category with a bold sub-total row per category and
+           a grand-total row at the bottom. Reuses MRP_LOGO_DATA_URI (defined
+           above for the work-order PDF) so the logo never depends on a network
+           fetch. ExcelJS (not SheetJS) because its free build can embed images
+           in the worksheet. */
+        function addMonthSheet(workbook, sheetName, monthRows) {
+          var sheet = workbook.addWorksheet(sheetName, { views: [{ rightToLeft: true, state: "frozen", ySplit: 5 }] });
+          sheet.columns = [{ width: 14 }, { width: 34 }, { width: 16 }, { width: 44 }];
+          sheet.pageSetup = {
+            orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+            margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 }
+          };
+
+          // ----- Header: logo + business identity (repeated on every monthly sheet) -----
+          var logoId = workbook.addImage({ base64: MRP_LOGO_DATA_URI, extension: "jpeg" });
+          sheet.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 60, height: 60 } });
+          sheet.getRow(1).height = 46;
+
+          sheet.mergeCells("B1:D1");
+          sheet.getCell("B1").value = "Mr. Polish - מיסטר פוליש";
+          sheet.getCell("B1").font = { bold: true, size: 16 };
+          sheet.mergeCells("B2:D2");
+          sheet.getCell("B2").value = "עוסק פטור 023062185";
+          sheet.getCell("B2").font = { size: 11, color: { argb: "FF555555" } };
+          sheet.mergeCells("B3:D3");
+          sheet.getCell("B3").value = "דו\"ח הוצאות עסק — " + sheetName + " — עבור: טל כרמלי, רואה חשבון";
+          sheet.getCell("B3").font = { size: 11, italic: true };
+
+          var headerRow = sheet.getRow(5);
+          headerRow.values = ["תאריך", "קטגוריה", "סכום (₪)", "תיאור"];
+          headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+          headerRow.eachCell(function (cell) {
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E1E1E" } };
+            cell.alignment = { horizontal: "center", vertical: "middle" };
+          });
+
+          // ----- Rows grouped by category, each with a bold sub-total row -----
+          var monthTotal = 0;
+          CATEGORY_ORDER.forEach(function (cat) {
+            var catRows = monthRows
+              .filter(function (r) { return r.category === cat; })
+              .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+            if (!catRows.length) return;
+
+            var groupRow = sheet.addRow([cat, "", "", ""]);
+            sheet.mergeCells(groupRow.number, 1, groupRow.number, 4);
+            groupRow.getCell(1).font = { bold: true, color: { argb: "FF9A7B1E" } };
+            groupRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3E9D2" } };
+            groupRow.getCell(1).alignment = { horizontal: "center" };
+
+            var catTotal = 0;
+            catRows.forEach(function (r) {
+              catTotal += Number(r.amount || 0);
+              var row = sheet.addRow([fmtDate(r.date), r.category, Number(r.amount || 0), r.description || ""]);
+              row.getCell(3).numFmt = '#,##0.00 "₪"';
+              row.getCell(1).alignment = { horizontal: "center" };
+              row.getCell(2).alignment = { horizontal: "center" };
+              row.getCell(3).alignment = { horizontal: "center" };
+              row.getCell(4).alignment = { horizontal: "right" };
+            });
+
+            var subtotalRow = sheet.addRow(["", 'סה"כ ' + cat, catTotal, ""]);
+            subtotalRow.font = { bold: true };
+            subtotalRow.getCell(2).alignment = { horizontal: "center" };
+            subtotalRow.getCell(3).alignment = { horizontal: "center" };
+            subtotalRow.getCell(3).numFmt = '#,##0.00 "₪"';
+            subtotalRow.eachCell(function (cell) { cell.border = { top: { style: "thin" } }; });
+
+            monthTotal += catTotal;
+            sheet.addRow([]); // spacer between category groups
+          });
+
+          var grandRow = sheet.addRow(["", "סה\"כ הוצאות לחודש", monthTotal, ""]);
+          grandRow.eachCell(function (cell) {
+            cell.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+            cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E1E1E" } };
+          });
+          grandRow.getCell(2).alignment = { horizontal: "center" };
+          grandRow.getCell(3).alignment = { horizontal: "center" };
+          grandRow.getCell(3).numFmt = '#,##0.00 "₪"';
+        }
+
+        exportBtn.addEventListener("click", function () {
+          if (!window.ExcelJS) { alert("שגיאה בטעינת ספריית האקסל. נסו לרענן את הדף."); return; }
+          if (!allExpenses.length) { alert("אין הוצאות לייצוא."); return; }
+          exportBtn.disabled = true;
+
+          var workbook = new window.ExcelJS.Workbook();
+          workbook.creator = "Mr. Polish";
+
+          var byMonth = {};
+          allExpenses.forEach(function (r) {
+            var k = String(r.date).slice(0, 7); // "YYYY-MM"
+            (byMonth[k] = byMonth[k] || []).push(r);
+          });
+          Object.keys(byMonth).sort().forEach(function (k) {
+            var parts = k.split("-");
+            var sheetName = HEBREW_MONTHS[parseInt(parts[1], 10) - 1] + " " + parts[0];
+            addMonthSheet(workbook, sheetName, byMonth[k]);
+          });
+
+          workbook.xlsx.writeBuffer().then(function (buffer) {
+            var blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = "מיסטר-פוליש-הוצאות-" + new Date().toISOString().slice(0, 10) + ".xlsx";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            exportBtn.disabled = false;
+          }).catch(function () {
+            alert("אירעה שגיאה בהפקת קובץ האקסל. נסו שוב.");
+            exportBtn.disabled = false;
+          });
+        });
+
+        return function loadExpenses() {
+          if (loaded) return;
+          loaded = true;
+          sb.from("business_expenses")
+            .select("id, date, category, amount, description")
+            .order("date", { ascending: false })
+            .then(function (res) {
+              if (res.error) {
+                loaded = false; // allow retry on next open
+                body.innerHTML = '<tr><td colspan="5" class="leads-empty">שגיאה בטעינת ההוצאות. נסו לרענן.</td></tr>';
+                return;
+              }
+              allExpenses = res.data || [];
+              renderAll();
+            });
+        };
+      })();
     })();
   </script>
 </body>
