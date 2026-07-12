@@ -451,6 +451,7 @@
     .cq-week-detail-item .info { flex:1; min-width:0; }
     .cq-week-detail-item .cat { font-size:.68rem; font-weight:800; color:var(--gold-700); }
     .cq-week-detail-item .cap { font-size:.78rem; color:var(--ink-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-block-start:1px; }
+    .cq-pin-icon { display:inline-block; margin-inline-end:4px; font-size:.85em; filter:drop-shadow(0 0 1px oklch(0.5 0.1 80 / .3)); }
     .cq-week-detail-item .time { font-size:.68rem; color:var(--ink-500); white-space:nowrap; }
     .cq-week-detail-item .actions { flex-shrink:0; }
 
@@ -914,7 +915,8 @@
               <select id="cqFilterStatus">
                 <option value="">כל הסטטוסים</option>
                 <option value="pending_approval">ממתין לאישור</option>
-                <option value="approved">מאושר</option>
+                <option value="approved_ready">מאושר לפרסום</option>
+                <option value="queued">ממתין לפרסום</option>
                 <option value="published">פורסם</option>
                 <option value="failed">נכשל</option>
                 <option value="rejected">נדחה</option>
@@ -2228,7 +2230,12 @@
         function currentRows() {
           var st = filterStatus.value, pl = filterPlatform.value, cat = filterCategory.value, sort = sortBy.value;
           var rows = allContent.filter(function (r) {
-            if (st && r.status !== st) return false;
+            // Filtered against the *displayed* status (approved_ready/queued), not the raw
+            // DB column, so "ממתין לפרסום" in the dropdown matches exactly what's on-screen:
+            // both natively-scheduled Facebook rows (status='scheduled') and approved rows
+            // still waiting for a future scheduled_for (status='approved') - see
+            // effectiveStatusKey(), which is the same function every badge/dot/legend uses.
+            if (st && effectiveStatusKey(r) !== st) return false;
             if (pl && r.platform !== pl) return false;
             if (cat && r.content_category !== cat) return false;
             return true;
@@ -2360,11 +2367,15 @@
           } else {
             actionBtn = '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
           }
+          // Shown regardless of status/group (pending, approved, queued, failed, published)
+          // so Ori can see what's flagged for pinning before it's even published, not just
+          // once the full post-publish reminder (pinReminderHtml, main card grid) appears.
+          var pinIcon = r.pin_requested ? '<span class="cq-pin-icon" title="מסומן לנעיצה לאחר הפרסום">📌</span>' : "";
           return '<div class="cq-week-detail-item">' +
             thumb +
             '<div class="info">' +
               '<div class="cat">' + esc(CATEGORY_LABELS[r.content_category] || "") + "</div>" +
-              '<div class="cap">' + esc(r.title || r.caption) + "</div>" +
+              '<div class="cap">' + pinIcon + esc(r.title || r.caption) + "</div>" +
             "</div>" +
             '<span class="time">' + timeStr + "</span>" +
             '<span class="actions">' + actionBtn + "</span>" +
