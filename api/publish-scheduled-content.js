@@ -1,6 +1,14 @@
 // Vercel cron job: publishes approved, due rows from content_queue to
 // Facebook + Instagram, then writes the result back to Supabase.
 //
+// This file's core per-row logic (publishOne) is shared with
+// api/publish-now.js, the real-time "Approve button" trigger — see
+// that file's header for why a second entry point exists. Both call
+// the exact same Meta-publishing code; only how a row is *selected*
+// (a batch of due rows here vs. one specific id there) and *who's
+// allowed to call it* (CRON_SECRET here vs. a real Supabase session
+// there) differ.
+//
 // Auth: protected by CRON_SECRET (Vercel automatically sends
 // "Authorization: Bearer {CRON_SECRET}" when it triggers a configured
 // cron job — see vercel.json). Rejects any request without a matching
@@ -20,10 +28,19 @@
 // short poll below (~10s) is enough for images but will need a
 // two-phase "create container now, check+publish on a later run"
 // design before real video/Reel content goes through this pipeline.
+// The real-time trigger in publish-now.js inherits this same limit —
+// a slow IG video publish can still exceed one request's time budget,
+// in which case the row is simply left as-is and the daily cron here
+// picks it up as the fallback (see that file's header).
 "use strict";
 
 const GRAPH_VERSION = "v20.0";
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
+
+// Facebook rejects scheduled_publish_time closer than ~10 minutes out (and further than 75
+// days). Anything nearer than this is treated as "due now" and published immediately instead
+// of attempting a scheduling call that Meta would just reject.
+const FB_MIN_SCHEDULE_MS = 11 * 60 * 1000;
 
 function supabaseHeaders() {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -44,6 +61,14 @@ async function fetchDueApproved() {
   return res.json();
 }
 
+async function fetchRowById(id) {
+  var url = SUPABASE_URL + "/rest/v1/content_queue?id=eq." + encodeURIComponent(id) + "&select=*";
+  var res = await fetch(url, { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("Supabase query failed: " + res.status);
+  var rows = await res.json();
+  return rows[0] || null;
+}
+
 async function updateRow(id, patch) {
   var url = SUPABASE_URL + "/rest/v1/content_queue?id=eq." + encodeURIComponent(id);
   var res = await fetch(url, {
@@ -56,13 +81,21 @@ async function updateRow(id, patch) {
 
 async function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-async function publishFacebook(row, token, pageId) {
+// scheduledForDate: pass a Date to schedule a future Facebook post (published:false +
+// scheduled_publish_time) instead of publishing immediately. Instagram has no equivalent —
+// see publishOne, which never calls publishInstagram for a genuinely future row.
+async function publishFacebook(row, token, pageId, scheduledForDate) {
+  var scheduleParams = {};
+  if (scheduledForDate) {
+    scheduleParams.published = false;
+    scheduleParams.scheduled_publish_time = Math.floor(scheduledForDate.getTime() / 1000);
+  }
   if (row.media_type === "image") {
     var url = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + pageId + "/photos";
     var res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: row.media_url, caption: row.caption, access_token: token })
+      body: JSON.stringify(Object.assign({ url: row.media_url, caption: row.caption, access_token: token }, scheduleParams))
     });
     var data = await res.json();
     if (data.error) throw new Error("Facebook: " + data.error.message);
@@ -73,7 +106,7 @@ async function publishFacebook(row, token, pageId) {
   var vRes = await fetch(vUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_url: row.media_url, description: row.caption, access_token: token })
+    body: JSON.stringify(Object.assign({ file_url: row.media_url, description: row.caption, access_token: token }, scheduleParams))
   });
   var vData = await vRes.json();
   if (vData.error) throw new Error("Facebook: " + vData.error.message);
@@ -124,6 +157,57 @@ async function publishInstagram(row, token, igUserId) {
   return publishData.id;
 }
 
+// The one function both entry points (cron batch loop + the real-time single-row trigger)
+// call. ctx: { token, pageId, igUserId, triggerSource: 'cron' | 'manual' }.
+async function publishOne(row, ctx) {
+  var now = new Date();
+  var scheduledFor = new Date(row.scheduled_for);
+  var isFuture = scheduledFor.getTime() - now.getTime() > FB_MIN_SCHEDULE_MS;
+  var hasFacebook = row.platform === "facebook" || row.platform === "both";
+  var hasInstagram = (row.platform === "instagram" || row.platform === "both") && ctx.igUserId;
+
+  // Instagram has no native "schedule for later" — every IG call publishes immediately.
+  // Any row with an Instagram side that's genuinely in the future is left completely
+  // alone here: publishing it now would go live today, silently breaking the whole point
+  // of "future". The daily cron remains the only thing that safely handles it, once its
+  // real scheduled_for actually arrives (its status is still 'approved', so the cron's
+  // existing query picks it up normally — nothing extra needed on that side).
+  if (isFuture && hasInstagram) {
+    return {
+      id: row.id, ok: true, deferred: true,
+      reason: "Instagram has no native scheduling API — this will publish via the daily cron on " + row.scheduled_for + "."
+    };
+  }
+
+  var fbPostId = null, igPostId = null;
+  try {
+    if (hasFacebook) fbPostId = await publishFacebook(row, ctx.token, ctx.pageId, isFuture ? scheduledFor : null);
+    if (hasInstagram) igPostId = await publishInstagram(row, ctx.token, ctx.igUserId); // only reached when !isFuture (see guard above)
+
+    var newStatus = isFuture ? "scheduled" : "published"; // isFuture here only ever means "Facebook-only, future"
+    var patch = {
+      status: newStatus, fb_post_id: fbPostId, ig_post_id: igPostId, publish_error: null,
+      trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
+      last_publish_attempt_at: new Date().toISOString()
+    };
+    if (newStatus === "published") patch.published_at = new Date().toISOString();
+    await updateRow(row.id, patch);
+    return { id: row.id, ok: true, status: newStatus, fbPostId: fbPostId, igPostId: igPostId };
+  } catch (err) {
+    var error = err.message;
+    try {
+      await updateRow(row.id, {
+        status: "failed", publish_error: error,
+        trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
+        last_publish_attempt_at: new Date().toISOString()
+      });
+    } catch (updateErr) {
+      error += " (also failed to record error: " + updateErr.message + ")";
+    }
+    return { id: row.id, ok: false, error: error };
+  }
+}
+
 module.exports = async function handler(req, res) {
   var cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -151,35 +235,21 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  console.log("[cron] " + due.length + " due row(s) found");
+  var ctx = { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "cron" };
   var results = [];
   for (var i = 0; i < due.length; i++) {
-    var row = due[i];
-    var fbPostId = null, igPostId = null, error = null;
-    try {
-      if (row.platform === "facebook" || row.platform === "both") {
-        fbPostId = await publishFacebook(row, token, pageId);
-      }
-      if ((row.platform === "instagram" || row.platform === "both") && igUserId) {
-        igPostId = await publishInstagram(row, token, igUserId);
-      }
-      await updateRow(row.id, {
-        status: "published",
-        published_at: new Date().toISOString(),
-        fb_post_id: fbPostId,
-        ig_post_id: igPostId,
-        publish_error: null
-      });
-      results.push({ id: row.id, ok: true, fbPostId: fbPostId, igPostId: igPostId });
-    } catch (err) {
-      error = err.message;
-      try {
-        await updateRow(row.id, { status: "failed", publish_error: error });
-      } catch (updateErr) {
-        error += " (also failed to record error: " + updateErr.message + ")";
-      }
-      results.push({ id: row.id, ok: false, error: error });
-    }
+    var result = await publishOne(due[i], ctx);
+    console.log("[cron] row=" + due[i].id + " " + JSON.stringify(result));
+    results.push(result);
   }
 
   res.status(200).json({ processed: results.length, results: results });
 };
+
+// Exported for api/publish-now.js (the real-time Approve-button trigger) to reuse — see
+// that file's header. Attaching to the exported handler function itself keeps this a
+// single file with one Vercel route (module.exports must stay a callable handler), while
+// still letting a sibling file `require()` these pieces internally.
+module.exports.publishOne = publishOne;
+module.exports.fetchRowById = fetchRowById;

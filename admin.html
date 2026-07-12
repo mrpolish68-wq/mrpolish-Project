@@ -331,6 +331,7 @@
     .cq-badge { position:absolute; inset-block-start:10px; inset-inline-end:10px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:700; color:var(--white); }
     .cq-badge.st-pending_approval { background:oklch(0.72 0.14 70); }
     .cq-badge.st-approved { background:oklch(0.6 0.14 150); }
+    .cq-badge.st-scheduled { background:oklch(0.58 0.16 300); }
     .cq-badge.st-published { background:oklch(0.5 0.12 250); }
     .cq-badge.st-failed { background:oklch(0.55 0.18 25); }
     .cq-badge.st-rejected { background:var(--ink-500); }
@@ -438,6 +439,13 @@
     .cq-week-detail-item .cap { font-size:.78rem; color:var(--ink-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-block-start:1px; }
     .cq-week-detail-item .time { font-size:.68rem; color:var(--ink-500); white-space:nowrap; }
     .cq-week-detail-item .actions { flex-shrink:0; }
+
+    /* Real-time Meta sync feedback - shown in place of the approve/reject buttons the
+       instant "אשר" is clicked, until publish-now.js responds. Reuses the @keyframes
+       cqSpin defined above for the week-detail loading state. */
+    .cq-syncing { display:inline-flex; align-items:center; gap:7px; font-size:.8rem; font-weight:700; color:var(--gold-700); white-space:nowrap; }
+    .cq-syncing-spinner { width:14px; height:14px; border-radius:50%; border:2px solid var(--marble-200); border-top-color:var(--gold-600); animation:cqSpin .7s linear infinite; flex-shrink:0; }
+    .cq-deferred-note { font-size:.76rem; color:var(--ink-500); font-style:italic; }
 
     /* List/Week view toggle */
     .cq-view-toggle { display:flex; gap:6px; margin-inline-start:auto; }
@@ -1985,12 +1993,14 @@
 
         var STATUS_LABELS = {
           pending_approval: "ממתין לאישור", approved: "מאושר",
-          published: "פורסם", failed: "נכשל", rejected: "נדחה"
+          scheduled: "מתוזמן במטא", published: "פורסם", failed: "נכשל", rejected: "נדחה"
         };
         var STATUS_DOT_COLOR = {
           pending_approval: "oklch(0.72 0.14 70)", approved: "oklch(0.6 0.14 150)",
-          published: "oklch(0.5 0.12 250)", failed: "oklch(0.55 0.18 25)", rejected: "var(--ink-500)"
+          scheduled: "oklch(0.58 0.16 300)", published: "oklch(0.5 0.12 250)",
+          failed: "oklch(0.55 0.18 25)", rejected: "var(--ink-500)"
         };
+        var syncingIds = {}; // id -> true while a real-time publish-now.js request is in flight
         var PLATFORM_LABELS = { facebook: "📘 פייסבוק", instagram: "📸 אינסטגרם", both: "📘📸 שתיהן" };
         var HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
         var DOWS = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
@@ -2081,7 +2091,9 @@
         function cardHtml(r) {
           var errorHtml = r.publish_error ? '<div class="cq-error">⚠️ ' + esc(r.publish_error) + "</div>" : "";
           var actionsHtml = "";
-          if (r.status === "pending_approval" || r.status === "failed") {
+          if (syncingIds[r.id]) {
+            actionsHtml = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן עם מטא…</span>';
+          } else if (r.status === "pending_approval" || r.status === "failed") {
             actionsHtml =
               '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>' +
               '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ דחה</button>';
@@ -2181,7 +2193,7 @@
           healthBarsEl.innerHTML = order.map(function (cat) {
             var items = rowsInWeek.filter(function (r) { return r.content_category === cat; });
             var total = items.length;
-            var done = items.filter(function (r) { return r.status === "approved" || r.status === "published"; }).length;
+            var done = items.filter(function (r) { return r.status === "approved" || r.status === "scheduled" || r.status === "published"; }).length;
             var pendingCt = items.filter(function (r) { return r.status === "pending_approval"; }).length;
             var donePct = total ? Math.round((done / total) * 100) : 0;
             var pendingPct = total ? Math.round((pendingCt / total) * 100) : 0;
@@ -2244,9 +2256,11 @@
             : '<div class="thumb"></div>';
           var t = israelParts(r.scheduled_for);
           var timeStr = t ? pad2(t.h) + ":" + pad2(t.min) : "";
-          var actionBtn = r.status === "pending_approval"
-            ? '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>'
-            : '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
+          var actionBtn = syncingIds[r.id]
+            ? '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן…</span>'
+            : r.status === "pending_approval"
+              ? '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>'
+              : '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
           return '<div class="cq-week-detail-item">' +
             thumb +
             '<div class="info">' +
@@ -2452,6 +2466,7 @@
               });
               clearSelection();
               renderAll();
+              (res.data || []).forEach(function (updated) { triggerRealtimePublish(updated.id); });
             });
         }
         function bulkReject() {
@@ -2605,7 +2620,76 @@
             return updated;
           });
         }
-        function approve(id) { updateRow(id, { status: "approved", approved_at: new Date().toISOString() }); }
+        /* ---------- Real-time Meta publish trigger (api/publish-now.js) ----------
+           Approving used to only flip status in Supabase and wait for the once-daily
+           cron. Now: set status='approved' as before (so the row is never lost even if
+           the network call below never completes), then immediately ask the server to
+           actually publish it. The daily cron is untouched and still runs — it's what
+           picks up anything this real-time call couldn't finish (see publish-now.js's
+           header for the exact fallback reasoning). */
+        function patchLocalRow(id, patch) {
+          allContent = allContent.map(function (r) { return r.id === id ? Object.assign({}, r, patch) : r; });
+        }
+        function setSyncing(id, on) {
+          if (on) syncingIds[id] = true; else delete syncingIds[id];
+          renderAll();
+        }
+        function triggerRealtimePublish(id) {
+          setSyncing(id, true);
+          sb.auth.getSession().then(function (sessionRes) {
+            var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+            if (!token) {
+              setSyncing(id, false);
+              patchLocalRow(id, { publish_error: "לא ניתן לאמת את החיבור לפרסום מיידי. נסו לרענן את הדף (הפוסט נשאר מאושר, ה-Cron היומי עדיין ינסה לפרסם אותו)." });
+              renderAll();
+              return;
+            }
+            fetch("/api/publish-now", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+              body: JSON.stringify({ id: id })
+            })
+              .then(function (res) { return res.json().then(function (data) { return { httpOk: res.ok, data: data }; }); })
+              .then(function (result) {
+                setSyncing(id, false);
+                var data = result.data || {};
+                if (data.deferred) {
+                  // Instagram can't be scheduled early - row is correctly still "approved";
+                  // this is expected, not a failure. Nothing to patch except clearing any
+                  // stale error from a previous attempt.
+                  patchLocalRow(id, { publish_error: null });
+                } else if (result.httpOk && data.ok) {
+                  patchLocalRow(id, {
+                    status: data.status || "published",
+                    fb_post_id: data.fbPostId || null,
+                    ig_post_id: data.igPostId || null,
+                    publish_error: null
+                  });
+                } else {
+                  // publish-now.js always tells us the real resulting status when it
+                  // actually attempted a publish (502 -> "failed", 409 -> whatever it
+                  // already was). If data.status is missing entirely (401/400/404/500 -
+                  // e.g. an auth or config error), publishOne never even ran, so the row
+                  // is untouched server-side too - leave the local status alone rather
+                  // than guess, and just surface the error + cron-fallback note.
+                  var patch = { publish_error: (data.error || "שגיאה לא ידועה בסנכרון עם מטא.") + " הפוסט לא אבד - אם נשאר במצב \"מאושר\", ה-Cron היומי ינסה שוב." };
+                  if (data.status) patch.status = data.status;
+                  patchLocalRow(id, patch);
+                }
+                renderAll();
+              })
+              .catch(function () {
+                setSyncing(id, false);
+                patchLocalRow(id, { publish_error: "לא הצלחנו להגיע לשרת הפרסום המיידי (בעיית רשת). הפוסט נשאר מאושר - ה-Cron היומי ינסה לפרסם אותו אוטומטית." });
+                renderAll();
+              });
+          });
+        }
+        function approve(id) {
+          updateRow(id, { status: "approved", approved_at: new Date().toISOString() }).then(function (updated) {
+            if (updated) triggerRealtimePublish(id);
+          });
+        }
         function reject(id) {
           if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
           updateRow(id, { status: "rejected" });
@@ -2767,12 +2851,16 @@
         });
         modalApproveBtn.addEventListener("click", function () {
           if (!activeId) return;
+          var idToPublish = activeId; // closeModal() clears activeId, so capture it first
           var scheduled = scheduledFromModal();
           if (!scheduled) { alert("תאריך/שעה לא תקינים."); return; }
           updateRow(activeId, {
             caption: modalCaption.value, scheduled_for: scheduled,
             status: "approved", approved_at: new Date().toISOString()
-          }).then(function () { closeModal(); });
+          }).then(function (updated) {
+            closeModal();
+            if (updated) triggerRealtimePublish(idToPublish);
+          });
         });
         modalRejectBtn.addEventListener("click", function () {
           if (!activeId) return;
