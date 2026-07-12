@@ -255,6 +255,33 @@ async function checkScheduledStatus(row, ctx) {
   }
 }
 
+// Checks Meta's one read-only pin-related field — there is no write endpoint to actually
+// set a pin (see api/check-pin-status.js's header, and handoff.md, for the full research).
+// This just tells the dashboard whether the Page's current pinned_post already happens to
+// match this row, so Ori can verify a manual pin he just did in Facebook's own UI without
+// having to eyeball the Page. Facebook-only — Instagram has no equivalent field at all.
+async function checkPinStatus(row, ctx) {
+  if (!row.fb_post_id) {
+    return { id: row.id, ok: false, error: "אין מזהה פוסט בפייסבוק לבדיקה." };
+  }
+  try {
+    var url = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + ctx.pageId +
+      "?fields=pinned_post&access_token=" + encodeURIComponent(ctx.token);
+    var res = await fetch(url);
+    var data = await res.json();
+    if (data.error) throw new Error("Facebook: " + data.error.message);
+
+    var pinnedId = data.pinned_post && data.pinned_post.id;
+    var isPinned = pinnedId === row.fb_post_id;
+    if (isPinned) {
+      await updateRow(row.id, { pin_confirmed_at: new Date().toISOString() });
+    }
+    return { id: row.id, ok: true, pinned: isPinned };
+  } catch (err) {
+    return { id: row.id, ok: false, error: err.message };
+  }
+}
+
 module.exports = async function handler(req, res) {
   var cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -318,3 +345,4 @@ module.exports = async function handler(req, res) {
 module.exports.publishOne = publishOne;
 module.exports.fetchRowById = fetchRowById;
 module.exports.checkScheduledStatus = checkScheduledStatus;
+module.exports.checkPinStatus = checkPinStatus;

@@ -522,7 +522,26 @@
     }
     .cq-modal-field textarea { min-height:140px; resize:vertical; line-height:1.6; }
     .cq-modal-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .cq-pin-toggle {
+      display:flex; align-items:center; gap:8px; font-size:.86rem; font-weight:600; color:var(--char-800);
+      padding:10px 12px; background:var(--marble-50); border:1px solid var(--marble-200); border-radius:10px;
+      margin-block-start:14px; cursor:pointer;
+    }
+    .cq-pin-toggle input { accent-color:var(--gold-600); width:17px; height:17px; flex-shrink:0; }
+    .cq-pin-toggle-note { font-weight:400; color:var(--ink-500); font-size:.78rem; }
     .cq-modal-actions { display:flex; gap:10px; flex-wrap:wrap; margin-block-start:6px; }
+
+    /* Pin reminder — shown on a published/scheduled card whose pin_requested is still
+       unconfirmed. Deliberately gold/attention-grabbing (not a status badge, not an error)
+       since it represents a real manual step in Meta's own UI Ori still needs to do. */
+    .cq-pin-reminder {
+      display:flex; flex-direction:column; gap:8px; padding:10px 12px; margin-block-start:8px;
+      background:linear-gradient(135deg, oklch(0.96 0.05 88), oklch(0.94 0.06 86));
+      border:1.5px solid var(--gold-500); border-radius:10px; font-size:.82rem; color:var(--char-900);
+    }
+    .cq-pin-reminder .head { font-weight:800; display:flex; align-items:center; gap:6px; }
+    .cq-pin-reminder .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .cq-pin-reminder a.btn { text-decoration:none; }
 
     /* Preview modal: FB/Instagram mockup tabs */
     .cq-mock-tabs { display:flex; gap:8px; margin-block-end:14px; }
@@ -1008,6 +1027,10 @@
           <input type="time" id="cqModalTime" />
         </div>
       </div>
+      <label class="cq-pin-toggle">
+        <input type="checkbox" id="cqModalPinToggle" />
+        📌 נעיצה בראש הדף לאחר הפרסום <span class="cq-pin-toggle-note">(פייסבוק בלבד — Instagram אינו נתמך ב-API של מטא, ראו הערה בכרטיס לאחר הפרסום)</span>
+      </label>
       <div class="cq-modal-actions">
         <button class="btn btn-navy btn-sm" id="cqModalSave">💾 שמירת שינויים</button>
         <button class="btn btn-shimmer btn-sm" id="cqModalApprove">✅ אשר ותזמן</button>
@@ -1969,6 +1992,7 @@
         var modalTime = document.getElementById("cqModalTime");
         var modalSaveBtn = document.getElementById("cqModalSave");
         var modalApproveBtn = document.getElementById("cqModalApprove");
+        var modalPinToggle = document.getElementById("cqModalPinToggle");
         var modalRejectBtn = document.getElementById("cqModalReject");
         var mockTabs = modal.querySelectorAll(".cq-mock-tab");
         var mockFb = document.getElementById("cqMockFacebook");
@@ -2122,8 +2146,31 @@
         function fmtDMShort(key) { return key.split("-").slice(1).reverse().join("/"); }
 
         /* ---------- Shared card renderer (used by both the grid and the calendar's day-detail panel) ---------- */
+        // Meta has no API to pin a post (Facebook: read-only pinned_post field only, no
+        // write endpoint; Instagram: no pin endpoint at all — see handoff.md). This is the
+        // honest substitute: a reminder that stays visible until Ori either confirms he
+        // pinned it manually, or the read-only check confirms it for him. Only ever shown
+        // once the post is actually live (published) — pinning a not-yet-live post isn't
+        // meaningful, and Instagram-only rows never show this at all (pin_requested is a
+        // Facebook-only checkbox to begin with).
+        function pinReminderHtml(r) {
+          if (!r.pin_requested || !r.fb_post_id || r.pin_confirmed_at || r.status !== "published") return "";
+          if (syncingIds["pin-" + r.id]) {
+            return '<div class="cq-pin-reminder"><span class="cq-syncing"><span class="cq-syncing-spinner"></span>בודק אם ננעץ…</span></div>';
+          }
+          return '<div class="cq-pin-reminder">' +
+            '<div class="head">📌 נדרשת נעיצה ידנית בפייסבוק</div>' +
+            "<div>הפוסט פורסם אך עדיין לא ננעץ - מטא לא מאפשרת נעיצה אוטומטית דרך ה-API.</div>" +
+            '<div class="actions">' +
+              '<a class="btn btn-navy btn-sm" href="https://www.facebook.com/' + esc(r.fb_post_id) + '" target="_blank" rel="noopener">🔗 פתיחת הפוסט בפייסבוק</a>' +
+              '<button type="button" class="btn btn-navy btn-sm" data-cq-checkpin="' + esc(r.id) + '">🔄 בדוק אם ננעץ</button>' +
+              '<button type="button" class="btn btn-shimmer btn-sm" data-cq-pinconfirm="' + esc(r.id) + '">✅ סימנתי כנעוץ</button>' +
+            "</div>" +
+          "</div>";
+        }
         function cardHtml(r) {
           var errorHtml = r.publish_error ? '<div class="cq-error">⚠️ ' + esc(r.publish_error) + "</div>" : "";
+          var pinHtml = pinReminderHtml(r);
           var actionsHtml = "";
           if (syncingIds[r.id]) {
             actionsHtml = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן עם מטא…</span>';
@@ -2167,6 +2214,7 @@
               '<div class="cq-card-meta"><span>' + (PLATFORM_LABELS[r.platform] || r.platform) + "</span><span>" + esc(fmtDateTime(r.scheduled_for)) + "</span></div>" +
               '<p class="cq-caption">' + esc(r.caption) + "</p>" +
               errorHtml +
+              pinHtml +
               '<div class="cq-card-actions">' +
                 '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 תצוגה</button>' +
                 '<button type="button" class="btn btn-navy btn-sm" data-cq-duplicate="' + esc(r.id) + '">🔁 שכפול</button>' +
@@ -2795,14 +2843,57 @@
               });
           });
         }
+        // Manual confirmation - Ori pinned it himself in Facebook's real UI, tell the
+        // dashboard so the reminder stops nagging. No Meta call involved (there's nothing
+        // to call); this is purely local bookkeeping via the normal Supabase update.
+        function confirmPinManually(id) {
+          updateRow(id, { pin_confirmed_at: new Date().toISOString() });
+        }
+        // On-demand check against the one thing Meta's API actually exposes: the Page's
+        // real, current pinned_post. If it matches this row's fb_post_id, auto-confirms -
+        // Ori doesn't even need to click "I've pinned it" if he'd rather just verify.
+        function triggerPinCheck(id) {
+          var syncKey = "pin-" + id;
+          setSyncing(syncKey, true);
+          sb.auth.getSession().then(function (sessionRes) {
+            var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+            if (!token) { setSyncing(syncKey, false); renderAll(); return; }
+            fetch("/api/check-pin-status", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+              body: JSON.stringify({ id: id })
+            })
+              .then(function (res) { return res.json().then(function (data) { return { httpOk: res.ok, data: data }; }); })
+              .then(function (result) {
+                setSyncing(syncKey, false);
+                var data = result.data || {};
+                if (result.httpOk && data.ok && data.pinned) {
+                  patchLocalRow(id, { pin_confirmed_at: new Date().toISOString(), publish_error: null });
+                } else if (result.httpOk && data.ok) {
+                  // Checked - genuinely not pinned yet. Not an error, just not done yet.
+                  patchLocalRow(id, { publish_error: null });
+                } else {
+                  patchLocalRow(id, { publish_error: data.error || "שגיאה בבדיקת הנעיצה במטא." });
+                }
+                renderAll();
+              })
+              .catch(function () {
+                setSyncing(syncKey, false);
+                patchLocalRow(id, { publish_error: "לא הצלחנו להגיע לשרת בדיקת הנעיצה (בעיית רשת)." });
+                renderAll();
+              });
+          });
+        }
         function handleActionClick(e) {
-          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview], [data-cq-duplicate], [data-cq-syncnow], [data-cq-checkstatus]");
+          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview], [data-cq-duplicate], [data-cq-syncnow], [data-cq-checkstatus], [data-cq-checkpin], [data-cq-pinconfirm]");
           if (!btn) return;
           if (btn.hasAttribute("data-cq-approve")) approve(btn.getAttribute("data-cq-approve"));
           else if (btn.hasAttribute("data-cq-reject")) reject(btn.getAttribute("data-cq-reject"));
           else if (btn.hasAttribute("data-cq-duplicate")) duplicateRow(btn.getAttribute("data-cq-duplicate"));
           else if (btn.hasAttribute("data-cq-syncnow")) triggerRealtimePublish(btn.getAttribute("data-cq-syncnow"));
           else if (btn.hasAttribute("data-cq-checkstatus")) triggerStatusCheck(btn.getAttribute("data-cq-checkstatus"));
+          else if (btn.hasAttribute("data-cq-checkpin")) triggerPinCheck(btn.getAttribute("data-cq-checkpin"));
+          else if (btn.hasAttribute("data-cq-pinconfirm")) confirmPinManually(btn.getAttribute("data-cq-pinconfirm"));
           else openPreview(btn.getAttribute("data-cq-preview"));
         }
         grid.addEventListener("click", handleActionClick);
@@ -2914,6 +3005,7 @@
           var p = israelParts(row.scheduled_for);
           modalDate.value = p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
           modalTime.value = pad2(p.h) + ":" + pad2(p.min);
+          modalPinToggle.checked = !!row.pin_requested;
           modal.hidden = false;
           document.body.style.overflow = "hidden";
         }
@@ -2959,7 +3051,8 @@
           if (!scheduled) { alert("תאריך/שעה לא תקינים."); return; }
           updateRow(activeId, {
             caption: modalCaption.value, scheduled_for: scheduled,
-            status: "approved", approved_at: new Date().toISOString()
+            status: "approved", approved_at: new Date().toISOString(),
+            pin_requested: modalPinToggle.checked
           }).then(function (updated) {
             closeModal();
             if (updated) triggerRealtimePublish(idToPublish);
