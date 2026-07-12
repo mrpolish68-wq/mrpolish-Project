@@ -95,10 +95,62 @@ async function updateRow(id, patch) {
 
 async function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+// Stories carry no dedicated "underlying asset type" column (media_type='story' just means
+// "publish this as a Story"), so photo-vs-video is inferred from the file extension. Every
+// asset used by this pipeline so far is a plain .jpg/.jpeg/.png/.mp4 served from our own
+// assets/ folder (see handoff.md), so extension sniffing is reliable here.
+function isVideoAsset(url) {
+  return /\.(mp4|mov|m4v|webm)(\?|$)/i.test(url || "");
+}
+
+// Facebook Page Stories (photo_stories / video_stories) are a distinct API family from
+// regular Page posts — publishing a Story means it disappears after 24h and never appears
+// in the Page's feed/timeline. There is no "post as story vs feed" toggle on /photos or
+// /videos; using the wrong endpoint silently creates a permanent feed post instead of an
+// ephemeral Story. Stories cannot be natively scheduled ahead of time via this API (unlike
+// regular posts), so a future-dated Story is refused here rather than silently landing on
+// whatever this function decided to do about "scheduleParams".
+//
+// NOTE: video_stories has not been exercised against the live Graph API yet (this pipeline
+// is still image-only in practice — see file header "Scope note"). Refuse video Stories on
+// Facebook for now rather than ship an unverified chunked-upload flow; photo Stories (the
+// bulk of what's been requested — single project photos with a CTA) are implemented below.
+async function publishFacebookStory(row, token, pageId, scheduledForDate) {
+  if (scheduledForDate) {
+    throw new Error("Facebook Stories cannot be scheduled ahead of time via the Graph API — schedule this row for 'now' instead.");
+  }
+  if (isVideoAsset(row.media_url)) {
+    throw new Error("Facebook video Stories are not yet implemented in this pipeline (photo Stories only) — publish this row to Instagram only, or convert it to a photo Story.");
+  }
+  // Step 1: upload the photo as an unpublished Page post to get a photo_id.
+  var uploadUrl = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + pageId + "/photos";
+  var uploadRes = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: row.media_url, published: false, access_token: token })
+  });
+  var uploadData = await uploadRes.json();
+  if (uploadData.error) throw new Error("Facebook (story photo upload): " + uploadData.error.message);
+
+  // Step 2: publish that photo as a Story.
+  var storyUrl = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + pageId + "/photo_stories";
+  var storyRes = await fetch(storyUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ photo_id: uploadData.id, access_token: token })
+  });
+  var storyData = await storyRes.json();
+  if (storyData.error) throw new Error("Facebook (story publish): " + storyData.error.message);
+  return storyData.post_id || storyData.id;
+}
+
 // scheduledForDate: pass a Date to schedule a future Facebook post (published:false +
 // scheduled_publish_time) instead of publishing immediately. Instagram has no equivalent —
 // see publishOne, which never calls publishInstagram for a genuinely future row.
 async function publishFacebook(row, token, pageId, scheduledForDate) {
+  if (row.media_type === "story") {
+    return publishFacebookStory(row, token, pageId, scheduledForDate);
+  }
   var scheduleParams = {};
   if (scheduledForDate) {
     scheduleParams.published = false;
@@ -136,7 +188,12 @@ async function publishInstagram(row, token, igUserId) {
   var mediaType = row.media_type === "story" ? "STORIES" : row.media_type === "video" || row.media_type === "reel" ? "REELS" : null;
   var containerParams = { caption: row.caption, access_token: token };
   if (mediaType) containerParams.media_type = mediaType;
-  if (row.media_type === "video" || row.media_type === "reel") containerParams.video_url = row.media_url;
+  // A Story's underlying asset can be either a photo or a video (see isVideoAsset comment
+  // above) — media_type='story' alone doesn't say which, so the extension decides which
+  // Graph API param carries the asset. Reels/regular videos are unambiguous already.
+  var isVideoUpload = row.media_type === "video" || row.media_type === "reel" ||
+    (row.media_type === "story" && isVideoAsset(row.media_url));
+  if (isVideoUpload) containerParams.video_url = row.media_url;
   else containerParams.image_url = row.media_url;
   // Stories have no caption/bio-link surface of their own — the link sticker is the only
   // way to drive traffic from one, so this is unconditional rather than opt-in per row.
@@ -174,6 +231,23 @@ async function publishInstagram(row, token, igUserId) {
 // The one function both entry points (cron batch loop + the real-time single-row trigger)
 // call. ctx: { token, pageId, igUserId, triggerSource: 'cron' | 'manual' }.
 async function publishOne(row, ctx) {
+  // Fail closed rather than silently mis-publish: content_category is the dashboard's
+  // marketing classification (what Ori picked when drafting the row) while media_type is
+  // what actually selects the Graph API endpoint (see file header + handoff.md). A Story
+  // row whose media_type doesn't literally equal 'story' would otherwise fall through to
+  // a normal feed photo/video/Reel post below — exactly the "story published as feed post"
+  // failure this guard exists to make impossible. Refuse and mark 'failed' instead.
+  if (row.content_category === "story" && row.media_type !== "story") {
+    var mismatchErr = "Story row has media_type='" + row.media_type + "' instead of 'story' " +
+      "— refusing to publish, since that would post to the feed instead of as a Story.";
+    await updateRow(row.id, {
+      status: "failed", publish_error: mismatchErr,
+      trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
+      last_publish_attempt_at: new Date().toISOString()
+    });
+    return { id: row.id, ok: false, error: mismatchErr };
+  }
+
   var now = new Date();
   var scheduledFor = new Date(row.scheduled_for);
   var isFuture = scheduledFor.getTime() - now.getTime() > FB_MIN_SCHEDULE_MS;
