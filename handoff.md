@@ -1,6 +1,62 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-11. Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-07-12. Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+
+## 0. Source of Truth — current system behavior (read this before §1 onward)
+
+Sections §1 onward are a **chronological log** — real, but some of it (especially §2's inline `content_queue` schema block) predates later changes and is now stale on specific details. This section is the current, correct state as of 2026-07-12. If anything below conflicts with a numbered section further down, **this section wins**.
+
+### Architecture: hybrid event-driven + cron-fallback publishing
+
+The content pipeline is **no longer pure cron-based**. Two publish paths exist, both funneling through the same shared core logic:
+
+- **Real-time (primary path):** clicking "✅ אשר" (Approve) anywhere in the dashboard — the card grid, the calendar day-detail, the Weekly Planner drill-down, or the preview modal's "אשר ותזמן" — immediately calls `POST /api/publish-now` (new endpoint) with the row id, authenticated via the caller's real Supabase session (not `CRON_SECRET` — that identifies Vercel's cron caller, not a person). The dashboard shows a "מסנכרן עם מטא…" spinner in place of the action buttons until it resolves.
+- **Cron (fallback safety net, unchanged in spirit, still required):** `api/publish-scheduled-content.js` still runs on `vercel.json`'s schedule and still queries `status='approved' AND scheduled_for<=now()`. It exists for exactly the cases real-time can't (or shouldn't) resolve immediately: a row approved before its `scheduled_for` arrives, a network failure during the real-time attempt (leaves the row `approved`, cron picks it up later), or a Vercel function timeout on a slow Instagram video/Reel upload.
+- **Shared core, not duplicated logic:** both paths call the same `publishOne(row, ctx)` function, exported from `api/publish-scheduled-content.js` and `require()`'d by `api/publish-now.js` (`ctx.triggerSource` is `'cron'` or `'manual'`, recorded on the row for debugging). Also shared: `checkScheduledStatus()` (does Meta actually show this as published yet — used both by the cron's second pass and the dashboard's on-demand "🔄 בדיקת סטטוס" button) and `fetchRowById()`.
+- **What "future" means per platform, because they're not symmetric:** Facebook's Graph API genuinely supports scheduling (`published:false` + `scheduled_publish_time`) — a future-dated Facebook-only row gets natively scheduled with Meta immediately on Approve, and the row's status becomes `'scheduled'`. **Instagram has no scheduling API at all** — every IG publish call goes live immediately, no exceptions. So a future-dated row with an Instagram side is deliberately left untouched by the real-time path (`publishOne` returns `{deferred: true}` without calling Meta) and stays `status='approved'` until its actual `scheduled_for` arrives and the cron (or a same-day real-time click) publishes it for real. This is a hard platform limitation, not a gap in this implementation.
+
+### Pinning: "Pin Intent" workflow, Facebook-only, by necessity
+
+Meta's Graph API has **no write endpoint to pin a post**, on either platform — confirmed via Meta's own developer community and the total absence of any pin-related endpoint in Instagram's docs. Facebook exposes one **read-only** field (`pinned_post` on the Page object); Instagram exposes nothing pin-related at all. So there is no automatable "pin the post" action — full stop. What exists instead:
+- Approval modal has a "📌 נעיצה בראש הדף לאחר הפרסום" checkbox (Facebook-only, labeled as such in the UI), saved as `content_queue.pin_requested`.
+- Once a `pin_requested` row is actually `published`, its card shows a persistent gold reminder (`pinReminderHtml()` in `admin.html`) — link to the real live post, a manual "✅ סימנתי כנעוץ" confirm button, and an on-demand "🔄 בדוק אם ננעץ" button that calls `POST /api/check-pin-status`, which checks the Page's real `pinned_post` field via `checkPinStatus()` and auto-confirms on a match. Either path sets `content_queue.pin_confirmed_at`, which clears the reminder.
+- This reminder is deliberately **not** polled automatically by the cron (unlike `checkScheduledStatus`) — "did Ori remember to pin this" has no predictable timeline to poll against, so on-demand is the right shape.
+- **If Meta ever adds a write endpoint for this**, see §17 for exactly where a hypothetical `pinPost()` would slot in.
+
+### UI/UX: derived display status (not the raw DB column)
+
+Card badges, calendar dots+legend, the status filter dropdown, and the Weekly Planner drill-down groups **all show a status derived from `status` + `scheduled_for`**, not the raw `content_queue.status` column directly — computed once by `effectiveStatusKey(r)` in `admin.html` and used everywhere so the label is always consistent:
+
+| Shown label | Raw DB state(s) it covers |
+|---|---|
+| ממתין לאישור | `status='pending_approval'` |
+| מאושר לפרסום | `status='approved'` **and** `scheduled_for` is due/past (approved but the real-time attempt hasn't completed/landed yet — a genuinely actionable state, not just theoretical: rows approved before real-time triggering existed sit here until re-approved or synced) |
+| ממתין לפרסום | `status='scheduled'` (natively scheduled with Facebook) **or** `status='approved'` with a future `scheduled_for` (still locally queued, most commonly Instagram/both content that can't be pre-scheduled) |
+| פורסם | `status='published'` |
+| נכשל | `status='failed'` |
+| נדחה | `status='rejected'` |
+
+**Status filter dropdown** (`#cqFilterStatus`) offers exactly these six options (`""`/pending_approval/**queued**/published/failed/rejected) — note **there is no separate "מאושר לפרסום" filter option**; selecting "ממתין לפרסום" (`value="queued"`) matches both `queued` and `approved_ready` under the hood (`currentRows()`'s filter predicate special-cases this merge) even though badges/drill-down groups still show them as two distinct labels. This was a deliberate simplification (two DB-ish concepts were confusing as two separate filter options; they're not confusing as two badge labels).
+
+**Weekly Planner drill-down** (click a day) groups items into: ממתין לאישור, מאושר לפרסום, ממתין לפרסום, נכשל — דורש תשומת לב (all shown, actionable) — plus a collapsed `<details>` section, **labeled "📜 אושר ופורסם"** (not "היסטוריה" — renamed for an at-a-glance "this is done" read), containing `published` + `rejected` items, closed by default. Every item in the drill-down shows a small 📌 next to its title when `pin_requested` is true, in **any** group (not just published) — separate from and in addition to the full post-publish pin reminder on the main card grid.
+
+### Database schema — what a fresh environment clone actually needs
+
+`content_queue`'s schema is spread across migration files layered in this order (later files `alter table add column if not exists` on top of earlier ones — **run them in this order** on a fresh Supabase project):
+
+1. `supabase-content-queue.sql` — base table, `content_platform`/`content_media_type`/`content_status` enums (`content_status` originally: `pending_approval, approved, rejected, published, failed`).
+2. `supabase-content-queue-upgrade.sql` — `content_category` enum + `ai_reach_forecast`/`ai_why_it_works`/`ai_brand_contribution`/`ai_generated_at`.
+3. `supabase-content-queue-ai-rating.sql` — `ai_rating`/`ai_rating_justification`/`ai_optimal_timing`.
+4. **`supabase-content-queue-realtime-trigger.sql`** — adds `'scheduled'` to the `content_status` enum (`alter type ... add value`) + `trigger_source`/`publish_attempts`/`last_publish_attempt_at`. **Required for the real-time publish/status-check features to work at all** — without it, any row that should become `'scheduled'` will fail to update.
+5. **`supabase-content-queue-pin-feature.sql`** — `pin_requested boolean` + `pin_confirmed_at timestamptz`. **Required for the pin checkbox/reminder to work at all** — without it, saving `pin_requested` from the approval modal fails.
+
+**Both §4 and §5 above are the two most recent schema files and must be present in any future environment clone**, in that relative order, after files 1-3. Separately, several `supabase-content-queue-*-seed.sql` / `*-fix.sql` files exist too (batch2-seed, batch2-fix, batch3-seed, pilot-seed/delete/analysis/rating) — those are **content data, not schema**, and don't block a fresh clone's functionality, only its starting data.
+
+### Current hard constraints (Meta platform limits, not implementation gaps)
+
+- **Instagram has no scheduling API.** Every IG Graph API publish call goes live immediately. A future-dated Instagram (or "both") post cannot be pre-sent to Meta — it must wait, either for the cron or a same-day manual re-approve, until its actual `scheduled_for` arrives.
+- **Instagram has no pinning API**, and **Facebook's pinning API is read-only** (no way to set a pin, only to read the Page's current `pinned_post`). Pinning is Facebook-only and always requires a manual step in Meta's own UI — this app can only remind and verify, never do it for you.
+- Both constraints were verified via research (Meta's own developer community threads + the absence of any relevant endpoint in the official docs), not assumed — worth re-checking if Meta's API surface ever changes, since these are policy/product decisions on Meta's side, not fixed technical impossibilities.
 
 ## 1. Project Context
 
@@ -62,6 +118,7 @@ RLS: **no `anon` policy at all** — only `authenticated` (Uri's logged-in sessi
 **⚠️ This migration has not been run yet** — you (or Uri) must execute `supabase-business-expenses.sql` in the Supabase SQL Editor before the new dashboard tab will show real data (it will show a load error until then).
 
 ### `public.content_queue` — **NEW**, content approval + publishing pipeline (file: `supabase-content-queue.sql`)
+**⚠️ This block shows only the original schema.** `content_status` has since gained a `'scheduled'` value and the table has gained `trigger_source`/`publish_attempts`/`last_publish_attempt_at`/`pin_requested`/`pin_confirmed_at` — see **§0's schema table** for the complete, current column set and the exact migration files/order.
 ```sql
 create type public.content_platform as enum ('facebook', 'instagram', 'both');
 create type public.content_media_type as enum ('image', 'video', 'reel', 'story');
