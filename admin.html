@@ -915,7 +915,6 @@
               <select id="cqFilterStatus">
                 <option value="">כל הסטטוסים</option>
                 <option value="pending_approval">ממתין לאישור</option>
-                <option value="approved_ready">מאושר לפרסום</option>
                 <option value="queued">ממתין לפרסום</option>
                 <option value="published">פורסם</option>
                 <option value="failed">נכשל</option>
@@ -2230,12 +2229,18 @@
         function currentRows() {
           var st = filterStatus.value, pl = filterPlatform.value, cat = filterCategory.value, sort = sortBy.value;
           var rows = allContent.filter(function (r) {
-            // Filtered against the *displayed* status (approved_ready/queued), not the raw
-            // DB column, so "ממתין לפרסום" in the dropdown matches exactly what's on-screen:
-            // both natively-scheduled Facebook rows (status='scheduled') and approved rows
-            // still waiting for a future scheduled_for (status='approved') - see
-            // effectiveStatusKey(), which is the same function every badge/dot/legend uses.
-            if (st && effectiveStatusKey(r) !== st) return false;
+            // Filtered against the *displayed* status, not the raw DB column, so the
+            // dropdown matches exactly what's on-screen. The dropdown itself only offers
+            // one "ממתין לפרסום" option (approved_ready folded in - see cardHtml's badge,
+            // which still shows the finer-grained label even though the filter doesn't
+            // distinguish them), so selecting "queued" here also matches approved_ready:
+            // everything that's Approved-but-not-yet-live, whether Meta already has it
+            // (status='scheduled') or it's still just waiting locally (status='approved').
+            if (st) {
+              var eff = effectiveStatusKey(r);
+              var matches = st === "queued" ? (eff === "queued" || eff === "approved_ready") : eff === st;
+              if (!matches) return false;
+            }
             if (pl && r.platform !== pl) return false;
             if (cat && r.content_category !== cat) return false;
             return true;
