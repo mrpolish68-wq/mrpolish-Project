@@ -389,7 +389,13 @@
     .cq-week-nav { display:flex; align-items:center; gap:10px; }
     .cq-week-nav .range { font-size:.82rem; font-weight:700; color:var(--ink-700); min-width:120px; text-align:center; }
     .cq-week-days { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; }
-    .cq-week-day { border:1px solid var(--marble-200); border-radius:12px; padding:12px 6px; text-align:center; background:var(--marble-50); transition:background .2s,border-color .2s; }
+    .cq-week-day {
+      border:1px solid var(--marble-200); border-radius:12px; padding:12px 6px; text-align:center;
+      background:var(--marble-50); transition:background .2s,border-color .2s,transform .15s;
+      cursor:pointer; font-family:inherit; width:100%; display:block;
+    }
+    .cq-week-day:hover { border-color:var(--gold-400); transform:translateY(-2px); }
+    .cq-week-day:focus-visible { outline:2px solid var(--gold-600); outline-offset:2px; }
     .cq-week-day .dname { font-weight:700; font-size:.8rem; color:var(--char-800); }
     .cq-week-day .dnum { font-size:.68rem; color:var(--ink-500); margin-block-start:2px; }
     .cq-week-day .dcount { font-family:var(--font-display); font-weight:800; font-size:1.35rem; color:var(--gold-700); margin-block-start:8px; }
@@ -400,6 +406,38 @@
     .cq-week-day.gap { background:oklch(0.97 0.03 40 / .6); border-color:oklch(0.75 0.15 40 / .5); border-style:dashed; }
     .cq-week-day.gap .dcount { color:oklch(0.6 0.18 40); }
     .cq-week-day.gap .dlabel { color:oklch(0.55 0.18 40); font-weight:700; }
+    .cq-week-day.selected { background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); border-color:transparent; }
+    .cq-week-day.selected .dname, .cq-week-day.selected .dnum,
+    .cq-week-day.selected .dcount, .cq-week-day.selected .dlabel { color:var(--char-950); }
+
+    /* Drill-down day detail - expands below the day grid, same widget, no modal overlay
+       (keeps the interaction lightweight, per Ori's "shouldn't feel cluttered" instruction). */
+    .cq-week-detail { margin-block-start:16px; padding-block-start:16px; border-block-start:1px solid var(--marble-200); }
+    .cq-week-detail[hidden] { display:none; }
+    .cq-week-detail-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-block-end:12px; }
+    .cq-week-detail-head h4 { font-size:.95rem; color:var(--char-900); margin:0; }
+    .cq-week-detail-close { background:none; border:0; color:var(--ink-500); font-size:1.1rem; cursor:pointer; line-height:1; padding:4px; border-radius:6px; }
+    .cq-week-detail-close:hover { color:var(--char-900); background:var(--marble-100); }
+    .cq-week-detail-loading { display:flex; align-items:center; gap:10px; color:var(--ink-500); font-size:.85rem; padding:18px 4px; }
+    .cq-week-detail-spinner { width:16px; height:16px; border-radius:50%; border:2.5px solid var(--marble-200); border-top-color:var(--gold-600); animation:cqSpin .7s linear infinite; flex-shrink:0; }
+    @keyframes cqSpin { to { transform:rotate(360deg); } }
+    .cq-week-detail-empty { text-align:center; color:var(--ink-500); font-size:.85rem; padding:18px 4px; }
+    .cq-week-detail-group + .cq-week-detail-group { margin-block-start:16px; }
+    .cq-week-detail-group-title { display:flex; align-items:center; gap:8px; font-size:.8rem; font-weight:800; color:var(--char-800); margin-block-end:8px; }
+    .cq-week-detail-group-title .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+    .cq-week-detail-group-title.approved .dot { background:oklch(0.6 0.14 150); }
+    .cq-week-detail-group-title.pending .dot { background:oklch(0.72 0.14 70); }
+    .cq-week-detail-group-title.other .dot { background:var(--ink-500); }
+    .cq-week-detail-item {
+      display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--marble-200);
+      border-radius:10px; background:var(--marble-50); margin-block-end:8px;
+    }
+    .cq-week-detail-item .thumb { width:38px; height:38px; border-radius:8px; object-fit:cover; flex-shrink:0; background:var(--marble-100); }
+    .cq-week-detail-item .info { flex:1; min-width:0; }
+    .cq-week-detail-item .cat { font-size:.68rem; font-weight:800; color:var(--gold-700); }
+    .cq-week-detail-item .cap { font-size:.78rem; color:var(--ink-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-block-start:1px; }
+    .cq-week-detail-item .time { font-size:.68rem; color:var(--ink-500); white-space:nowrap; }
+    .cq-week-detail-item .actions { flex-shrink:0; }
 
     /* List/Week view toggle */
     .cq-view-toggle { display:flex; gap:6px; margin-inline-start:auto; }
@@ -808,6 +846,13 @@
               </div>
             </div>
             <div class="cq-week-days" id="cqWeekDays"></div>
+            <div class="cq-week-detail" id="cqWeekDetail" hidden>
+              <div class="cq-week-detail-head">
+                <h4 id="cqWeekDetailTitle">—</h4>
+                <button type="button" class="cq-week-detail-close" id="cqWeekDetailClose" aria-label="סגירה">&times;</button>
+              </div>
+              <div id="cqWeekDetailBody"></div>
+            </div>
           </div>
 
           <div class="cq-health" id="cqHealth">
@@ -1885,6 +1930,10 @@
         var weekNextBtn = document.getElementById("cqWeekNext");
         var viewToggleEl = document.getElementById("cqViewToggle");
         var weekGridEl = document.getElementById("cqWeekGrid");
+        var weekDetailEl = document.getElementById("cqWeekDetail");
+        var weekDetailTitleEl = document.getElementById("cqWeekDetailTitle");
+        var weekDetailBodyEl = document.getElementById("cqWeekDetailBody");
+        var weekDetailCloseBtn = document.getElementById("cqWeekDetailClose");
         var bulkBarEl = document.getElementById("cqBulkBar");
         var selectAllCheckbox = document.getElementById("cqSelectAll");
         var bulkCountEl = document.getElementById("cqBulkCount");
@@ -1932,6 +1981,7 @@
         var CATEGORY_LABELS = { ad: "מודעה", post: "פוסט", reel: "רילס", story: "סטורי" };
         var HEBREW_DOW_FULL = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
         var currentView = "list"; // "list" | "week" - which body renders under the toolbar
+        var plannerSelectedKey = null; // date key ("Y-M-D") of the Weekly Planner day drilled into, if any
 
         var STATUS_LABELS = {
           pending_approval: "ממתין לאישור", approved: "מאושר",
@@ -2161,26 +2211,100 @@
           weekPlannerDaysEl.innerHTML = keys.map(function (k, i) {
             var count = (byDate[k] || []).length;
             var isGap = count === 0;
-            var cls = "cq-week-day" + (k === todayKey ? " today" : "") + (isGap ? " gap" : "");
+            var cls = "cq-week-day" + (k === todayKey ? " today" : "") + (isGap ? " gap" : "") + (k === plannerSelectedKey ? " selected" : "");
             var label = isGap ? "פער - אין תוכן" : (count === 1 ? "פריט אחד" : count + " פריטים");
-            return '<div class="' + cls + '" data-key="' + k + '">' +
+            return '<button type="button" class="' + cls + '" data-key="' + k + '" aria-expanded="' + (k === plannerSelectedKey ? "true" : "false") + '">' +
               '<div class="dname">' + HEBREW_DOW_FULL[i] + "</div>" +
               '<div class="dnum">' + fmtDMShort(k) + "</div>" +
               '<div class="dcount">' + count + "</div>" +
               '<div class="dlabel">' + label + "</div>" +
-            "</div>";
+            "</button>";
           }).join("");
         }
         weekPrevBtn.addEventListener("click", function () {
           weekStart.setUTCDate(weekStart.getUTCDate() - 7);
+          closeWeekDayDetail();
           renderWeekPlanner(); renderProgressBars();
           if (currentView === "week") renderWeekGrid();
         });
         weekNextBtn.addEventListener("click", function () {
           weekStart.setUTCDate(weekStart.getUTCDate() + 7);
+          closeWeekDayDetail();
           renderWeekPlanner(); renderProgressBars();
           if (currentView === "week") renderWeekGrid();
         });
+
+        /* ---------- Weekly Planner drill-down: click a day to see its items grouped
+           by Approved / Pending Approval, with quick approve / view-edit actions - so Ori
+           doesn't have to scroll the full list to act on one day. ---------- */
+        function weekDetailItemHtml(r) {
+          var thumbSrc = r.thumbnail_url || (isVideoRow(r) ? "" : r.media_url);
+          var thumb = thumbSrc
+            ? '<img class="thumb" src="' + esc(thumbSrc) + '" alt="" loading="lazy" />'
+            : '<div class="thumb"></div>';
+          var t = israelParts(r.scheduled_for);
+          var timeStr = t ? pad2(t.h) + ":" + pad2(t.min) : "";
+          var actionBtn = r.status === "pending_approval"
+            ? '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>'
+            : '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
+          return '<div class="cq-week-detail-item">' +
+            thumb +
+            '<div class="info">' +
+              '<div class="cat">' + esc(CATEGORY_LABELS[r.content_category] || "") + "</div>" +
+              '<div class="cap">' + esc(r.title || r.caption) + "</div>" +
+            "</div>" +
+            '<span class="time">' + timeStr + "</span>" +
+            '<span class="actions">' + actionBtn + "</span>" +
+          "</div>";
+        }
+        function weekDetailGroupHtml(kind, label, items) {
+          if (!items.length) return "";
+          return '<div class="cq-week-detail-group">' +
+            '<div class="cq-week-detail-group-title ' + kind + '"><span class="dot"></span>' + label + " (" + items.length + ")</div>" +
+            items.map(weekDetailItemHtml).join("") +
+          "</div>";
+        }
+        function renderWeekDayDetailBody(key) {
+          if (plannerSelectedKey !== key) return; // stale async render (day changed/closed meanwhile)
+          var items = allContent.filter(function (r) { return dateKey(r.scheduled_for) === key; });
+          var approved = items.filter(function (r) { return r.status === "approved"; });
+          var pending = items.filter(function (r) { return r.status === "pending_approval"; });
+          var other = items.filter(function (r) { return r.status !== "approved" && r.status !== "pending_approval"; });
+          if (!items.length) {
+            weekDetailBodyEl.innerHTML = '<div class="cq-week-detail-empty">אין תוכן מתוזמן ליום זה.</div>';
+            return;
+          }
+          weekDetailBodyEl.innerHTML =
+            weekDetailGroupHtml("approved", "מאושר, מוכן לפרסום", approved) +
+            weekDetailGroupHtml("pending", "ממתין לאישור", pending) +
+            weekDetailGroupHtml("other", "סטטוסים נוספים", other);
+        }
+        function openWeekDayDetail(key, dayIndex) {
+          var reopeningSameDay = plannerSelectedKey === key;
+          plannerSelectedKey = key;
+          renderWeekPlanner(); // re-render to reflect .selected on the clicked cell
+          weekDetailEl.hidden = false;
+          weekDetailTitleEl.textContent = HEBREW_DOW_FULL[dayIndex] + " · " + fmtDMShort(key);
+          if (reopeningSameDay) { renderWeekDayDetailBody(key); return; } // already loaded, no need to re-spin
+          weekDetailBodyEl.innerHTML = '<div class="cq-week-detail-loading"><span class="cq-week-detail-spinner"></span>טוען תוכן ליום זה…</div>';
+          window.setTimeout(function () { renderWeekDayDetailBody(key); }, 220);
+        }
+        function closeWeekDayDetail() {
+          if (!plannerSelectedKey) return;
+          plannerSelectedKey = null;
+          weekDetailEl.hidden = true;
+          weekDetailBodyEl.innerHTML = "";
+        }
+        weekPlannerDaysEl.addEventListener("click", function (e) {
+          var cell = e.target.closest(".cq-week-day");
+          if (!cell) return;
+          var key = cell.getAttribute("data-key");
+          if (key === plannerSelectedKey) { closeWeekDayDetail(); renderWeekPlanner(); return; } // toggle off
+          var idx = Array.prototype.indexOf.call(weekPlannerDaysEl.children, cell);
+          openWeekDayDetail(key, idx);
+        });
+        weekDetailCloseBtn.addEventListener("click", function () { closeWeekDayDetail(); renderWeekPlanner(); });
+        weekDetailBodyEl.addEventListener("click", handleActionClick);
 
         /* ---------- List/Week view toggle ---------- */
         viewToggleEl.addEventListener("click", function (e) {
@@ -2391,6 +2515,7 @@
           render(); renderHealth(); renderWeekPlanner(); renderCalendar();
           if (currentView === "week") renderWeekGrid();
           if (selectedDateKey) renderDayDetail(selectedDateKey);
+          if (plannerSelectedKey) renderWeekDayDetailBody(plannerSelectedKey);
         }
 
         /* ---------- Calendar view (לוח תוכן) ---------- */
