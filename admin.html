@@ -432,8 +432,10 @@
     .cq-week-detail-group-title.failed .dot { background:oklch(0.55 0.18 25); }
     .cq-week-detail-group-title.other .dot { background:var(--ink-500); }
 
-    /* History (published/rejected) - collapsed by default so the drill-down only shows
-       actionable items at a glance; still one click away, never actually hidden data. */
+    /* Published / Rejected sections - collapsed by default so the drill-down only shows
+       actionable items at a glance; still one click away, never actually hidden data.
+       Kept as two separate sections (not merged) so a rejected item is never mistaken
+       for a published one. */
     .cq-week-detail-history { margin-block-start:16px; }
     .cq-week-detail-history summary {
       cursor:pointer; font-size:.8rem; font-weight:800; color:var(--ink-500);
@@ -2400,14 +2402,17 @@
             weekDetailBodyEl.innerHTML = '<div class="cq-week-detail-empty">אין תוכן מתוזמן ליום זה.</div>';
             return;
           }
-          // Actionable groups (always visible) vs. History (published/rejected - done, no
-          // action needed) - kept one click away in a collapsed <details>, not hidden
-          // entirely, so the drill-down reads as a to-do list rather than a full log.
+          // Actionable groups (always visible) vs. Published/Rejected (done, no action
+          // needed) - kept one click away in collapsed <details>, not hidden entirely, so
+          // the drill-down reads as a to-do list rather than a full log. Published and
+          // Rejected are shown as two distinct sections (never merged) since a rejected
+          // item never actually reached Meta and must not read as "published".
           var pending = items.filter(function (r) { return r.status === "pending_approval"; });
           var approvedReady = items.filter(function (r) { return effectiveStatusKey(r) === "approved_ready"; });
           var queued = items.filter(function (r) { return effectiveStatusKey(r) === "queued"; });
           var failed = items.filter(function (r) { return r.status === "failed"; });
-          var history = items.filter(function (r) { return r.status === "published" || r.status === "rejected"; });
+          var published = items.filter(function (r) { return r.status === "published"; });
+          var rejected = items.filter(function (r) { return r.status === "rejected"; });
 
           var html =
             weekDetailGroupHtml("pending", "ממתין לאישור", pending) +
@@ -2415,10 +2420,16 @@
             weekDetailGroupHtml("queued", "ממתין לפרסום", queued) +
             weekDetailGroupHtml("failed", "נכשל - דורש תשומת לב", failed);
 
-          if (history.length) {
+          if (published.length) {
             html += '<details class="cq-week-detail-history">' +
-              '<summary>📜 אושר ופורסם (' + history.length + ')</summary>' +
-              history.map(weekDetailItemHtml).join("") +
+              '<summary>✅ פורסם (' + published.length + ')</summary>' +
+              published.map(weekDetailItemHtml).join("") +
+            "</details>";
+          }
+          if (rejected.length) {
+            html += '<details class="cq-week-detail-history">' +
+              '<summary>🚫 נדחה (' + rejected.length + ')</summary>' +
+              rejected.map(weekDetailItemHtml).join("") +
             "</details>";
           }
           weekDetailBodyEl.innerHTML = html || '<div class="cq-week-detail-empty">אין תוכן פעיל ליום זה.</div>';
