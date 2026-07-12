@@ -69,6 +69,20 @@ async function fetchRowById(id) {
   return rows[0] || null;
 }
 
+// Rows Facebook accepted as natively-scheduled (see publishOne) whose scheduled_publish_time
+// has actually arrived — these are the only rows that can genuinely still be "not really
+// published yet" long after Approve was clicked, since Facebook's own servers publish them
+// later, not this app. checkScheduledStatus() below confirms whether that's actually happened.
+async function fetchDueScheduled() {
+  var nowIso = new Date().toISOString();
+  var url = SUPABASE_URL + "/rest/v1/content_queue" +
+    "?status=eq.scheduled&scheduled_for=lte." + encodeURIComponent(nowIso) +
+    "&order=scheduled_for.asc";
+  var res = await fetch(url, { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("Supabase query failed: " + res.status);
+  return res.json();
+}
+
 async function updateRow(id, patch) {
   var url = SUPABASE_URL + "/rest/v1/content_queue?id=eq." + encodeURIComponent(id);
   var res = await fetch(url, {
@@ -208,6 +222,39 @@ async function publishOne(row, ctx) {
   }
 }
 
+// Confirms whether a natively-scheduled Facebook post is actually live yet, via the Graph
+// API's own is_published field on the post object, and flips the row to 'published' the
+// moment it genuinely is. Called two ways: automatically by the cron for every due
+// 'scheduled' row (fetchDueScheduled, above), and on-demand from the dashboard's "בדיקת
+// סטטוס במטא" button (api/check-publish-status.js) for a specific row Ori wants to check
+// right now rather than wait for the next cron tick.
+async function checkScheduledStatus(row, ctx) {
+  if (!row.fb_post_id) {
+    return { id: row.id, ok: false, error: "אין מזהה פוסט בפייסבוק לבדיקה." };
+  }
+  try {
+    var url = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + row.fb_post_id +
+      "?fields=is_published&access_token=" + encodeURIComponent(ctx.token);
+    var res = await fetch(url);
+    var data = await res.json();
+    if (data.error) throw new Error("Facebook: " + data.error.message);
+
+    if (data.is_published) {
+      await updateRow(row.id, {
+        status: "published", published_at: new Date().toISOString(),
+        publish_error: null, last_publish_attempt_at: new Date().toISOString()
+      });
+      return { id: row.id, ok: true, nowPublished: true };
+    }
+    // Still genuinely scheduled, not published yet - not an error, just not due (or Meta
+    // hasn't processed it yet). Record that a check happened without changing status.
+    await updateRow(row.id, { last_publish_attempt_at: new Date().toISOString() });
+    return { id: row.id, ok: true, nowPublished: false };
+  } catch (err) {
+    return { id: row.id, ok: false, error: err.message };
+  }
+}
+
 module.exports = async function handler(req, res) {
   var cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
@@ -244,7 +291,24 @@ module.exports = async function handler(req, res) {
     results.push(result);
   }
 
-  res.status(200).json({ processed: results.length, results: results });
+  // Second pass: confirm any natively-scheduled Facebook posts whose time has arrived are
+  // actually live yet, and flip them to 'published' the moment they genuinely are — this is
+  // what keeps a 'scheduled' row from sitting indefinitely once Meta has actually published it.
+  var dueScheduled;
+  try {
+    dueScheduled = await fetchDueScheduled();
+  } catch (err) {
+    dueScheduled = [];
+    console.log("[cron] fetchDueScheduled failed: " + err.message);
+  }
+  var checkResults = [];
+  for (var j = 0; j < dueScheduled.length; j++) {
+    var checkResult = await checkScheduledStatus(dueScheduled[j], ctx);
+    console.log("[cron] status-check row=" + dueScheduled[j].id + " " + JSON.stringify(checkResult));
+    checkResults.push(checkResult);
+  }
+
+  res.status(200).json({ processed: results.length, results: results, statusChecks: checkResults.length, statusCheckResults: checkResults });
 };
 
 // Exported for api/publish-now.js (the real-time Approve-button trigger) to reuse — see
@@ -253,3 +317,4 @@ module.exports = async function handler(req, res) {
 // still letting a sibling file `require()` these pieces internally.
 module.exports.publishOne = publishOne;
 module.exports.fetchRowById = fetchRowById;
+module.exports.checkScheduledStatus = checkScheduledStatus;

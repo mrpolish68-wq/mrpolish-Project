@@ -330,8 +330,8 @@
     .cq-card-media-placeholder { width:100%; height:100%; display:flex; align-items:center; justify-content:center; font-size:2.4rem; background:var(--marble-100); }
     .cq-badge { position:absolute; inset-block-start:10px; inset-inline-end:10px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:700; color:var(--white); }
     .cq-badge.st-pending_approval { background:oklch(0.72 0.14 70); }
-    .cq-badge.st-approved { background:oklch(0.6 0.14 150); }
-    .cq-badge.st-scheduled { background:oklch(0.58 0.16 300); }
+    .cq-badge.st-approved_ready { background:oklch(0.6 0.14 150); }
+    .cq-badge.st-queued { background:oklch(0.58 0.16 300); }
     .cq-badge.st-published { background:oklch(0.5 0.12 250); }
     .cq-badge.st-failed { background:oklch(0.55 0.18 25); }
     .cq-badge.st-rejected { background:var(--ink-500); }
@@ -428,7 +428,21 @@
     .cq-week-detail-group-title .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
     .cq-week-detail-group-title.approved .dot { background:oklch(0.6 0.14 150); }
     .cq-week-detail-group-title.pending .dot { background:oklch(0.72 0.14 70); }
+    .cq-week-detail-group-title.queued .dot { background:oklch(0.58 0.16 300); }
+    .cq-week-detail-group-title.failed .dot { background:oklch(0.55 0.18 25); }
     .cq-week-detail-group-title.other .dot { background:var(--ink-500); }
+
+    /* History (published/rejected) - collapsed by default so the drill-down only shows
+       actionable items at a glance; still one click away, never actually hidden data. */
+    .cq-week-detail-history { margin-block-start:16px; }
+    .cq-week-detail-history summary {
+      cursor:pointer; font-size:.8rem; font-weight:800; color:var(--ink-500);
+      list-style:none; display:flex; align-items:center; gap:6px; margin-block-end:8px;
+    }
+    .cq-week-detail-history summary::-webkit-details-marker { display:none; }
+    .cq-week-detail-history summary::before { content:"▸"; font-size:.7rem; transition:transform .15s; }
+    .cq-week-detail-history[open] summary::before { transform:rotate(90deg); }
+    .cq-week-detail-history .cq-week-detail-item { opacity:.7; }
     .cq-week-detail-item {
       display:flex; align-items:center; gap:10px; padding:9px 10px; border:1px solid var(--marble-200);
       border-radius:10px; background:var(--marble-50); margin-block-end:8px;
@@ -681,7 +695,8 @@
             <div class="cal-grid" id="ccalGrid"></div>
             <div class="cal-legend">
               <span><i class="cal-content-dot" style="background:oklch(0.72 0.14 70)"></i> ממתין לאישור</span>
-              <span><i class="cal-content-dot" style="background:oklch(0.6 0.14 150)"></i> מאושר</span>
+              <span><i class="cal-content-dot" style="background:oklch(0.6 0.14 150)"></i> מאושר לפרסום</span>
+              <span><i class="cal-content-dot" style="background:oklch(0.58 0.16 300)"></i> ממתין לפרסום</span>
               <span><i class="cal-content-dot" style="background:oklch(0.5 0.12 250)"></i> פורסם</span>
               <span><i class="cal-content-dot" style="background:oklch(0.55 0.18 25)"></i> נכשל</span>
               <span><i class="cal-content-dot" style="background:var(--ink-500)"></i> נדחה</span>
@@ -1991,15 +2006,34 @@
         var currentView = "list"; // "list" | "week" - which body renders under the toolbar
         var plannerSelectedKey = null; // date key ("Y-M-D") of the Weekly Planner day drilled into, if any
 
+        // Display status is DERIVED from the real DB status + scheduled_for, not a 1:1 mirror
+        // of the status column - so the dashboard can distinguish "approved, due now, but the
+        // real-time trigger hasn't actually sent it to Meta yet" (approved_ready) from
+        // "approved/scheduled for later, on track, nothing more to do right now" (queued),
+        // which the raw 'approved' status alone can't tell apart. See effectiveStatusKey().
         var STATUS_LABELS = {
-          pending_approval: "ממתין לאישור", approved: "מאושר",
-          scheduled: "מתוזמן במטא", published: "פורסם", failed: "נכשל", rejected: "נדחה"
+          pending_approval: "ממתין לאישור", approved_ready: "מאושר לפרסום",
+          queued: "ממתין לפרסום", published: "פורסם", failed: "נכשל", rejected: "נדחה"
         };
         var STATUS_DOT_COLOR = {
-          pending_approval: "oklch(0.72 0.14 70)", approved: "oklch(0.6 0.14 150)",
-          scheduled: "oklch(0.58 0.16 300)", published: "oklch(0.5 0.12 250)",
+          pending_approval: "oklch(0.72 0.14 70)", approved_ready: "oklch(0.6 0.14 150)",
+          queued: "oklch(0.58 0.16 300)", published: "oklch(0.5 0.12 250)",
           failed: "oklch(0.55 0.18 25)", rejected: "var(--ink-500)"
         };
+        // approved -> "queued" if scheduled_for is still in the future (whether that's a
+        // Facebook post already natively scheduled with Meta, i.e. real DB status
+        // 'scheduled', or Instagram/both content still waiting in our own queue for the
+        // daily cron - Ori's own words: either meaning is fine under one "Scheduled" label)
+        // and "approved_ready" if it's due now but hasn't actually been sent yet (the
+        // narrow-but-real window right after Approve, before/if the real-time trigger
+        // completes - see triggerRealtimePublish's network-failure path).
+        function effectiveStatusKey(r) {
+          if (r.status === "scheduled") return "queued";
+          if (r.status === "approved") {
+            return new Date(r.scheduled_for).getTime() > Date.now() ? "queued" : "approved_ready";
+          }
+          return r.status; // pending_approval, published, failed, rejected pass through unchanged
+        }
         var syncingIds = {}; // id -> true while a real-time publish-now.js request is in flight
         var PLATFORM_LABELS = { facebook: "📘 פייסבוק", instagram: "📸 אינסטגרם", both: "📘📸 שתיהן" };
         var HEBREW_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
@@ -2098,7 +2132,14 @@
               '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>' +
               '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ דחה</button>';
           } else if (r.status === "approved") {
-            actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
+            // "Sync now" only makes sense once it's actually due - a future-scheduled row
+            // (effective "queued") has nothing to send to Meta yet regardless.
+            var syncNowBtn = effectiveStatusKey(r) === "approved_ready"
+              ? '<button type="button" class="btn btn-shimmer btn-sm" data-cq-syncnow="' + esc(r.id) + '">🔄 סנכרן עכשיו</button>'
+              : "";
+            actionsHtml = syncNowBtn + '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ ביטול אישור</button>';
+          } else if (r.status === "scheduled") {
+            actionsHtml = '<button type="button" class="btn btn-navy btn-sm" data-cq-checkstatus="' + esc(r.id) + '">🔄 בדיקת סטטוס</button>';
           }
           var ratingBadge = (r.ai_rating != null) ? '<span class="cq-card-rating">⭐ ' + esc(r.ai_rating) + "/10</span>" : "";
           // Type badge: content_category (ad/post/reel/story), not media_type - media_type
@@ -2119,7 +2160,7 @@
               '<input type="checkbox" class="cq-card-check" data-select-id="' + esc(r.id) + '" aria-label="בחירת פוסט" />' +
               ratingBadge +
               thumbHtml +
-              '<span class="cq-badge st-' + esc(r.status) + '">' + esc(STATUS_LABELS[r.status] || r.status) + "</span>" +
+              '<span class="cq-badge st-' + esc(effectiveStatusKey(r)) + '">' + esc(STATUS_LABELS[effectiveStatusKey(r)] || r.status) + "</span>" +
               typeBadge +
             "</div>" +
             '<div class="cq-card-body">' +
@@ -2256,11 +2297,21 @@
             : '<div class="thumb"></div>';
           var t = israelParts(r.scheduled_for);
           var timeStr = t ? pad2(t.h) + ":" + pad2(t.min) : "";
-          var actionBtn = syncingIds[r.id]
-            ? '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן…</span>'
-            : r.status === "pending_approval"
-              ? '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>'
-              : '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
+          var actionBtn;
+          if (syncingIds[r.id]) {
+            actionBtn = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן…</span>';
+          } else if (r.status === "pending_approval") {
+            actionBtn = '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>';
+          } else if (effectiveStatusKey(r) === "approved_ready") {
+            // Real gap this closes: rows approved before the real-time trigger existed (or
+            // whose attempt only hit the network-failure path) sit here with nothing sent to
+            // Meta yet - this lets Ori push it through without cancel-then-reapprove.
+            actionBtn = '<button type="button" class="btn btn-shimmer btn-sm" data-cq-syncnow="' + esc(r.id) + '">🔄 סנכרן עכשיו</button>';
+          } else if (r.status === "scheduled") {
+            actionBtn = '<button type="button" class="btn btn-navy btn-sm" data-cq-checkstatus="' + esc(r.id) + '">🔄 בדיקת סטטוס</button>';
+          } else {
+            actionBtn = '<button type="button" class="btn btn-navy btn-sm" data-cq-preview="' + esc(r.id) + '">👁 צפייה/עריכה</button>';
+          }
           return '<div class="cq-week-detail-item">' +
             thumb +
             '<div class="info">' +
@@ -2281,17 +2332,32 @@
         function renderWeekDayDetailBody(key) {
           if (plannerSelectedKey !== key) return; // stale async render (day changed/closed meanwhile)
           var items = allContent.filter(function (r) { return dateKey(r.scheduled_for) === key; });
-          var approved = items.filter(function (r) { return r.status === "approved"; });
-          var pending = items.filter(function (r) { return r.status === "pending_approval"; });
-          var other = items.filter(function (r) { return r.status !== "approved" && r.status !== "pending_approval"; });
           if (!items.length) {
             weekDetailBodyEl.innerHTML = '<div class="cq-week-detail-empty">אין תוכן מתוזמן ליום זה.</div>';
             return;
           }
-          weekDetailBodyEl.innerHTML =
-            weekDetailGroupHtml("approved", "מאושר, מוכן לפרסום", approved) +
+          // Actionable groups (always visible) vs. History (published/rejected - done, no
+          // action needed) - kept one click away in a collapsed <details>, not hidden
+          // entirely, so the drill-down reads as a to-do list rather than a full log.
+          var pending = items.filter(function (r) { return r.status === "pending_approval"; });
+          var approvedReady = items.filter(function (r) { return effectiveStatusKey(r) === "approved_ready"; });
+          var queued = items.filter(function (r) { return effectiveStatusKey(r) === "queued"; });
+          var failed = items.filter(function (r) { return r.status === "failed"; });
+          var history = items.filter(function (r) { return r.status === "published" || r.status === "rejected"; });
+
+          var html =
             weekDetailGroupHtml("pending", "ממתין לאישור", pending) +
-            weekDetailGroupHtml("other", "סטטוסים נוספים", other);
+            weekDetailGroupHtml("approved", "מאושר לפרסום", approvedReady) +
+            weekDetailGroupHtml("queued", "ממתין לפרסום", queued) +
+            weekDetailGroupHtml("failed", "נכשל - דורש תשומת לב", failed);
+
+          if (history.length) {
+            html += '<details class="cq-week-detail-history">' +
+              '<summary>📜 היסטוריה (' + history.length + ')</summary>' +
+              history.map(weekDetailItemHtml).join("") +
+            "</details>";
+          }
+          weekDetailBodyEl.innerHTML = html || '<div class="cq-week-detail-empty">אין תוכן פעיל ליום זה.</div>';
         }
         function openWeekDayDetail(key, dayIndex) {
           var reopeningSameDay = plannerSelectedKey === key;
@@ -2575,7 +2641,7 @@
               postsForDay.slice(0, 4).forEach(function (r) {
                 var dot = document.createElement("span");
                 dot.className = "cal-content-dot";
-                dot.style.background = STATUS_DOT_COLOR[r.status] || "#999";
+                dot.style.background = STATUS_DOT_COLOR[effectiveStatusKey(r)] || "#999";
                 dots.appendChild(dot);
               });
               if (postsForDay.length > 4) {
@@ -2694,12 +2760,49 @@
           if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
           updateRow(id, { status: "rejected" });
         }
+        // On-demand Meta status check for a natively-scheduled Facebook post (status
+        // 'scheduled') - the same check the cron already runs automatically once a row is
+        // due, exposed here so Ori doesn't have to wait for the next cron tick to confirm
+        // one specific post actually went live.
+        function triggerStatusCheck(id) {
+          setSyncing(id, true);
+          sb.auth.getSession().then(function (sessionRes) {
+            var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+            if (!token) { setSyncing(id, false); renderAll(); return; }
+            fetch("/api/check-publish-status", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+              body: JSON.stringify({ id: id })
+            })
+              .then(function (res) { return res.json().then(function (data) { return { httpOk: res.ok, data: data }; }); })
+              .then(function (result) {
+                setSyncing(id, false);
+                var data = result.data || {};
+                if (result.httpOk && data.ok && data.nowPublished) {
+                  patchLocalRow(id, { status: "published", publish_error: null });
+                } else if (result.httpOk && data.ok) {
+                  // Checked, still genuinely scheduled (not published yet) - not an error.
+                  patchLocalRow(id, { publish_error: null });
+                } else {
+                  patchLocalRow(id, { publish_error: data.error || "שגיאה בבדיקת הסטטוס במטא." });
+                }
+                renderAll();
+              })
+              .catch(function () {
+                setSyncing(id, false);
+                patchLocalRow(id, { publish_error: "לא הצלחנו להגיע לשרת בדיקת הסטטוס (בעיית רשת)." });
+                renderAll();
+              });
+          });
+        }
         function handleActionClick(e) {
-          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview], [data-cq-duplicate]");
+          var btn = e.target.closest("[data-cq-approve], [data-cq-reject], [data-cq-preview], [data-cq-duplicate], [data-cq-syncnow], [data-cq-checkstatus]");
           if (!btn) return;
           if (btn.hasAttribute("data-cq-approve")) approve(btn.getAttribute("data-cq-approve"));
           else if (btn.hasAttribute("data-cq-reject")) reject(btn.getAttribute("data-cq-reject"));
           else if (btn.hasAttribute("data-cq-duplicate")) duplicateRow(btn.getAttribute("data-cq-duplicate"));
+          else if (btn.hasAttribute("data-cq-syncnow")) triggerRealtimePublish(btn.getAttribute("data-cq-syncnow"));
+          else if (btn.hasAttribute("data-cq-checkstatus")) triggerStatusCheck(btn.getAttribute("data-cq-checkstatus"));
           else openPreview(btn.getAttribute("data-cq-preview"));
         }
         grid.addEventListener("click", handleActionClick);
