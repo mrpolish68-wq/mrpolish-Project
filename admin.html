@@ -364,15 +364,75 @@
     .cq-health-stat { display:flex; flex-direction:column; }
     .cq-health-stat .num { font-family:var(--font-display); font-weight:800; font-size:1.7rem; color:var(--char-900); }
     .cq-health-stat .lbl { font-size:.8rem; color:var(--ink-500); font-weight:600; }
-    .cq-health-bars { display:flex; flex-direction:column; gap:8px; }
+    .cq-health-bars { display:flex; flex-direction:column; gap:10px; }
     .cq-health-bar-row { display:flex; align-items:center; gap:10px; font-size:.8rem; color:var(--ink-700); }
-    .cq-health-bar-label { flex:0 0 90px; font-weight:600; }
-    .cq-health-bar-track { flex:1; height:10px; background:var(--marble-100); border-radius:999px; overflow:hidden; }
-    .cq-health-bar-fill { height:100%; background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); border-radius:999px; }
-    .cq-health-bar-count { flex:0 0 22px; text-align:end; font-weight:700; color:var(--char-800); }
+    .cq-health-bar-label { flex:0 0 60px; font-weight:600; }
+    /* display:flex here (not just the track being a flex ITEM of the row above) is what lets
+       two adjacent fill segments (done + pending) sit side by side as a stacked/proportional
+       bar - flex auto-blockifies the child <span>s, so their inline style="width:X%" actually
+       takes effect (a bare inline <span> ignores width/height per CSS spec). */
+    .cq-health-bar-track { flex:1; height:12px; background:var(--marble-100); border-radius:999px; overflow:hidden; display:flex; }
+    .cq-health-bar-fill { height:100%; }
+    .cq-health-bar-fill.done { background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); }
+    .cq-health-bar-fill.pending { background:oklch(0.85 0.03 70); }
+    .cq-health-bar-count { flex:0 0 56px; text-align:end; font-weight:700; color:var(--char-800); font-size:.76rem; }
+    .cq-progress-legend { display:flex; gap:16px; margin-block-start:12px; font-size:.76rem; color:var(--ink-500); }
+    .cq-progress-legend span { display:inline-flex; align-items:center; gap:6px; }
+    .cq-progress-legend .sw { width:10px; height:10px; border-radius:3px; display:inline-block; }
+    .cq-progress-legend .sw.done { background:linear-gradient(135deg,var(--gold-600),var(--gold-400)); }
+    .cq-progress-legend .sw.pending { background:oklch(0.85 0.03 70); }
+
+    /* Weekly Planner widget */
+    .cq-week-planner { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:18px 20px; box-shadow:var(--shadow-sm); margin-block-end:18px; }
+    .cq-week-planner-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-block-end:14px; }
+    .cq-week-planner-head h3 { font-size:1.02rem; color:var(--char-900); margin:0; }
+    .cq-week-nav { display:flex; align-items:center; gap:10px; }
+    .cq-week-nav .range { font-size:.82rem; font-weight:700; color:var(--ink-700); min-width:120px; text-align:center; }
+    .cq-week-days { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; }
+    .cq-week-day { border:1px solid var(--marble-200); border-radius:12px; padding:12px 6px; text-align:center; background:var(--marble-50); transition:background .2s,border-color .2s; }
+    .cq-week-day .dname { font-weight:700; font-size:.8rem; color:var(--char-800); }
+    .cq-week-day .dnum { font-size:.68rem; color:var(--ink-500); margin-block-start:2px; }
+    .cq-week-day .dcount { font-family:var(--font-display); font-weight:800; font-size:1.35rem; color:var(--gold-700); margin-block-start:8px; }
+    .cq-week-day .dlabel { font-size:.66rem; color:var(--ink-500); font-weight:600; margin-block-start:2px; }
+    .cq-week-day.today { border-color:var(--gold-500); box-shadow:inset 0 0 0 1px var(--gold-500); }
+    /* Gap highlight (no content that day) - warm/amber, distinct from the gold brand accent
+       used everywhere else, so a "problem" day reads differently from a "healthy" day. */
+    .cq-week-day.gap { background:oklch(0.97 0.03 40 / .6); border-color:oklch(0.75 0.15 40 / .5); border-style:dashed; }
+    .cq-week-day.gap .dcount { color:oklch(0.6 0.18 40); }
+    .cq-week-day.gap .dlabel { color:oklch(0.55 0.18 40); font-weight:700; }
+
+    /* List/Week view toggle */
+    .cq-view-toggle { display:flex; gap:6px; margin-inline-start:auto; }
+    .cq-view-toggle button {
+      padding:8px 16px; border-radius:999px; border:1.5px solid var(--marble-200);
+      background:var(--white); color:var(--ink-700); font-weight:700; font-size:.85rem;
+      cursor:pointer; transition:background .2s,color .2s,border-color .2s;
+    }
+    .cq-view-toggle button.active { background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); color:var(--char-950); border-color:transparent; }
+    .cq-view-toggle button:not(.active):hover { border-color:var(--gold-400); }
+
+    /* Weekly calendar grid (drag-and-drop reschedule) */
+    .cq-week-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; align-items:start; }
+    .cq-week-grid[hidden] { display:none; }
+    .cq-week-col { background:var(--marble-50); border:1px solid var(--marble-200); border-radius:12px; padding:10px; min-height:170px; display:flex; flex-direction:column; gap:8px; transition:background .2s,border-color .2s; }
+    .cq-week-col.today { border-color:var(--gold-500); }
+    .cq-week-col.dragover { background:oklch(0.9 0.1 88 / .35); border-color:var(--gold-500); border-style:dashed; }
+    .cq-week-col-head { text-align:center; font-weight:700; font-size:.8rem; color:var(--char-800); padding-block-end:8px; border-block-end:1px solid var(--marble-200); }
+    .cq-week-col-head .n { display:block; font-size:.68rem; color:var(--ink-500); font-weight:500; margin-block-start:2px; }
+    .cq-week-chip { background:var(--white); border:1px solid var(--marble-200); border-radius:10px; padding:8px; cursor:grab; box-shadow:var(--shadow-sm); display:flex; gap:8px; align-items:center; transition:transform .15s,box-shadow .15s; }
+    .cq-week-chip:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
+    .cq-week-chip:active { cursor:grabbing; }
+    .cq-week-chip.dragging { opacity:.4; }
+    .cq-week-chip .thumb { width:36px; height:36px; border-radius:8px; object-fit:cover; flex-shrink:0; background:var(--marble-100); }
+    .cq-week-chip .info { flex:1; min-width:0; }
+    .cq-week-chip .cat { font-size:.66rem; font-weight:800; color:var(--gold-700); white-space:nowrap; }
+    .cq-week-chip .cap { font-size:.72rem; color:var(--ink-700); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .cq-week-empty { text-align:center; font-size:.7rem; color:var(--ink-500); padding:16px 4px; }
 
     /* Bulk-action bar */
     .cq-bulk-bar { display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-block-end:16px; padding:10px 14px; background:var(--marble-50); border:1px solid var(--marble-200); border-radius:12px; }
+    .cq-bulk-bar[hidden] { display:none; }
+    .cq-grid[hidden] { display:none; }
     .cq-bulk-selectall { display:flex; align-items:center; gap:8px; font-size:.85rem; font-weight:700; color:var(--char-800); cursor:pointer; }
     .cq-bulk-count { font-size:.8rem; color:var(--ink-500); font-weight:600; }
     .cq-bulk-actions { display:flex; gap:8px; flex-wrap:wrap; margin-inline-start:auto; }
@@ -472,6 +532,10 @@
       .calc-card { position:static; }
       .admin-content { padding:20px 16px; }
       .admin-topbar { padding:16px; }
+      .cq-week-days { grid-template-columns:repeat(auto-fit,minmax(84px,1fr)); }
+      .cq-week-grid { grid-template-columns:1fr; }
+      .cq-view-toggle { margin-inline-start:0; }
+      .cq-week-planner-head { flex-direction:column; align-items:flex-start; }
     }
 
     /* Work-order document is rendered off-screen in the main doc with its own
@@ -734,12 +798,28 @@
         <section class="admin-view" id="view-content">
           <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p></div>
 
+          <div class="cq-week-planner" id="cqWeekPlanner">
+            <div class="cq-week-planner-head">
+              <h3>📅 תכנון שבועי</h3>
+              <div class="cq-week-nav">
+                <button type="button" class="btn btn-navy btn-sm" id="cqWeekPrev">שבוע קודם</button>
+                <span class="range" id="cqWeekRange">—</span>
+                <button type="button" class="btn btn-navy btn-sm" id="cqWeekNext">שבוע הבא</button>
+              </div>
+            </div>
+            <div class="cq-week-days" id="cqWeekDays"></div>
+          </div>
+
           <div class="cq-health" id="cqHealth">
             <div class="cq-health-stats">
               <div class="cq-health-stat"><span class="num" id="cqHealthPending">—</span><span class="lbl">ממתין לאישור</span></div>
               <div class="cq-health-stat"><span class="num" id="cqHealthWeek">—</span><span class="lbl">מתוזמן השבוע</span></div>
             </div>
             <div class="cq-health-bars" id="cqHealthBars"></div>
+            <div class="cq-progress-legend">
+              <span><i class="sw done"></i> מאושר / פורסם</span>
+              <span><i class="sw pending"></i> ממתין לאישור</span>
+            </div>
           </div>
 
           <div class="cq-toolbar">
@@ -771,6 +851,10 @@
                 <option value="rating_asc">מיון: דירוג AI (נמוך לגבוה)</option>
               </select>
             </div>
+            <div class="cq-view-toggle" id="cqViewToggle">
+              <button type="button" class="active" data-cq-view="list">📋 רשימה</button>
+              <button type="button" data-cq-view="week">🗓️ תצוגת שבוע</button>
+            </div>
           </div>
 
           <div class="cq-bulk-bar" id="cqBulkBar">
@@ -786,6 +870,7 @@
           <div class="cq-grid" id="cqGrid">
             <div class="cq-empty">טוען תוכן…</div>
           </div>
+          <div class="cq-week-grid" id="cqWeekGrid" hidden></div>
         </section>
       </div>
     </main>
@@ -1794,6 +1879,13 @@
         var healthPendingEl = document.getElementById("cqHealthPending");
         var healthWeekEl = document.getElementById("cqHealthWeek");
         var healthBarsEl = document.getElementById("cqHealthBars");
+        var weekPlannerDaysEl = document.getElementById("cqWeekDays");
+        var weekRangeEl = document.getElementById("cqWeekRange");
+        var weekPrevBtn = document.getElementById("cqWeekPrev");
+        var weekNextBtn = document.getElementById("cqWeekNext");
+        var viewToggleEl = document.getElementById("cqViewToggle");
+        var weekGridEl = document.getElementById("cqWeekGrid");
+        var bulkBarEl = document.getElementById("cqBulkBar");
         var selectAllCheckbox = document.getElementById("cqSelectAll");
         var bulkCountEl = document.getElementById("cqBulkCount");
         var bulkApproveBtn = document.getElementById("cqBulkApprove");
@@ -1838,6 +1930,8 @@
         var selectedDateKey = null;
         var selectedIds = {}; // id -> true, for bulk actions
         var CATEGORY_LABELS = { ad: "מודעה", post: "פוסט", reel: "רילס", story: "סטורי" };
+        var HEBREW_DOW_FULL = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+        var currentView = "list"; // "list" | "week" - which body renders under the toolbar
 
         var STATUS_LABELS = {
           pending_approval: "ממתין לאישור", approved: "מאושר",
@@ -1903,6 +1997,35 @@
           for (var i = 0; i < allContent.length; i++) if (allContent[i].id === id) return allContent[i];
           return null;
         }
+
+        /* ---------- Weekly Planner / Progress bars / Week calendar view - shared week state ----------
+           "Week" here is a pure Israel-local CALENDAR concept (Sunday..Saturday), not an instant
+           in time, so it's computed with UTC-midnight date arithmetic (no timezone conversion
+           needed - just adding/subtracting whole days). israelParts()/israelWallTimeToUTCISO()
+           are still what convert between this calendar date and the real timestamptz column
+           whenever a row actually needs to move. */
+        function israelTodayKey() {
+          var p = israelParts(new Date().toISOString());
+          return p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
+        }
+        function israelWeekStart(jsDate) {
+          var p = israelParts(jsDate.toISOString());
+          var d = new Date(Date.UTC(p.y, p.m - 1, p.d));
+          d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // roll back to Sunday
+          return d;
+        }
+        var weekStart = israelWeekStart(new Date());
+        function weekDateKey(offsetDays) {
+          var d = new Date(weekStart);
+          d.setUTCDate(d.getUTCDate() + offsetDays);
+          return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
+        }
+        function currentWeekKeys() {
+          var keys = [];
+          for (var i = 0; i < 7; i++) keys.push(weekDateKey(i));
+          return keys;
+        }
+        function fmtDMShort(key) { return key.split("-").slice(1).reverse().join("/"); }
 
         /* ---------- Shared card renderer (used by both the grid and the calendar's day-detail panel) ---------- */
         function cardHtml(r) {
@@ -1976,7 +2099,11 @@
           }
           syncSelectionUI();
         }
-        [filterStatus, filterPlatform, filterCategory, sortBy].forEach(function (el) { el.addEventListener("change", render); });
+        function renderContentViews() {
+          render();
+          if (currentView === "week") renderWeekGrid();
+        }
+        [filterStatus, filterPlatform, filterCategory, sortBy].forEach(function (el) { el.addEventListener("change", renderContentViews); });
 
         /* ---------- Content Health summary widget ---------- */
         function renderHealth() {
@@ -1991,21 +2118,173 @@
           healthPendingEl.textContent = pending.length;
           healthWeekEl.textContent = scheduledThisWeek;
 
-          var byCat = {};
-          pending.forEach(function (r) { byCat[r.content_category] = (byCat[r.content_category] || 0) + 1; });
-          var maxCount = Math.max.apply(null, Object.keys(byCat).map(function (k) { return byCat[k]; }).concat([1]));
+          renderProgressBars();
+        }
 
+        /* ---------- Progress bars: Approved/Published vs Pending, per category, scoped to
+           the currently-selected planner week (shared state with the weekly planner + the
+           week calendar view below - moving the week nav moves all three together). ---------- */
+        function renderProgressBars() {
+          var keys = currentWeekKeys();
+          var rowsInWeek = allContent.filter(function (r) { return keys.indexOf(dateKey(r.scheduled_for)) !== -1; });
           var order = ["ad", "post", "reel", "story"];
-          var barsHtml = order.filter(function (k) { return byCat[k]; }).map(function (k) {
-            var pct = Math.round((byCat[k] / maxCount) * 100);
+          healthBarsEl.innerHTML = order.map(function (cat) {
+            var items = rowsInWeek.filter(function (r) { return r.content_category === cat; });
+            var total = items.length;
+            var done = items.filter(function (r) { return r.status === "approved" || r.status === "published"; }).length;
+            var pendingCt = items.filter(function (r) { return r.status === "pending_approval"; }).length;
+            var donePct = total ? Math.round((done / total) * 100) : 0;
+            var pendingPct = total ? Math.round((pendingCt / total) * 100) : 0;
+            var doneSeg = donePct ? '<span class="cq-health-bar-fill done" style="width:' + donePct + '%"></span>' : "";
+            var pendingSeg = pendingPct ? '<span class="cq-health-bar-fill pending" style="width:' + pendingPct + '%"></span>' : "";
             return '<div class="cq-health-bar-row">' +
-              '<span class="cq-health-bar-label">' + esc(CATEGORY_LABELS[k] || k) + "</span>" +
-              '<span class="cq-health-bar-track"><span class="cq-health-bar-fill" style="width:' + pct + '%"></span></span>' +
-              '<span class="cq-health-bar-count">' + byCat[k] + "</span>" +
+              '<span class="cq-health-bar-label">' + esc(CATEGORY_LABELS[cat] || cat) + "</span>" +
+              '<span class="cq-health-bar-track">' + doneSeg + pendingSeg + "</span>" +
+              '<span class="cq-health-bar-count">' + done + "/" + total + "</span>" +
             "</div>";
           }).join("");
-          healthBarsEl.innerHTML = barsHtml || '<p class="cq-ai-disclaimer">אין תוכן ממתין לאישור כרגע.</p>';
         }
+
+        /* ---------- Weekly Planner widget: per-day item counts for the selected week,
+           gap days (0 items) visually flagged so Ori can spot rhythm holes at a glance. ---------- */
+        function renderWeekPlanner() {
+          var keys = currentWeekKeys();
+          var todayKey = israelTodayKey();
+          weekRangeEl.textContent = fmtDMShort(keys[0]) + " – " + fmtDMShort(keys[6]);
+
+          var byDate = {};
+          allContent.forEach(function (r) {
+            var k = dateKey(r.scheduled_for);
+            (byDate[k] = byDate[k] || []).push(r);
+          });
+
+          weekPlannerDaysEl.innerHTML = keys.map(function (k, i) {
+            var count = (byDate[k] || []).length;
+            var isGap = count === 0;
+            var cls = "cq-week-day" + (k === todayKey ? " today" : "") + (isGap ? " gap" : "");
+            var label = isGap ? "פער - אין תוכן" : (count === 1 ? "פריט אחד" : count + " פריטים");
+            return '<div class="' + cls + '" data-key="' + k + '">' +
+              '<div class="dname">' + HEBREW_DOW_FULL[i] + "</div>" +
+              '<div class="dnum">' + fmtDMShort(k) + "</div>" +
+              '<div class="dcount">' + count + "</div>" +
+              '<div class="dlabel">' + label + "</div>" +
+            "</div>";
+          }).join("");
+        }
+        weekPrevBtn.addEventListener("click", function () {
+          weekStart.setUTCDate(weekStart.getUTCDate() - 7);
+          renderWeekPlanner(); renderProgressBars();
+          if (currentView === "week") renderWeekGrid();
+        });
+        weekNextBtn.addEventListener("click", function () {
+          weekStart.setUTCDate(weekStart.getUTCDate() + 7);
+          renderWeekPlanner(); renderProgressBars();
+          if (currentView === "week") renderWeekGrid();
+        });
+
+        /* ---------- List/Week view toggle ---------- */
+        viewToggleEl.addEventListener("click", function (e) {
+          var btn = e.target.closest("[data-cq-view]");
+          if (!btn) return;
+          currentView = btn.getAttribute("data-cq-view");
+          viewToggleEl.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b === btn); });
+          grid.hidden = currentView !== "list";
+          bulkBarEl.hidden = currentView !== "list";
+          weekGridEl.hidden = currentView !== "week";
+          if (currentView === "week") renderWeekGrid();
+        });
+
+        /* ---------- Week calendar view: same 7-day range as the planner widget above,
+           populated with currentRows() so it respects the existing status/platform/category
+           filters exactly like the list view does. Drag-and-drop reschedules by changing only
+           the calendar DATE of scheduled_for, keeping the original time-of-day, via the same
+           israelWallTimeToUTCISO() helper the rest of the dashboard already uses for editing
+           times - so this can never silently shift a post by a timezone offset. ---------- */
+        function weekChipHtml(r) {
+          var thumbSrc = r.thumbnail_url || (isVideoRow(r) ? "" : r.media_url);
+          var thumb = thumbSrc
+            ? '<img class="thumb" src="' + esc(thumbSrc) + '" alt="" loading="lazy" />'
+            : '<div class="thumb"></div>';
+          var t = israelParts(r.scheduled_for);
+          var timeStr = t ? pad2(t.h) + ":" + pad2(t.min) : "";
+          return '<div class="cq-week-chip" draggable="true" data-id="' + esc(r.id) + '">' +
+            thumb +
+            '<div class="info">' +
+              '<div class="cat">' + esc(CATEGORY_LABELS[r.content_category] || "") + " · " + timeStr + "</div>" +
+              '<div class="cap">' + esc(r.caption) + "</div>" +
+            "</div>" +
+          "</div>";
+        }
+        function renderWeekGrid() {
+          var keys = currentWeekKeys();
+          var todayKey = israelTodayKey();
+          var rows = currentRows();
+          var byDate = {};
+          rows.forEach(function (r) {
+            var k = dateKey(r.scheduled_for);
+            (byDate[k] = byDate[k] || []).push(r);
+          });
+          weekGridEl.innerHTML = keys.map(function (k, i) {
+            var items = byDate[k] || [];
+            var body = items.length ? items.map(weekChipHtml).join("") : '<div class="cq-week-empty">אין תוכן</div>';
+            var cls = "cq-week-col" + (k === todayKey ? " today" : "");
+            return '<div class="' + cls + '" data-date-key="' + k + '">' +
+              '<div class="cq-week-col-head">' + HEBREW_DOW_FULL[i] + '<span class="n">' + fmtDMShort(k) + "</span></div>" +
+              body +
+            "</div>";
+          }).join("");
+        }
+        var dragChipId = null;
+        weekGridEl.addEventListener("dragstart", function (e) {
+          var chip = e.target.closest(".cq-week-chip");
+          if (!chip) return;
+          dragChipId = chip.getAttribute("data-id");
+          chip.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", dragChipId);
+        });
+        weekGridEl.addEventListener("dragend", function (e) {
+          var chip = e.target.closest(".cq-week-chip");
+          if (chip) chip.classList.remove("dragging");
+          weekGridEl.querySelectorAll(".cq-week-col.dragover").forEach(function (c) { c.classList.remove("dragover"); });
+        });
+        weekGridEl.addEventListener("dragover", function (e) {
+          var col = e.target.closest(".cq-week-col");
+          if (!col) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          col.classList.add("dragover");
+        });
+        weekGridEl.addEventListener("dragleave", function (e) {
+          var col = e.target.closest(".cq-week-col");
+          if (col && !col.contains(e.relatedTarget)) col.classList.remove("dragover");
+        });
+        weekGridEl.addEventListener("drop", function (e) {
+          var col = e.target.closest(".cq-week-col");
+          if (!col) return;
+          e.preventDefault();
+          col.classList.remove("dragover");
+          var id = (e.dataTransfer && e.dataTransfer.getData("text/plain")) || dragChipId;
+          dragChipId = null;
+          if (!id) return;
+          var row = findById(id);
+          if (!row) return;
+          var targetKey = col.getAttribute("data-date-key");
+          if (dateKey(row.scheduled_for) === targetKey) return; // dropped back on its own day
+          var parts = targetKey.split("-").map(Number);
+          var t = israelParts(row.scheduled_for);
+          if (!t) return;
+          var newISO = israelWallTimeToUTCISO(parts[0], parts[1], parts[2], t.h, t.min);
+          updateRow(id, { scheduled_for: newISO });
+        });
+        // A drag that ends without motion still fires a click - open the same preview modal
+        // every other card in the dashboard uses, so approve/reject/duplicate stay reachable
+        // from the calendar view instead of needing their own cramped per-chip buttons.
+        weekGridEl.addEventListener("click", function (e) {
+          var chip = e.target.closest(".cq-week-chip");
+          if (!chip) return;
+          openPreview(chip.getAttribute("data-id"));
+        });
 
         /* ---------- Bulk selection + actions ---------- */
         function syncSelectionUI() {
@@ -2108,7 +2387,11 @@
           });
         }
 
-        function renderAll() { render(); renderHealth(); renderCalendar(); if (selectedDateKey) renderDayDetail(selectedDateKey); }
+        function renderAll() {
+          render(); renderHealth(); renderWeekPlanner(); renderCalendar();
+          if (currentView === "week") renderWeekGrid();
+          if (selectedDateKey) renderDayDetail(selectedDateKey);
+        }
 
         /* ---------- Calendar view (לוח תוכן) ---------- */
         function renderCalendar() {
@@ -2391,6 +2674,7 @@
             if (err) { grid.innerHTML = '<div class="cq-empty">שגיאה בטעינת התוכן. נסו לרענן.</div>'; return; }
             render();
             renderHealth();
+            renderWeekPlanner();
           });
         };
         loadContentCalendar = function loadContentCalendar() {
