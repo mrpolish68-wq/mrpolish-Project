@@ -42,6 +42,14 @@ const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 // of attempting a scheduling call that Meta would just reject.
 const FB_MIN_SCHEDULE_MS = 11 * 60 * 1000;
 
+// How long a single publisher "holds" a row once it claims it (see claimRow). Must be safely
+// longer than one function's whole run (maxDuration is 60s in vercel.json) so a genuinely
+// in-progress publish is never re-claimed and duplicated by an overlapping caller — but short
+// enough that a row orphaned by a crash/timeout mid-publish becomes re-claimable again soon
+// after, rather than being stuck forever. Status stays 'approved' throughout, so the daily
+// cron is the thing that re-claims it once this lease lapses.
+const CLAIM_LEASE_MS = 5 * 60 * 1000;
+
 function supabaseHeaders() {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return {
@@ -91,6 +99,35 @@ async function updateRow(id, patch) {
     body: JSON.stringify(patch)
   });
   if (!res.ok) throw new Error("Supabase update failed: " + res.status);
+}
+
+// Atomically claim an 'approved' row so exactly one publisher acts on it, even when a manual
+// Approve-click and the daily cron (or two Approve-clicks) hit the same row at the same instant.
+// This is a compare-and-swap done entirely in the database: the conditional PATCH only matches
+// a row that is BOTH still 'approved' AND has not been touched within CLAIM_LEASE_MS. Postgres
+// serializes the two concurrent UPDATEs on the same row, so the first sets last_publish_attempt_at
+// to now and the second — re-evaluating its WHERE against the just-updated row — matches 0 rows
+// and backs off. Returns true if this caller won the claim, false if someone else already holds it.
+//
+// Why a time-lease on last_publish_attempt_at instead of a transient 'publishing' status: leaving
+// the row 'approved' means a crash/timeout mid-publish self-heals — the lease simply lapses and the
+// next cron run re-claims it. A transient status would instead orphan the row in a state nothing
+// retries (the cron only ever looks at status='approved'). See publish-now.js's fallback header.
+async function claimRow(row) {
+  var nowIso = new Date().toISOString();
+  var cutoffIso = new Date(Date.now() - CLAIM_LEASE_MS).toISOString();
+  var url = SUPABASE_URL + "/rest/v1/content_queue" +
+    "?id=eq." + encodeURIComponent(row.id) +
+    "&status=eq.approved" +
+    "&or=(last_publish_attempt_at.is.null,last_publish_attempt_at.lt." + encodeURIComponent(cutoffIso) + ")";
+  var res = await fetch(url, {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
+    body: JSON.stringify({ last_publish_attempt_at: nowIso })
+  });
+  if (!res.ok) throw new Error("Supabase claim failed: " + res.status);
+  var claimed = await res.json();
+  return Array.isArray(claimed) && claimed.length > 0;
 }
 
 async function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -280,6 +317,19 @@ async function publishOne(row, ctx) {
     return {
       id: row.id, ok: true, deferred: true,
       reason: "Instagram has no native scheduling API — this will publish via the daily cron on " + row.scheduled_for + "."
+    };
+  }
+
+  // Atomic claim: from here on this attempt actually touches Meta, so exactly one publisher
+  // must proceed. If another caller (the cron, or a second Approve-click) already claimed this
+  // row moments ago, back off cleanly — the row is untouched and still 'approved', so whoever
+  // holds the claim finishes it, or the daily cron does. This is what closes the concurrent
+  // double-publish race (two callers both reading status='approved' before either writes).
+  var claimed = await claimRow(row);
+  if (!claimed) {
+    return {
+      id: row.id, ok: true, skipped: true,
+      reason: "Another publisher is already handling this row — skipped to avoid a duplicate post."
     };
   }
 

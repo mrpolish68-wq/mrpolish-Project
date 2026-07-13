@@ -1932,18 +1932,25 @@
 
         function fetchAndRender() {
           body.innerHTML = '<tr><td colspan="6" class="leads-empty">טוען נתונים…</td></tr>';
-          fetch("/api/social-snapshot")
-            .then(function (res) { return res.json(); })
-            .then(function (data) {
-              if (data.error) {
-                body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה: ' + esc(data.error) + "</td></tr>";
-                return;
-              }
-              render(data);
-            })
-            .catch(function () {
-              body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה בטעינת הנתונים. נסו לרענן.</td></tr>';
-            });
+          sb.auth.getSession().then(function (sessionRes) {
+            var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+            if (!token) {
+              body.innerHTML = '<tr><td colspan="6" class="leads-empty">החיבור פג. רעננו את הדף והתחברו מחדש.</td></tr>';
+              return;
+            }
+            fetch("/api/social-snapshot", { headers: { Authorization: "Bearer " + token } })
+              .then(function (res) { return res.json(); })
+              .then(function (data) {
+                if (data.error) {
+                  body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה: ' + esc(data.error) + "</td></tr>";
+                  return;
+                }
+                render(data);
+              })
+              .catch(function () {
+                body.innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה בטעינת הנתונים. נסו לרענן.</td></tr>';
+              });
+          });
         }
 
         refreshBtn.addEventListener("click", fetchAndRender);
@@ -2799,6 +2806,13 @@
                   // this is expected, not a failure. Nothing to patch except clearing any
                   // stale error from a previous attempt.
                   patchLocalRow(id, { publish_error: null });
+                } else if (data.skipped) {
+                  // Another publisher (the daily cron, or a second click) already claimed this
+                  // row - the server backed off to avoid a duplicate post. The real status is
+                  // being decided elsewhere right now, so don't guess it here: clear any stale
+                  // error and refetch so the card reflects the true server state in a moment.
+                  patchLocalRow(id, { publish_error: null });
+                  refreshContentQueue();
                 } else if (result.httpOk && data.ok) {
                   patchLocalRow(id, {
                     status: data.status || "published",
@@ -3102,6 +3116,27 @@
               if (res.error) { loaded = false; cb(res.error); return; }
               allContent = res.data || [];
               cb(null);
+            });
+        }
+
+        // Force a fresh reload of content_queue (bypasses the once-only `loaded` guard) and
+        // re-render every content view. Used whenever server state may have moved underneath an
+        // open dashboard: after an atomic-claim skip (another publisher took the row), and on tab
+        // re-focus (see the visibilitychange wiring below) so a status the daily cron changed
+        // while this tab sat open doesn't linger stale. Throttled so rapid focus/blur or a burst
+        // of skips can't hammer the API; pass force=true to bypass the throttle.
+        var lastRefreshAt = 0;
+        function refreshContentQueue(force) {
+          var now = Date.now();
+          if (!force && now - lastRefreshAt < 10000) return;
+          lastRefreshAt = now;
+          sb.from("content_queue")
+            .select("*")
+            .order("scheduled_for", { ascending: true })
+            .then(function (res) {
+              if (res.error || !res.data) return;
+              allContent = res.data;
+              renderAll();
             });
         }
 
