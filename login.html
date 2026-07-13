@@ -20,7 +20,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;800;900&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet" />
 
   <script>document.documentElement.classList.add("js");</script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Version-pinned + SRI (audit #12): floating @2 can't be integrity-checked. Bump version
+       AND hash together on upgrade. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.2" integrity="sha384-sgcvElP/LlNRtORGYFLO/9K/bENcpJK19HgvqslWXog6d8f/Va4TpltGiBlGntCM" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" type="image/webp" href="favicon.webp" />
 

@@ -81,8 +81,8 @@ module.exports = async function handler(req, res) {
   try {
     row = await core.fetchRowById(id);
   } catch (err) {
-    console.log("[manual-trigger] fetch failed id=" + id + " error=" + err.message);
-    res.status(500).json({ error: err.message });
+    console.error("[manual-trigger] fetch failed id=" + id + " error=" + err.message);
+    res.status(500).json({ error: "לא ניתן לטעון את התוכן כרגע. נסו שוב." });
     return;
   }
   if (!row) {
@@ -97,7 +97,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  console.log("[manual-trigger] user=" + (user.email || user.id) + " row=" + id + " platform=" + row.platform + " category=" + row.content_category + " scheduled_for=" + row.scheduled_for);
+  console.log("[manual-trigger] user=" + user.id + " row=" + id + " platform=" + row.platform + " category=" + row.content_category + " scheduled_for=" + row.scheduled_for);
   var result = await core.publishOne(row, { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "manual" });
   console.log("[manual-trigger] result row=" + id + " " + JSON.stringify(result));
 

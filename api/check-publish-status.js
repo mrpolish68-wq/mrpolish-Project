@@ -60,7 +60,8 @@ module.exports = async function handler(req, res) {
   try {
     row = await core.fetchRowById(id);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("[status-check] fetch failed id=" + id + " error=" + err.message);
+    res.status(500).json({ error: "לא ניתן לטעון את התוכן כרגע. נסו שוב." });
     return;
   }
   if (!row) {
@@ -72,7 +73,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  console.log("[status-check] user=" + (user.email || user.id) + " row=" + id + " fb_post_id=" + row.fb_post_id);
+  console.log("[status-check] user=" + user.id + " row=" + id + " fb_post_id=" + row.fb_post_id);
   var result = await core.checkScheduledStatus(row, { token: token });
   console.log("[status-check] result row=" + id + " " + JSON.stringify(result));
 

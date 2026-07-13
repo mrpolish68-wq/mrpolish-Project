@@ -490,7 +490,8 @@ module.exports = async function handler(req, res) {
   try {
     due = await fetchDueApproved();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("[cron] fetchDueApproved failed: " + err.message);
+    res.status(500).json({ error: "Failed to load due content." });
     return;
   }
 

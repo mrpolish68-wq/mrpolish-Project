@@ -140,6 +140,7 @@ module.exports = async function handler(req, res) {
       posts: posts
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to reach the Meta Graph API: " + err.message });
+    console.error("[social-snapshot] Meta Graph API request failed: " + err.message);
+    res.status(500).json({ error: "Failed to reach the Meta Graph API." });
   }
 };
