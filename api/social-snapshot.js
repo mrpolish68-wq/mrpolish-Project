@@ -18,6 +18,8 @@
 // same Page token) and read the Page's private engagement analytics.
 "use strict";
 
+const { enforce } = require("./_rate-limit.js");
+
 const GRAPH_VERSION = "v20.0";
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -100,6 +102,8 @@ async function getInstagramSummary(igUserId, token) {
 }
 
 module.exports = async function handler(req, res) {
+  if (enforce(req, res, "social-snapshot", 20, 60 * 1000)) return;
+
   var authHeader = req.headers.authorization || "";
   var accessToken = authHeader.replace(/^Bearer\s+/i, "");
   if (!accessToken) {

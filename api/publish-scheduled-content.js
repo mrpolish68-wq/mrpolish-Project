@@ -130,6 +130,25 @@ async function claimRow(row) {
   return Array.isArray(claimed) && claimed.length > 0;
 }
 
+// Meta signals throttling with specific Graph API error codes (4 app-level, 17 user-level,
+// 32/613 page-level, 341 temporarily-blocked, 80000-range content-publishing limits). When a
+// publish fails for one of these, it's transient — worth telling Ori to wait rather than
+// re-approve in a tight loop (which only deepens the throttle that the shared Page token also
+// needs for the rest of the pipeline).
+function isMetaRateLimit(error) {
+  if (!error || typeof error.code !== "number") return false;
+  var c = error.code;
+  return c === 4 || c === 17 || c === 32 || c === 341 || c === 613 || (c >= 80000 && c <= 80999);
+}
+
+function metaError(prefix, error) {
+  var msg = prefix + ": " + ((error && error.message) || "unknown error");
+  if (isMetaRateLimit(error)) {
+    msg += " (Meta rate limit — temporary; wait a few minutes before re-approving.)";
+  }
+  return new Error(msg);
+}
+
 async function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
 // Stories carry no dedicated "underlying asset type" column (media_type='story' just means
@@ -167,7 +186,7 @@ async function publishFacebookStory(row, token, pageId, scheduledForDate) {
     body: JSON.stringify({ url: row.media_url, published: false, access_token: token })
   });
   var uploadData = await uploadRes.json();
-  if (uploadData.error) throw new Error("Facebook (story photo upload): " + uploadData.error.message);
+  if (uploadData.error) throw metaError("Facebook (story photo upload)", uploadData.error);
 
   // Step 2: publish that photo as a Story.
   var storyUrl = "https://graph.facebook.com/" + GRAPH_VERSION + "/" + pageId + "/photo_stories";
@@ -177,7 +196,7 @@ async function publishFacebookStory(row, token, pageId, scheduledForDate) {
     body: JSON.stringify({ photo_id: uploadData.id, access_token: token })
   });
   var storyData = await storyRes.json();
-  if (storyData.error) throw new Error("Facebook (story publish): " + storyData.error.message);
+  if (storyData.error) throw metaError("Facebook (story publish)", storyData.error);
   return storyData.post_id || storyData.id;
 }
 
@@ -201,7 +220,7 @@ async function publishFacebook(row, token, pageId, scheduledForDate) {
       body: JSON.stringify(Object.assign({ url: row.media_url, caption: row.caption, access_token: token }, scheduleParams))
     });
     var data = await res.json();
-    if (data.error) throw new Error("Facebook: " + data.error.message);
+    if (data.error) throw metaError("Facebook", data.error);
     return data.post_id || data.id;
   }
   // video / reel — simple video post (not the Reels-placement resumable-upload flow)
@@ -212,7 +231,7 @@ async function publishFacebook(row, token, pageId, scheduledForDate) {
     body: JSON.stringify(Object.assign({ file_url: row.media_url, description: row.caption, access_token: token }, scheduleParams))
   });
   var vData = await vRes.json();
-  if (vData.error) throw new Error("Facebook: " + vData.error.message);
+  if (vData.error) throw metaError("Facebook", vData.error);
   return vData.id;
 }
 
@@ -243,7 +262,7 @@ async function publishInstagram(row, token, igUserId) {
     body: JSON.stringify(containerParams)
   });
   var createData = await createRes.json();
-  if (createData.error) throw new Error("Instagram: " + createData.error.message);
+  if (createData.error) throw metaError("Instagram", createData.error);
   var creationId = createData.id;
 
   // Bounded poll — sufficient for images (finish almost immediately) and short video/Reels
@@ -272,7 +291,7 @@ async function publishInstagram(row, token, igUserId) {
     body: JSON.stringify({ creation_id: creationId, access_token: token })
   });
   var publishData = await publishRes.json();
-  if (publishData.error) throw new Error("Instagram: " + publishData.error.message);
+  if (publishData.error) throw metaError("Instagram", publishData.error);
   return publishData.id;
 }
 
@@ -307,6 +326,16 @@ async function publishOne(row, ctx) {
   var hasFacebook = (row.platform === "facebook" || row.platform === "both") && !row.fb_post_id;
   var hasInstagram = (row.platform === "instagram" || row.platform === "both") && ctx.igUserId && !row.ig_post_id;
 
+  // Fail closed on a missing Instagram configuration. A row that targets Instagram but for
+  // which the server has no META_IG_USER_ID must NOT be quietly marked 'published' with a null
+  // ig_post_id — that reports success for a post that never happened (and, for a 'both' row,
+  // hides that only Facebook went out). wantsInstagram captures "this row is supposed to reach
+  // Instagram" independent of whether we currently can; igConfigMissing means we can't. Handled
+  // below by throwing after any Facebook post, so the row lands as 'failed' with a clear reason
+  // (and Facebook's id preserved, per the catch block) rather than a silent false success.
+  var wantsInstagram = (row.platform === "instagram" || row.platform === "both") && !row.ig_post_id;
+  var igConfigMissing = wantsInstagram && !ctx.igUserId;
+
   // Instagram has no native "schedule for later" — every IG call publishes immediately.
   // Any row with an Instagram side that's genuinely in the future is left completely
   // alone here: publishing it now would go live today, silently breaking the whole point
@@ -339,6 +368,13 @@ async function publishOne(row, ctx) {
   var fbPostId = row.fb_post_id || null, igPostId = row.ig_post_id || null;
   try {
     if (hasFacebook) fbPostId = await publishFacebook(row, ctx.token, ctx.pageId, isFuture ? scheduledFor : null);
+    if (igConfigMissing) {
+      // Thrown after any Facebook post so fbPostId is preserved by the catch (a 'both' row
+      // where Facebook already went out stays recorded and won't be re-posted on retry).
+      throw new Error("Instagram side not published — server is missing META_IG_USER_ID. " +
+        (fbPostId ? "Facebook succeeded (post " + fbPostId + "); " : "") +
+        "row marked 'failed' rather than falsely reported as 'published'. Set META_IG_USER_ID and re-approve.");
+    }
     if (hasInstagram) igPostId = await publishInstagram(row, ctx.token, ctx.igUserId); // only reached when !isFuture (see guard above)
 
     var newStatus = isFuture ? "scheduled" : "published"; // isFuture here only ever means "Facebook-only, future"

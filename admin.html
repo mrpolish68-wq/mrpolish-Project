@@ -3140,6 +3140,15 @@
             });
         }
 
+        // Re-sync when Ori returns to this tab. The queue is otherwise fetched only once (the
+        // `loaded` guard), so a status the daily cron changed — or a publish that finished on
+        // another device — while this tab sat open would linger stale, and could tempt a
+        // re-approve of something already live (widening the publish race #3 guards against).
+        // Only meaningful once an initial load has happened; the refetch is self-throttled.
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible" && loaded) refreshContentQueue();
+        });
+
         loadContentQueue = function loadContentQueue() {
           fetchIfNeeded(function (err) {
             if (err) { grid.innerHTML = '<div class="cq-empty">שגיאה בטעינת התוכן. נסו לרענן.</div>'; return; }

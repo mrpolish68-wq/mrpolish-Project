@@ -28,6 +28,7 @@
 "use strict";
 
 const core = require("./publish-scheduled-content.js");
+const { enforce } = require("./_rate-limit.js");
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 // Public key, already embedded client-side in admin.html — safe to duplicate here. Used
@@ -48,6 +49,7 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
+  if (enforce(req, res, "publish-now", 20, 60 * 1000)) return;
 
   var authHeader = req.headers.authorization || "";
   var accessToken = authHeader.replace(/^Bearer\s+/i, "");

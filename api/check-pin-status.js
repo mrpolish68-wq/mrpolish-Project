@@ -11,6 +11,7 @@
 "use strict";
 
 const core = require("./publish-scheduled-content.js");
+const { enforce } = require("./_rate-limit.js");
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
@@ -29,6 +30,7 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
+  if (enforce(req, res, "check-pin-status", 30, 60 * 1000)) return;
 
   var authHeader = req.headers.authorization || "";
   var accessToken = authHeader.replace(/^Bearer\s+/i, "");
