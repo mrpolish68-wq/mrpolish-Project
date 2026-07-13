@@ -209,13 +209,24 @@ async function publishInstagram(row, token, igUserId) {
   if (createData.error) throw new Error("Instagram: " + createData.error.message);
   var creationId = createData.id;
 
-  // Bounded poll (~10s) — sufficient for images; video/Reel needs a two-phase design (see file header).
-  for (var i = 0; i < 5; i++) {
+  // Bounded poll — sufficient for images (finish almost immediately) and short video/Reels
+  // (~19s source clips have taken up to ~30s to reach FINISHED in practice). Still not a full
+  // two-phase design (see file header): a container that's genuinely slow to process can still
+  // exceed this and hit the "Media ID is not available" media_publish error below. 15 x 3s = 45s,
+  // leaving headroom under this route's 60s maxDuration (vercel.json) for the rest of the
+  // request (container creation, the publish call, the Facebook call before it) so the
+  // function isn't killed mid-poll — a kill mid-poll is worse than a clean timeout-error,
+  // since it skips the catch block entirely and leaves no publish_error on the row at all.
+  var processed = false;
+  for (var i = 0; i < 15; i++) {
     var statusRes = await fetch("https://graph.facebook.com/" + GRAPH_VERSION + "/" + creationId + "?fields=status_code&access_token=" + encodeURIComponent(token));
     var statusData = await statusRes.json();
-    if (statusData.status_code === "FINISHED") break;
+    if (statusData.status_code === "FINISHED") { processed = true; break; }
     if (statusData.status_code === "ERROR") throw new Error("Instagram: media processing failed");
-    await sleep(2000);
+    await sleep(3000);
+  }
+  if (!processed) {
+    throw new Error("Instagram: media container did not finish processing within the poll window (creation_id=" + creationId + ") — safe to retry, a new container will be created.");
   }
 
   var publishRes = await fetch("https://graph.facebook.com/" + GRAPH_VERSION + "/" + igUserId + "/media_publish", {
@@ -251,8 +262,13 @@ async function publishOne(row, ctx) {
   var now = new Date();
   var scheduledFor = new Date(row.scheduled_for);
   var isFuture = scheduledFor.getTime() - now.getTime() > FB_MIN_SCHEDULE_MS;
-  var hasFacebook = row.platform === "facebook" || row.platform === "both";
-  var hasInstagram = (row.platform === "instagram" || row.platform === "both") && ctx.igUserId;
+  // Skip a platform that already has a post id from a prior attempt (e.g. a 'both' row
+  // where Facebook succeeded but Instagram then threw, leaving status='failed') — a retry
+  // must never re-run publishFacebook/publishInstagram for a platform that's already live,
+  // or it silently creates a duplicate post. See the catch block below, which is what
+  // makes fb_post_id/ig_post_id survive a partial failure for this check to see next time.
+  var hasFacebook = (row.platform === "facebook" || row.platform === "both") && !row.fb_post_id;
+  var hasInstagram = (row.platform === "instagram" || row.platform === "both") && ctx.igUserId && !row.ig_post_id;
 
   // Instagram has no native "schedule for later" — every IG call publishes immediately.
   // Any row with an Instagram side that's genuinely in the future is left completely
@@ -267,7 +283,10 @@ async function publishOne(row, ctx) {
     };
   }
 
-  var fbPostId = null, igPostId = null;
+  // Seed from whatever the row already has (a prior partial success) rather than null, so
+  // a skipped platform (hasFacebook/hasInstagram false because it already has a post id —
+  // see above) doesn't get overwritten back to null by this attempt's patch.
+  var fbPostId = row.fb_post_id || null, igPostId = row.ig_post_id || null;
   try {
     if (hasFacebook) fbPostId = await publishFacebook(row, ctx.token, ctx.pageId, isFuture ? scheduledFor : null);
     if (hasInstagram) igPostId = await publishInstagram(row, ctx.token, ctx.igUserId); // only reached when !isFuture (see guard above)
@@ -282,10 +301,16 @@ async function publishOne(row, ctx) {
     await updateRow(row.id, patch);
     return { id: row.id, ok: true, status: newStatus, fbPostId: fbPostId, igPostId: igPostId };
   } catch (err) {
+    // Persist fbPostId/igPostId here too: if Facebook already succeeded in this same
+    // attempt (fbPostId got set above) and Instagram then threw, losing that id would mean
+    // a live Facebook post the dashboard has no record of — and a future retry would
+    // re-publish to Facebook, creating a duplicate. This is exactly what happened to the
+    // 2026-07-12 basalt Reel before this fix (fb_post_id had to be recovered by hand from
+    // the Graph API after the fact).
     var error = err.message;
     try {
       await updateRow(row.id, {
-        status: "failed", publish_error: error,
+        status: "failed", publish_error: error, fb_post_id: fbPostId, ig_post_id: igPostId,
         trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
         last_publish_attempt_at: new Date().toISOString()
       });
