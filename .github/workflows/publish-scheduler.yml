@@ -1,0 +1,32 @@
+name: Publish scheduled content (frequent trigger)
+
+# Vercel's own built-in cron (see vercel.json) only runs once a day on the Hobby plan, which
+# is too coarse for content approved for a specific time (e.g. "10:00") — nothing fires between
+# approval and that once-daily run. This workflow calls the exact same
+# /api/publish-scheduled-content endpoint far more often, closing that gap without needing a
+# paid Vercel plan. It requires zero application code changes: the endpoint already checks for
+# and publishes anything due (and, since the auto-retry pass was added, anything recently
+# failed) every time it's called — calling it more often just shrinks the window.
+#
+# Setup (one-time, done in the GitHub repo's own settings, not from code):
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#   Name: CRON_SECRET   Value: the same CRON_SECRET set in the Vercel project's environment
+#   variables (Vercel dashboard -> Project -> Settings -> Environment Variables).
+
+on:
+  schedule:
+    # GitHub Actions schedules are not guaranteed to the minute (can slip a few minutes under
+    # load) and 5 min is its practical minimum granularity — 10 min keeps this a good citizen
+    # of that shared queue while still closing the multi-hour gap down to single-digit minutes.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call publish-scheduled-content
+        run: |
+          curl --fail-with-body -sS \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://mr-polishes.com/api/publish-scheduled-content

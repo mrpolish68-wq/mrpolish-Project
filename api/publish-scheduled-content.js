@@ -50,6 +50,15 @@ const FB_MIN_SCHEDULE_MS = 11 * 60 * 1000;
 // cron is the thing that re-claims it once this lease lapses.
 const CLAIM_LEASE_MS = 5 * 60 * 1000;
 
+// A 'failed' row (e.g. the IG poll-timeout in publishInstagram, which explicitly says "safe
+// to retry") used to sit forever — fetchDueApproved only ever selects status='approved', so
+// nothing automatic ever looked at a failed row again; only a human re-clicking "אשר" in
+// admin.html could unstick it. reclaimFailedRow below lets the cron do that itself, bounded
+// so a row with a permanent cause (bad config, mismatched media_type) doesn't retry forever
+// and silently keep burning Meta API calls — after this many attempts it's left 'failed' for
+// a human to look at, same as before this existed.
+const MAX_AUTO_RETRY_ATTEMPTS = 3;
+
 function supabaseHeaders() {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return {
@@ -63,6 +72,17 @@ async function fetchDueApproved() {
   var nowIso = new Date().toISOString();
   var url = SUPABASE_URL + "/rest/v1/content_queue" +
     "?status=eq.approved&scheduled_for=lte." + encodeURIComponent(nowIso) +
+    "&order=scheduled_for.asc";
+  var res = await fetch(url, { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("Supabase query failed: " + res.status);
+  return res.json();
+}
+
+// Rows that failed a previous attempt but haven't exhausted MAX_AUTO_RETRY_ATTEMPTS yet —
+// see reclaimFailedRow, which is what actually re-queues one of these for this cron run.
+async function fetchFailedForRetry() {
+  var url = SUPABASE_URL + "/rest/v1/content_queue" +
+    "?status=eq.failed&publish_attempts=lt." + MAX_AUTO_RETRY_ATTEMPTS +
     "&order=scheduled_for.asc";
   var res = await fetch(url, { headers: supabaseHeaders() });
   if (!res.ok) throw new Error("Supabase query failed: " + res.status);
@@ -128,6 +148,30 @@ async function claimRow(row) {
   if (!res.ok) throw new Error("Supabase claim failed: " + res.status);
   var claimed = await res.json();
   return Array.isArray(claimed) && claimed.length > 0;
+}
+
+// Atomically flip a 'failed' row (from fetchFailedForRetry) back to 'approved' so publishOne's
+// own claimRow can then pick it up normally — the exact same first step admin.html's approve()
+// does when a human clicks "אשר" on a failed card, just automated. The conditional PATCH (must
+// still be status='failed' AND under the attempt cap) is the compare-and-swap: if two overlapping
+// callers (the daily Vercel cron and a frequent external-scheduler hit — see
+// .github/workflows/publish-scheduler.yml) both see this row as failed, only the first PATCH
+// matches and the second gets 0 rows back and moves on. Deliberately does NOT touch last_publish_attempt_at (that's set
+// by claimRow itself right after); leaving it as whatever the last failed attempt left behind
+// means claimRow's own lease check still works unchanged.
+async function reclaimFailedRow(row) {
+  var url = SUPABASE_URL + "/rest/v1/content_queue" +
+    "?id=eq." + encodeURIComponent(row.id) +
+    "&status=eq.failed" +
+    "&publish_attempts=lt." + MAX_AUTO_RETRY_ATTEMPTS;
+  var res = await fetch(url, {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
+    body: JSON.stringify({ status: "approved", approved_at: new Date().toISOString() })
+  });
+  if (!res.ok) throw new Error("Supabase reclaim failed: " + res.status);
+  var reclaimed = await res.json();
+  return Array.isArray(reclaimed) && reclaimed.length > 0;
 }
 
 // Meta signals throttling with specific Graph API error codes (4 app-level, 17 user-level,
@@ -504,6 +548,33 @@ module.exports = async function handler(req, res) {
     results.push(result);
   }
 
+  // Auto-retry pass: rows a previous run marked 'failed' (e.g. the IG poll-timeout, which
+  // explicitly says "safe to retry") used to require a human to notice and re-click "אשר" in
+  // admin.html. This does that automatically, bounded by MAX_AUTO_RETRY_ATTEMPTS so a row with
+  // a permanent cause (bad config, mismatched media_type) doesn't retry forever — it's left
+  // 'failed' for a human once the cap is hit, same as before this existed.
+  var failedCandidates;
+  try {
+    failedCandidates = await fetchFailedForRetry();
+  } catch (err) {
+    failedCandidates = [];
+    console.log("[cron] fetchFailedForRetry failed: " + err.message);
+  }
+  var retryResults = [];
+  for (var k = 0; k < failedCandidates.length; k++) {
+    var candidate = failedCandidates[k];
+    var reclaimed = await reclaimFailedRow(candidate);
+    if (!reclaimed) {
+      // Someone else (another cron/scheduler hit, or a human's own "אשר" click) already
+      // reclaimed or is otherwise handling this row — skip rather than reprocess it here.
+      continue;
+    }
+    var freshRow = await fetchRowById(candidate.id);
+    var retryResult = await publishOne(freshRow, ctx);
+    console.log("[cron] auto-retry row=" + candidate.id + " " + JSON.stringify(retryResult));
+    retryResults.push(retryResult);
+  }
+
   // Second pass: confirm any natively-scheduled Facebook posts whose time has arrived are
   // actually live yet, and flip them to 'published' the moment they genuinely are — this is
   // what keeps a 'scheduled' row from sitting indefinitely once Meta has actually published it.
@@ -521,7 +592,11 @@ module.exports = async function handler(req, res) {
     checkResults.push(checkResult);
   }
 
-  res.status(200).json({ processed: results.length, results: results, statusChecks: checkResults.length, statusCheckResults: checkResults });
+  res.status(200).json({
+    processed: results.length, results: results,
+    retried: retryResults.length, retryResults: retryResults,
+    statusChecks: checkResults.length, statusCheckResults: checkResults
+  });
 };
 
 // Exported for api/publish-now.js (the real-time Approve-button trigger) to reuse — see
@@ -532,3 +607,5 @@ module.exports.publishOne = publishOne;
 module.exports.fetchRowById = fetchRowById;
 module.exports.checkScheduledStatus = checkScheduledStatus;
 module.exports.checkPinStatus = checkPinStatus;
+module.exports.fetchFailedForRetry = fetchFailedForRetry;
+module.exports.reclaimFailedRow = reclaimFailedRow;

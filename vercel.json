@@ -8,5 +8,20 @@
   "functions": {
     "api/publish-scheduled-content.js": { "maxDuration": 60 },
     "api/publish-now.js": { "maxDuration": 60 }
-  }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://app.trysoro.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://mmognkxkglkotzkuxzly.supabase.co https://graph.facebook.com https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; upgrade-insecure-requests; report-uri /api/csp-report; report-to csp-endpoint"
+        },
+        {
+          "key": "Reporting-Endpoints",
+          "value": "csp-endpoint=\"https://mr-polishes.com/api/csp-report\""
+        }
+      ]
+    }
+  ]
 }
