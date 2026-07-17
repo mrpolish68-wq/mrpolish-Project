@@ -606,6 +606,9 @@
     }
 
     /* Analytics tab */
+    .an-toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-block-end:18px; }
+    .an-refresh-status { font-size:.82rem; font-weight:600; color:var(--ink-600,var(--ink-500)); }
+    .an-refresh-status.err { color:oklch(0.55 0.18 25); }
     .an-panel-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-block-end:14px; }
     .an-panel-head h3 { margin:0; }
     .an-chart-legend { display:flex; gap:16px; font-size:.8rem; font-weight:600; color:var(--ink-600,var(--ink-500)); }
@@ -911,6 +914,11 @@
         <!-- Tab: Analytics -->
         <section class="admin-view" id="view-analytics">
           <div class="view-head"><h2>אנליטיקה</h2><p>ביצועים יומיים, תגובות שדורשות תשומת לב והמלצות AI לתוכן — מתעדכן אוטומטית כל בוקר.</p></div>
+
+          <div class="an-toolbar">
+            <button type="button" class="btn btn-navy btn-sm" id="anRefreshBtn">🔄 רענון אנליטיקה</button>
+            <span class="an-refresh-status" id="anRefreshStatus"></span>
+          </div>
 
           <div class="metric-grid">
             <div class="metric"><div class="ic">📘</div><div class="num" id="anFbFollowers">—</div><div class="lbl">עוקבים בפייסבוק</div></div>
@@ -2056,6 +2064,8 @@
         var commentsList = document.getElementById("anCommentsList");
         var tipsGrid = document.getElementById("anTipsGrid");
         var planWrap = document.getElementById("anMonthlyPlan");
+        var refreshBtn = document.getElementById("anRefreshBtn");
+        var refreshStatus = document.getElementById("anRefreshStatus");
 
         function esc(s) {
           return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
@@ -2229,6 +2239,57 @@
               .then(function () { fetchAndRenderComments(); });
           }
         });
+
+        // "🔄 רענון אנליטיקה" — runs the exact same agent logic as the daily cron
+        // (api/analytics-refresh.js -> analytics-agent.js's runAgent()), session-authenticated
+        // like every other on-demand Meta call in this dashboard (never CRON_SECRET
+        // client-side). A real run makes dozens of sequential Graph API calls, so this can
+        // genuinely take from several seconds up to tens of seconds — the button is disabled
+        // and a spinner shown for the whole request so Ori knows it's still working, not stuck.
+        function setRefreshing(isRefreshing) {
+          refreshBtn.disabled = isRefreshing;
+          refreshStatus.className = "an-refresh-status";
+          refreshStatus.innerHTML = isRefreshing
+            ? '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מריץ את סוכן האנליטיקה — זה יכול לקחת עד כדקה…</span>'
+            : "";
+        }
+
+        function triggerRefresh() {
+          setRefreshing(true);
+          sb.auth.getSession().then(function (sessionRes) {
+            var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+            if (!token) {
+              setRefreshing(false);
+              refreshStatus.className = "an-refresh-status err";
+              refreshStatus.textContent = "החיבור פג. רעננו את הדף והתחברו מחדש.";
+              return;
+            }
+            fetch("/api/analytics-refresh", { method: "POST", headers: { Authorization: "Bearer " + token } })
+              .then(function (res) { return res.json().then(function (data) { return { httpOk: res.ok, data: data }; }); })
+              .then(function (result) {
+                setRefreshing(false);
+                if (!result.httpOk) {
+                  refreshStatus.className = "an-refresh-status err";
+                  refreshStatus.textContent = "שגיאה: " + (result.data.error || "הרצת הסוכן נכשלה.");
+                  return;
+                }
+                fetchAndRenderMetrics();
+                fetchAndRenderComments();
+                fetchAndRenderTips();
+                fetchAndRenderPlan();
+                refreshStatus.className = "an-refresh-status";
+                refreshStatus.textContent = "עודכן בהצלחה ✅";
+                setTimeout(function () { if (refreshStatus.textContent === "עודכן בהצלחה ✅") refreshStatus.textContent = ""; }, 5000);
+              })
+              .catch(function () {
+                setRefreshing(false);
+                refreshStatus.className = "an-refresh-status err";
+                refreshStatus.textContent = "שגיאה בתקשורת עם השרת.";
+              });
+          });
+        }
+
+        refreshBtn.addEventListener("click", triggerRefresh);
 
         return function loadAnalytics() {
           if (loaded) return;

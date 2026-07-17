@@ -381,22 +381,17 @@ async function generateMonthlyPlanIfDue() {
   };
 }
 
-module.exports = async function handler(req, res) {
-  var cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    var auth = req.headers.authorization || "";
-    if (auth !== "Bearer " + cronSecret) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-  }
-
+// The actual work, split out from the HTTP handler so both the cron entry point below and
+// api/analytics-refresh.js (the dashboard's session-authenticated "🔄 רענון אנליטיקה" button —
+// same split as publish-scheduled-content.js's publishOne / publish-now.js) can run the exact
+// same logic. Idempotent throughout (upserts + existence-checks), so a manual trigger the same
+// day the cron already ran just corrects/no-ops rather than duplicating anything.
+async function runAgent() {
   var token = process.env.META_PAGE_ACCESS_TOKEN;
   var pageId = process.env.META_PAGE_ID;
   var igUserId = process.env.META_IG_USER_ID;
   if (!token || !pageId || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    res.status(500).json({ error: "Server is missing META_PAGE_ACCESS_TOKEN / META_PAGE_ID / SUPABASE_SERVICE_ROLE_KEY configuration." });
-    return;
+    throw new Error("Server is missing META_PAGE_ACCESS_TOKEN / META_PAGE_ID / SUPABASE_SERVICE_ROLE_KEY configuration.");
   }
 
   var todayStr = new Date().toISOString().slice(0, 10);
@@ -478,11 +473,32 @@ module.exports = async function handler(req, res) {
   }
 
   console.log("[analytics-agent] " + JSON.stringify(summary));
-  res.status(200).json(summary);
+  return summary;
+}
+
+module.exports = async function handler(req, res) {
+  var cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    var auth = req.headers.authorization || "";
+    if (auth !== "Bearer " + cronSecret) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+
+  try {
+    var summary = await runAgent();
+    res.status(200).json(summary);
+  } catch (err) {
+    console.error("[analytics-agent] failed: " + err.message);
+    res.status(500).json({ error: err.message });
+  }
 };
 
-// Exported for local smoke-testing and any future manual-trigger endpoint (same reuse
-// pattern as publish-scheduled-content.js's exports for publish-now.js).
+// Exported for api/analytics-refresh.js (the dashboard's manual trigger) and local
+// smoke-testing — same reuse pattern as publish-scheduled-content.js's exports for
+// publish-now.js.
+module.exports.runAgent = runAgent;
 module.exports.fetchFacebookDaily = fetchFacebookDaily;
 module.exports.fetchInstagramDaily = fetchInstagramDaily;
 module.exports.scanFacebookComments = scanFacebookComments;
