@@ -605,6 +605,34 @@
       font-family:var(--font-display); font-weight:800; font-size:1rem;
     }
 
+    /* Analytics tab */
+    .an-panel-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-block-end:14px; }
+    .an-panel-head h3 { margin:0; }
+    .an-chart-legend { display:flex; gap:16px; font-size:.8rem; font-weight:600; color:var(--ink-600,var(--ink-500)); }
+    .an-legend-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-inline-end:5px; }
+    .an-dot-fb { background:var(--navy-600); }
+    .an-dot-ig { background:var(--gold-600); }
+    .an-chart-wrap { overflow-x:auto; }
+    .an-chart-wrap svg { display:block; min-width:560px; width:100%; height:auto; }
+
+    .an-comments-list { display:flex; flex-direction:column; gap:12px; }
+    .an-comment-item { border:1px solid var(--marble-200); border-radius:12px; padding:14px 16px; background:var(--marble-50); }
+    .an-comment-head { display:flex; align-items:center; gap:8px; font-size:.8rem; font-weight:700; color:var(--ink-600,var(--ink-500)); margin-block-end:6px; }
+    .an-comment-text { font-size:.92rem; color:var(--char-900); line-height:1.5; margin-block-end:8px; }
+    .an-comment-reply { font-size:.85rem; color:var(--ink-700); background:var(--white); border:1px dashed var(--marble-200); border-radius:8px; padding:8px 10px; margin-block-end:10px; }
+    .an-comment-reply b { color:var(--char-800); }
+    .an-comment-actions { display:flex; gap:8px; }
+
+    .an-tips-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+    .an-tip-card { border:1px solid var(--marble-200); border-radius:12px; padding:14px 16px; background:var(--white); position:relative; overflow:hidden; }
+    .an-tip-card::before { content:""; position:absolute; inset-block-start:0; inset-inline:0; height:3px; background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); }
+    .an-tip-card h4 { font-size:.9rem; color:var(--char-900); margin-block-end:6px; }
+    .an-tip-card p { font-size:.85rem; color:var(--ink-700); line-height:1.55; margin:0; }
+
+    .an-plan-table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    .an-plan-table th, .an-plan-table td { padding:10px 12px; text-align:right; border-block-end:1px solid var(--marble-200); }
+    .an-plan-table th { color:var(--ink-500); font-weight:700; font-size:.78rem; }
+
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
@@ -641,6 +669,7 @@
         <button data-view="ai"><span class="ic" aria-hidden="true">🧾</span> הזמנות עבודה</button>
         <button data-view="expenses"><span class="ic" aria-hidden="true">💰</span> הוצאות עסק</button>
         <button data-view="social"><span class="ic" aria-hidden="true">📱</span> רשתות חברתיות</button>
+        <button data-view="analytics"><span class="ic" aria-hidden="true">📈</span> אנליטיקה</button>
         <button data-view="content"><span class="ic" aria-hidden="true">🗂️</span> ניהול תוכן</button>
         <button data-view="content-calendar"><span class="ic" aria-hidden="true">🗓️</span> לוח תוכן</button>
       </nav>
@@ -879,6 +908,52 @@
           </div>
         </section>
 
+        <!-- Tab: Analytics -->
+        <section class="admin-view" id="view-analytics">
+          <div class="view-head"><h2>אנליטיקה</h2><p>ביצועים יומיים, תגובות שדורשות תשומת לב והמלצות AI לתוכן — מתעדכן אוטומטית כל בוקר.</p></div>
+
+          <div class="metric-grid">
+            <div class="metric"><div class="ic">📘</div><div class="num" id="anFbFollowers">—</div><div class="lbl">עוקבים בפייסבוק</div></div>
+            <div class="metric"><div class="ic">📸</div><div class="num" id="anIgFollowers">—</div><div class="lbl">עוקבים באינסטגרם</div></div>
+            <div class="metric"><div class="ic">🔥</div><div class="num" id="anEngagementToday">—</div><div class="lbl">מעורבות היום (שתי הפלטפורמות)</div></div>
+            <div class="metric"><div class="ic">💬</div><div class="num" id="anCommentsCount">—</div><div class="lbl">תגובות שדורשות מענה</div></div>
+          </div>
+
+          <div class="panel">
+            <div class="an-panel-head">
+              <h3>מגמות ביצועים — 30 יום אחרונים</h3>
+              <div class="an-chart-legend">
+                <span><i class="an-legend-dot an-dot-fb"></i> פייסבוק</span>
+                <span><i class="an-legend-dot an-dot-ig"></i> אינסטגרם</span>
+              </div>
+            </div>
+            <div class="an-chart-wrap" id="anChartWrap">
+              <div class="cq-empty">טוען נתונים…</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>תגובות שדורשות תשומת לב</h3>
+            <div class="an-comments-list" id="anCommentsList">
+              <div class="cq-empty">טוען…</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>המלצות AI להיום</h3>
+            <div class="an-tips-grid" id="anTipsGrid">
+              <div class="cq-empty">טוען…</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>תוכנית תוכן חודשית</h3>
+            <div id="anMonthlyPlan">
+              <div class="cq-empty">טוען…</div>
+            </div>
+          </div>
+        </section>
+
         <!-- Tab 7: Content Management -->
         <section class="admin-view" id="view-content">
           <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p></div>
@@ -1100,7 +1175,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", ai: "הזמנות עבודה", expenses: "הוצאות עסק", social: "רשתות חברתיות", content: "ניהול תוכן", "content-calendar": "לוח תוכן" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", ai: "הזמנות עבודה", expenses: "הוצאות עסק", social: "רשתות חברתיות", analytics: "אנליטיקה", content: "ניהול תוכן", "content-calendar": "לוח תוכן" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -1111,6 +1186,7 @@
         if (v === "leads") loadLeads(); // lazy-load on first open
         if (v === "expenses") loadExpenses(); // lazy-load on first open
         if (v === "social") loadSocial(); // lazy-load on first open
+        if (v === "analytics") loadAnalytics(); // lazy-load on first open
         if (v === "content") loadContentQueue(); // lazy-load on first open
         if (v === "content-calendar") loadContentCalendar(); // lazy-load on first open, shares data with loadContentQueue
       });
@@ -1961,6 +2037,206 @@
           if (loaded) return;
           loaded = true;
           fetchAndRender();
+        };
+      })();
+
+      /* ---------- Analytics tab ----------
+         Unlike Social Snapshot (loadSocial above), this tab never calls Meta directly — it
+         only reads what the daily cron (api/analytics-agent.js) already wrote to Supabase,
+         same read pattern as Content Management/Business Expenses (sb.from(...).select(...)
+         with the authenticated RLS session, no API endpoint needed). The "mark handled" /
+         "dismiss" comment actions write straight back to social_comments the same way. */
+      var loadAnalytics = (function () {
+        var loaded = false;
+        var fbFollowersEl = document.getElementById("anFbFollowers");
+        var igFollowersEl = document.getElementById("anIgFollowers");
+        var engagementTodayEl = document.getElementById("anEngagementToday");
+        var commentsCountEl = document.getElementById("anCommentsCount");
+        var chartWrap = document.getElementById("anChartWrap");
+        var commentsList = document.getElementById("anCommentsList");
+        var tipsGrid = document.getElementById("anTipsGrid");
+        var planWrap = document.getElementById("anMonthlyPlan");
+
+        function esc(s) {
+          return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+          });
+        }
+        function fmtDate(iso) {
+          var d = new Date(iso);
+          if (isNaN(d)) return "";
+          var p = function (n) { return (n < 10 ? "0" : "") + n; };
+          return p(d.getDate()) + "/" + p(d.getMonth() + 1);
+        }
+
+        // Hand-rolled SVG line chart — zero dependency, matches this project's no-build-step
+        // philosophy (same reasoning as the existing Content Health bar widget). Plots
+        // engagement_count per platform across the fetched date range as two polylines.
+        function renderChart(rows) {
+          if (!rows.length) {
+            chartWrap.innerHTML = '<div class="cq-empty">אין עדיין מספיק נתונים לגרף — הסוכן היומי ימלא אותו בהדרגה מדי בוקר.</div>';
+            return;
+          }
+          var W = 720, H = 220, padL = 34, padR = 12, padT = 14, padB = 26;
+          var dates = [];
+          rows.forEach(function (r) { if (dates.indexOf(r.snapshot_date) === -1) dates.push(r.snapshot_date); });
+          dates.sort();
+          var byPlatformDate = {};
+          var maxVal = 1;
+          rows.forEach(function (r) {
+            byPlatformDate[r.platform + "|" + r.snapshot_date] = r.engagement_count;
+            if (r.engagement_count > maxVal) maxVal = r.engagement_count;
+          });
+
+          function xFor(i) { return padL + (dates.length > 1 ? (i / (dates.length - 1)) * (W - padL - padR) : 0); }
+          function yFor(v) { return H - padB - (v / maxVal) * (H - padT - padB); }
+
+          function pathFor(platform, color) {
+            var pts = dates.map(function (d, i) {
+              var v = byPlatformDate[platform + "|" + d];
+              return v == null ? null : (xFor(i) + "," + yFor(v));
+            }).filter(function (p) { return p; });
+            if (pts.length < 2) return "";
+            return '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + color +
+              '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />';
+          }
+
+          var labelEvery = Math.max(1, Math.ceil(dates.length / 6));
+          var xLabels = dates.map(function (d, i) {
+            if (i % labelEvery !== 0 && i !== dates.length - 1) return "";
+            return '<text x="' + xFor(i) + '" y="' + (H - 6) + '" font-size="10" fill="var(--ink-500)" text-anchor="middle">' + fmtDate(d) + '</text>';
+          }).join("");
+
+          var gridLines = [0, 0.5, 1].map(function (f) {
+            var y = padT + f * (H - padT - padB);
+            var val = Math.round(maxVal * (1 - f));
+            return '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="var(--marble-200)" stroke-width="1" />' +
+              '<text x="' + (padL - 6) + '" y="' + (y + 3) + '" font-size="10" fill="var(--ink-500)" text-anchor="end">' + val + '</text>';
+          }).join("");
+
+          chartWrap.innerHTML =
+            '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="גרף מגמות מעורבות">' +
+            gridLines + pathFor("facebook", "var(--navy-600)") + pathFor("instagram", "var(--gold-600)") + xLabels +
+            '</svg>';
+        }
+
+        function renderComments(rows) {
+          commentsCountEl.textContent = rows.length;
+          if (!rows.length) {
+            commentsList.innerHTML = '<div class="cq-empty">אין תגובות שממתינות למענה 🎉</div>';
+            return;
+          }
+          commentsList.innerHTML = rows.map(function (r) {
+            var badge = r.platform === "instagram" ? "📸 אינסטגרם" : "📘 פייסבוק";
+            var meta = badge + (r.author_name ? " · " + esc(r.author_name) : "") + (r.commented_at ? " · " + esc(fmtDate(r.commented_at)) : "");
+            var link = r.post_permalink ? '<a href="' + esc(r.post_permalink) + '" target="_blank" rel="noopener">צפייה בפוסט</a> ' : "";
+            return '<div class="an-comment-item">' +
+              '<div class="an-comment-head">' + meta + '</div>' +
+              '<div class="an-comment-text">' + esc(r.comment_text) + '</div>' +
+              (r.suggested_reply ? '<div class="an-comment-reply"><b>הצעת מענה:</b> ' + esc(r.suggested_reply) + '</div>' : "") +
+              '<div class="an-comment-actions">' + link +
+              '<button type="button" class="btn btn-navy btn-sm" data-an-replied="' + esc(r.id) + '">✅ סומן כטופל</button>' +
+              '<button type="button" class="btn btn-navy btn-sm" data-an-dismiss="' + esc(r.id) + '">🗑 התעלם</button>' +
+              '</div></div>';
+          }).join("");
+        }
+
+        function renderTips(rows) {
+          if (!rows.length) {
+            tipsGrid.innerHTML = '<div class="cq-empty">אין עדיין המלצות להיום — הסוכן היומי טרם רץ.</div>';
+            return;
+          }
+          tipsGrid.innerHTML = rows.map(function (r) {
+            return '<div class="an-tip-card"><h4>' + esc(r.title) + '</h4><p>' + esc(r.body) + '</p></div>';
+          }).join("");
+        }
+
+        function renderPlan(row) {
+          if (!row || !row.plan_items || !row.plan_items.length) {
+            planWrap.innerHTML = '<div class="cq-empty">התוכנית הבאה תיווצר אוטומטית בתחילת החודש הקרוב.</div>';
+            return;
+          }
+          planWrap.innerHTML =
+            '<table class="an-plan-table"><thead><tr><th>שבוע</th><th>נושא מוצע</th><th>הערות</th></tr></thead><tbody>' +
+            row.plan_items.map(function (p) {
+              return '<tr><td>' + esc(p.week) + '</td><td>' + esc(p.theme) + '</td><td>' + esc(p.notes || "") + '</td></tr>';
+            }).join("") + '</tbody></table>';
+        }
+
+        function fetchAndRenderMetrics() {
+          var since = new Date(); since.setDate(since.getDate() - 30);
+          sb.from("meta_analytics").select("*")
+            .gte("snapshot_date", since.toISOString().slice(0, 10))
+            .order("snapshot_date", { ascending: true })
+            .then(function (res) {
+              if (res.error) { chartWrap.innerHTML = '<div class="cq-empty">שגיאה בטעינת הנתונים.</div>'; return; }
+              var rows = res.data || [];
+              renderChart(rows);
+              var fbRows = rows.filter(function (r) { return r.platform === "facebook"; });
+              var igRows = rows.filter(function (r) { return r.platform === "instagram"; });
+              var latestFb = fbRows[fbRows.length - 1];
+              var latestIg = igRows[igRows.length - 1];
+              fbFollowersEl.textContent = latestFb && latestFb.follower_count != null ? latestFb.follower_count.toLocaleString("he-IL") : "—";
+              igFollowersEl.textContent = latestIg && latestIg.follower_count != null ? latestIg.follower_count.toLocaleString("he-IL") : "—";
+              var todayEng = ((latestFb && latestFb.engagement_count) || 0) + ((latestIg && latestIg.engagement_count) || 0);
+              engagementTodayEl.textContent = todayEng || "—";
+            });
+        }
+
+        function fetchAndRenderComments() {
+          sb.from("social_comments").select("*")
+            .eq("status", "needs_attention")
+            .order("commented_at", { ascending: false })
+            .then(function (res) {
+              if (res.error) { commentsList.innerHTML = '<div class="cq-empty">שגיאה בטעינת הנתונים.</div>'; return; }
+              renderComments(res.data || []);
+            });
+        }
+
+        function fetchAndRenderTips() {
+          var todayStr = new Date().toISOString().slice(0, 10);
+          sb.from("ai_recommendations").select("*")
+            .eq("kind", "daily_tip").eq("period_date", todayStr)
+            .then(function (res) {
+              if (res.error) { tipsGrid.innerHTML = '<div class="cq-empty">שגיאה בטעינת הנתונים.</div>'; return; }
+              renderTips(res.data || []);
+            });
+        }
+
+        function fetchAndRenderPlan() {
+          sb.from("ai_recommendations").select("*")
+            .eq("kind", "monthly_plan")
+            .order("period_date", { ascending: false })
+            .limit(1)
+            .then(function (res) {
+              if (res.error) { planWrap.innerHTML = '<div class="cq-empty">שגיאה בטעינת הנתונים.</div>'; return; }
+              renderPlan((res.data || [])[0]);
+            });
+        }
+
+        commentsList.addEventListener("click", function (e) {
+          var repliedBtn = e.target.closest("[data-an-replied]");
+          var dismissBtn = e.target.closest("[data-an-dismiss]");
+          if (repliedBtn) {
+            sb.from("social_comments")
+              .update({ status: "replied", replied_at: new Date().toISOString() })
+              .eq("id", repliedBtn.getAttribute("data-an-replied"))
+              .then(function () { fetchAndRenderComments(); });
+          } else if (dismissBtn) {
+            sb.from("social_comments")
+              .update({ status: "dismissed", dismissed_at: new Date().toISOString() })
+              .eq("id", dismissBtn.getAttribute("data-an-dismiss"))
+              .then(function () { fetchAndRenderComments(); });
+          }
+        });
+
+        return function loadAnalytics() {
+          if (loaded) return;
+          loaded = true;
+          fetchAndRenderMetrics();
+          fetchAndRenderComments();
+          fetchAndRenderTips();
+          fetchAndRenderPlan();
         };
       })();
 

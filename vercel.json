@@ -3,11 +3,16 @@
     {
       "path": "/api/publish-scheduled-content",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/analytics-agent",
+      "schedule": "0 3 * * *"
     }
   ],
   "functions": {
     "api/publish-scheduled-content.js": { "maxDuration": 60 },
-    "api/publish-now.js": { "maxDuration": 60 }
+    "api/publish-now.js": { "maxDuration": 60 },
+    "api/analytics-agent.js": { "maxDuration": 60 }
   },
   "headers": [
     {
