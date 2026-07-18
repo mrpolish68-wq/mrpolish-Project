@@ -1026,6 +1026,10 @@
                 <option value="rating_asc">מיון: דירוג AI (נמוך לגבוה)</option>
               </select>
             </div>
+            <div class="cq-view-toggle" id="cqStatusToggle">
+              <button type="button" class="active" data-cq-status="active">📋 פעילים</button>
+              <button type="button" data-cq-status="history">📜 היסטוריה</button>
+            </div>
             <div class="cq-view-toggle" id="cqViewToggle">
               <button type="button" class="active" data-cq-view="list">📋 רשימה</button>
               <button type="button" data-cq-view="week">🗓️ תצוגת שבוע</button>
@@ -2316,6 +2320,13 @@
         var filterPlatform = document.getElementById("cqFilterPlatform");
         var filterCategory = document.getElementById("cqFilterCategory");
         var sortBy = document.getElementById("cqSortBy");
+        var statusToggle = document.getElementById("cqStatusToggle");
+        // false = "פעילים" (default) — everything except published/rejected, so the grid
+        // stays focused on what still needs attention. true = "היסטוריה" — published/rejected
+        // only. Rows older than a week in either status are moved out of content_queue
+        // entirely by the daily agent (archiveOldContent, api/analytics-agent.js), so this
+        // history view is naturally bounded to roughly the last week, not unbounded.
+        var historyMode = false;
         var healthPendingEl = document.getElementById("cqHealthPending");
         var healthWeekEl = document.getElementById("cqHealthWeek");
         var healthBarsEl = document.getElementById("cqHealthBars");
@@ -2577,6 +2588,11 @@
         function currentRows() {
           var st = filterStatus.value, pl = filterPlatform.value, cat = filterCategory.value, sort = sortBy.value;
           var rows = allContent.filter(function (r) {
+            // Active/History split first — see historyMode's declaration above. Independent
+            // of the status dropdown below: e.g. picking "נכשל" inside History correctly
+            // yields nothing (a failed row isn't published/rejected), same as it would today.
+            var isArchivalStatus = r.status === "published" || r.status === "rejected";
+            if (historyMode ? !isArchivalStatus : isArchivalStatus) return false;
             // Filtered against the *displayed* status, not the raw DB column, so the
             // dropdown matches exactly what's on-screen. The dropdown itself only offers
             // one "ממתין לפרסום" option (approved_ready folded in - see cardHtml's badge,
@@ -2604,7 +2620,10 @@
         function render() {
           var rows = currentRows();
           if (!rows.length) {
-            grid.innerHTML = '<div class="cq-empty">' + (allContent.length ? "אין תוכן התואם את הסינון." : "אין עדיין תוכן בתור.") + "</div>";
+            var emptyMsg = historyMode
+              ? "אין עדיין תוכן בהיסטוריה (פורסם/נדחה) — או שהכול כבר הועבר לארכיון אחרי שבוע."
+              : (allContent.length ? "אין תוכן התואם את הסינון." : "אין עדיין תוכן בתור.");
+            grid.innerHTML = '<div class="cq-empty">' + emptyMsg + "</div>";
           } else {
             grid.innerHTML = rows.map(cardHtml).join("");
           }
@@ -2615,6 +2634,14 @@
           if (currentView === "week") renderWeekGrid();
         }
         [filterStatus, filterPlatform, filterCategory, sortBy].forEach(function (el) { el.addEventListener("change", renderContentViews); });
+        statusToggle.addEventListener("click", function (e) {
+          var btn = e.target.closest("button[data-cq-status]");
+          if (!btn) return;
+          historyMode = btn.getAttribute("data-cq-status") === "history";
+          statusToggle.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b === btn); });
+          filterStatus.value = ""; // Active vs History define disjoint status sets — start clean
+          renderContentViews();
+        });
 
         /* ---------- Content Health summary widget ---------- */
         function renderHealth() {
@@ -3186,7 +3213,7 @@
         }
         function reject(id) {
           if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
-          updateRow(id, { status: "rejected" });
+          updateRow(id, { status: "rejected", rejected_at: new Date().toISOString() });
         }
         // On-demand Meta status check for a natively-scheduled Facebook post (status
         // 'scheduled') - the same check the cron already runs automatically once a row is

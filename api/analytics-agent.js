@@ -1,7 +1,9 @@
-// Vercel cron job (once/day): the "Analytics" tab's data engine. Fetches Facebook +
-// Instagram performance metrics, flags unanswered comments, and derives 3 daily tips +
-// (on the 1st of the month) a monthly content plan — all via deterministic heuristics over
-// this project's own data, never an external AI API call (no key to manage, no ongoing cost).
+// Vercel cron job (once/day): the "Analytics" tab's data engine, plus Content Management's
+// housekeeping. Fetches Facebook + Instagram performance metrics, flags unanswered comments,
+// derives 3 daily tips + (on the 1st of the month) a monthly content plan — all via
+// deterministic heuristics over this project's own data, never an external AI API call (no
+// key to manage, no ongoing cost) — and archives content_queue rows that have sat
+// published/rejected for more than a week (see archiveOldContent below).
 //
 // Relationship to api/social-snapshot.js: that endpoint is a stateless, on-demand, session-
 // authenticated read for the existing "Social Snapshot" tab (last ~10 posts, live from Meta,
@@ -67,6 +69,44 @@ async function supabaseUpsert(table, rows, conflictCols, resolution) {
     body: JSON.stringify(rows)
   });
   if (!res.ok) throw new Error("Supabase upsert into " + table + " failed: " + res.status);
+}
+
+async function supabaseDeleteByIds(table, ids) {
+  var url = SUPABASE_URL + "/rest/v1/" + table + "?id=in.(" + ids.map(encodeURIComponent).join(",") + ")";
+  var res = await fetch(url, { method: "DELETE", headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()) });
+  if (!res.ok) throw new Error("Supabase delete from " + table + " failed: " + res.status);
+}
+
+// ---------------------------------------------------------------------------
+// Content Management archive — moves content_queue rows that have sat
+// published/rejected for more than ARCHIVE_AFTER_DAYS into
+// content_queue_archive (same shape + archived_at), then removes them from
+// content_queue. Non-destructive (the row survives in the archive table) —
+// keeps the main table, and the dashboard's default "active work" view, lean
+// as the pilot's history accumulates. See supabase-content-queue-archive.sql.
+// ---------------------------------------------------------------------------
+
+const ARCHIVE_AFTER_DAYS = 7;
+
+async function archiveOldContent() {
+  var cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - ARCHIVE_AFTER_DAYS);
+  var cutoffIso = cutoff.toISOString();
+
+  var due = await supabaseGet("content_queue?or=(" +
+    "and(status.eq.published,published_at.lt." + encodeURIComponent(cutoffIso) + ")," +
+    "and(status.eq.rejected,rejected_at.lt." + encodeURIComponent(cutoffIso) + ")" +
+    ")&select=*");
+  if (!due.length) return 0;
+
+  var archiveRows = due.map(function (row) {
+    var copy = Object.assign({}, row);
+    copy.archived_at = new Date().toISOString();
+    return copy;
+  });
+  await supabaseInsert("content_queue_archive", archiveRows);
+  await supabaseDeleteByIds("content_queue", due.map(function (row) { return row.id; }));
+  return due.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -395,7 +435,7 @@ async function runAgent() {
   }
 
   var todayStr = new Date().toISOString().slice(0, 10);
-  var summary = { metrics: {}, commentsFlagged: 0, tipsWritten: 0, monthlyPlanWritten: false, errors: [] };
+  var summary = { metrics: {}, commentsFlagged: 0, tipsWritten: 0, monthlyPlanWritten: false, archived: 0, errors: [] };
   var fbData = null, igData = null;
 
   try {
@@ -472,6 +512,13 @@ async function runAgent() {
     console.error("[analytics-agent] monthly plan failed: " + err.message);
   }
 
+  try {
+    summary.archived = await archiveOldContent();
+  } catch (err) {
+    summary.errors.push("content archive: " + err.message);
+    console.error("[analytics-agent] content archive failed: " + err.message);
+  }
+
   console.log("[analytics-agent] " + JSON.stringify(summary));
   return summary;
 }
@@ -505,3 +552,4 @@ module.exports.scanFacebookComments = scanFacebookComments;
 module.exports.scanInstagramComments = scanInstagramComments;
 module.exports.generateDailyTips = generateDailyTips;
 module.exports.generateMonthlyPlanIfDue = generateMonthlyPlanIfDue;
+module.exports.archiveOldContent = archiveOldContent;
