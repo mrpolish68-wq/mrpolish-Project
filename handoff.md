@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-17 (Analytics tab added, §19). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-07-18 (Analytics tab §19 + Content Management archive §20 both confirmed live and verified end-to-end; GitHub Actions CRON_SECRET incident, §20). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -660,7 +660,7 @@ Ori asked for the admin panel to become an "active marketing hub": a daily agent
 2. **Three normalized tables, not two.** Ori's original ask named two tables (`meta_analytics`, `social_engagement`); built as three (`meta_analytics`, `social_comments`, `ai_recommendations`) instead, since a single `social_engagement` table holding both individual comment rows and AI-recommendation rows via a type discriminator would mean most columns are null on most rows — cuts against this codebase's existing one-shape-per-table convention (`content_queue`, `business_expenses`, `reviews`). Confirmed with Ori before building.
 3. **Hand-rolled inline SVG chart, no Chart.js.** Zero new CDN dependency, no CSP `script-src` allowlist change needed — consistent with this project's zero-build-step philosophy (same reasoning as the existing Content Health bar widget, §3 item 6).
 
-### Schema — `supabase-analytics.sql` (not yet run by Ori — same "run it in the SQL Editor" discipline as every migration in this project)
+### Schema — `supabase-analytics.sql` (✅ run by Ori, 2026-07-17)
 
 - **`meta_analytics`** — one row per `(snapshot_date, platform)`, upserted (`on_conflict`, `resolution=merge-duplicates`) by the daily agent, never appended twice for the same day. Columns: `follower_count`, `reach`, `impressions`, `engagement_count`, `engagement_rate`, `video_views`, `video_completion_rate`, `posts_published`, `raw_metrics` (full Graph API response as `jsonb`, so a future new field doesn't need a migration).
 - **`social_comments`** — unanswered comments/questions, one row per `(platform, comment_id)`, upserted with `resolution=ignore-duplicates` specifically so a status Ori already set (`replied`/`dismissed`) in the dashboard is never silently reset to `needs_attention` by the next day's re-scan. Includes agent-drafted `suggested_reply` — **the agent never posts this to Meta automatically**; Ori reviews and replies manually, same "verify/remind, don't auto-act on the public feed" reasoning as the existing Pin Intent workflow (§0).
@@ -694,7 +694,9 @@ See §3 item 8 above for the UI description. `loadAnalytics` lives in `admin.htm
 
 **Manual refresh added (same day, after the initial build):** a "🔄 רענון אנליטיקה" button in the tab, calling new `api/analytics-refresh.js` — session-authenticated (`verifySupabaseUser`, same pattern as `publish-now.js`/`social-snapshot.js`), **never `CRON_SECRET` client-side**. `analytics-agent.js`'s cron handler was refactored to split the actual work into an exported `runAgent()` (same split as `publishOne`/`publish-now.js`), which both the cron entry point and this new endpoint call. Button disables itself and shows a spinner (reusing the existing `.cq-syncing`/`.cq-syncing-spinner` classes) for the run's duration, then re-fetches the tab's data on success.
 
-**Still not yet viewed in a real browser** — verify the SVG chart renders correctly now that real `meta_analytics` history exists, and that the RTL page layout doesn't clip the chart legend on mobile widths.
+### ✅ Status as of 2026-07-18 — live and verified
+
+Ori confirmed the Analytics tab live in the dashboard. `runAgent()` re-run directly against production (same technique as before — bypassing HTTP, using the real credentials) to double-check nothing regressed: Facebook/Instagram metrics still write cleanly, `errors: []`. **This feature is done** — the only thing not independently confirmed by this session's own tooling is a pixel-level browser check of the SVG chart on narrow/mobile widths, which needs an actual visual pass rather than an API-level check.
 
 ## 20. Content Management archive system (NEW, 2026-07-17)
 
@@ -702,7 +704,7 @@ Ori's stated problem: the Content Management grid showed every row ever, includi
 
 **The design tension worth recording:** Ori's spec had "filter published/rejected out of the main view" (reads as immediate) alongside "auto-archive posts that have been published/rejected for more than 7 days" (implies a grace period first) — two readings that don't obviously reconcile. Resolved by treating them as two different layers rather than one: the **grid filter** is immediate (any published/rejected row is always excluded from "פעילים", full stop), and the **7-day rule governs a separate concern** — how long a row survives in `content_queue` at all (in either the grid or the History toggle) before the daily agent physically moves it to `content_queue_archive`. This means "History" is naturally bounded to roughly the last week without needing its own separate time filter — confirmed with Ori before building (also confirmed: archive = move to a new table, not delete, so old content stays available for the existing "🔁 שכפול" duplicate feature and any future reference).
 
-### Schema — `supabase-content-queue-archive.sql` (not yet run by Ori)
+### Schema — `supabase-content-queue-archive.sql` (✅ run by Ori, 2026-07-18)
 
 - `content_queue.rejected_at timestamptz` — added since `reject()` previously set no timestamp at all (unlike `approved_at`/`published_at`), so "how long has this been rejected" was unmeasurable. `admin.html`'s `reject()` now sets it alongside `status: "rejected"`.
 - `content_queue_archive` — same ~30 columns as `content_queue` (reusing its enum types, not redeclaring them) plus `archived_at timestamptz default now()`. Same RLS pattern (`for all to authenticated using(true)`, service_role bypasses for the agent's writes).
@@ -718,7 +720,12 @@ Added as a new step in `runAgent()` (so it runs both on the daily cron **and** w
 - New "📋 פעילים" / "📜 היסטוריה" toggle in the Content Management toolbar (`#cqStatusToggle`, reuses the existing `.cq-view-toggle` CSS class already used for the list/week toggle — no new CSS). A `historyMode` boolean (closure-scoped inside the same IIFE as `currentRows()`) flips which set `currentRows()` includes: `status NOT IN ('published','rejected')` by default, or exactly the opposite in History. Switching modes resets the status dropdown to "all" since Active/History define disjoint status sets.
 - **Deliberately scoped to this one grid.** Neither the shared Supabase fetch (`fetchIfNeeded`, shared with Content Calendar) nor Content Calendar's own rendering nor the Weekly Planner drill-down (which already has its own "📜 אושר ופורסם" collapsed history section, §3 item 7) were touched — both still need to see published/rejected rows that haven't been archived yet, for their own reasons (a calendar day needs to show what actually happened on it; the drill-down's own history section is a different, pre-existing UX).
 
-### ⚠️ Still outstanding
+### Incident: GitHub Actions frequent-trigger workflow silently failing on CRON_SECRET (found + fixed 2026-07-18)
 
-- **Run `supabase-content-queue-archive.sql`** in the Supabase SQL Editor — until then, `archiveOldContent()` will fail (`rejected_at`/`content_queue_archive` don't exist yet) and get caught by `runAgent()`'s per-step try/catch, landing in `summary.errors` without blocking the rest of the agent's work (same fail-gracefully pattern as every other step).
-- Not yet viewed in a real browser — verify the toggle switches correctly and the empty-state copy reads sensibly in both modes.
+Ori reported a GitHub Actions failure email for "Publish scheduled content" and suspected the archive-system changes above (still uncommitted at the time) had regressed the publish cron. Investigated via the GitHub REST API directly (`gh` CLI isn't installed on this machine) since full log downloads need auth this session didn't have — instead reproduced the exact failure live: `curl -H "Authorization: Bearer " https://mr-polishes.com/api/publish-scheduled-content` returned `401 {"error":"Unauthorized"}`, matching the workflow's failed step exactly. **Root cause: the `CRON_SECRET` GitHub repo secret was never set** (a required manual step flagged when `.github/workflows/publish-scheduler.yml` was first built, §0/§18 area — apparently missed). All 4 of that workflow's runs had failed since its very first run, well before the archive-system code existed, and `analytics-agent.js`/`publish-scheduled-content.js` have no `require()` relationship at all — confirmed the archive-system theory was **not** the cause before ruling it out, not just asserted. Vercel's own once-daily native cron doesn't depend on this secret and kept running as the fallback the whole time, so no publishes were actually missed.
+
+**Fix:** Ori copied `CRON_SECRET` from Vercel's project environment variables into the GitHub repo secret of the same name (Settings → Secrets and variables → Actions). Re-ran the failed workflow run afterward — succeeded (`run_attempt: 2`, conclusion `success`). Worth checking on if this comes up again: a fresh *naturally scheduled* run succeeding (not just a manual re-run) is the stronger signal that the fix fully holds — confirm next time this file is touched if it's not already obvious from the Actions tab.
+
+### ✅ Status as of 2026-07-18 — live and verified
+
+`supabase-content-queue-archive.sql` has been run. Re-ran `runAgent()` directly against production afterward: `archiveOldContent()` now completes with zero errors (`archived: 0` — nothing in `content_queue` is old enough yet to actually move, which is expected for a pilot this recent; the query itself executes cleanly against the real table, which is what needed proving). `content_queue_archive` and `content_queue.rejected_at` both confirmed to exist via direct REST queries. **This feature is done.** Only remaining gap: no browser-level visual check yet that the "📋 פעילים"/"📜 היסטוריה" toggle switches correctly and reads well — an API/data-level check can't substitute for actually looking at it.
