@@ -21,6 +21,10 @@
   --gold-500: oklch(0.82 0.13 88);
   --gold-400: oklch(0.88 0.10 90);
   --gold-glow: oklch(0.78 0.14 88 / 0.45);
+  /* Accessible gold: darkened for use as TEXT on light backgrounds
+     (marble-50/100/white) — gold-700 only clears ~3:1 there, which fails
+     WCAG 1.4.3 AA (4.5:1) for normal text. This hits ~4.7-4.9:1. */
+  --gold-800: oklch(0.53 0.12 86);
 
   /* --- Secondary accent: Navy (logo harmony) --- */
   --navy-700: oklch(0.38 0.10 262);
@@ -38,6 +42,10 @@
   /* --- Functional --- */
   --whatsapp: oklch(0.68 0.16 150);
   --whatsapp-dark: oklch(0.60 0.16 150);
+  /* Accessible WhatsApp green: darkened for white TEXT on a solid fill
+     (or as text on white) — the two colors above only clear 2.6-3.6:1
+     there, which fails WCAG 1.4.3 AA (4.5:1). This hits ~4.9:1. */
+  --whatsapp-a11y: oklch(0.52 0.16 150);
 
   /* --- Type --- */
   --font-base: "Heebo", system-ui, "Segoe UI", Arial, sans-serif;
@@ -245,10 +253,16 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
   font-weight: 700;
   font-size: 0.82rem;
   letter-spacing: 0.06em;
-  color: var(--gold-700);
+  /* gold-800: accessible on the light section backgrounds (marble-50/100)
+     this class sits on by default (WCAG AA 4.5:1, was gold-700 ~3:1). */
+  color: var(--gold-800);
   text-transform: uppercase;
   padding-inline: 30px;
 }
+/* Dark-background sections need the lighter gold-500 instead (already
+   AA-compliant there, ~10.9:1) — gold-800 would be too dark on char-950. */
+.skew-section .eyebrow,
+.marquee-section .eyebrow { color: var(--gold-500); }
 .eyebrow::before,
 .eyebrow::after {
   content: "";
@@ -316,7 +330,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 .btn-navy { --btn-bg: linear-gradient(135deg, var(--char-700), var(--char-900)); --btn-fg: var(--white); border: 1px solid oklch(0.82 0.13 88 / 0.3); }
 .btn-navy:hover { box-shadow: 0 8px 26px var(--gold-glow); border-color: var(--gold-500); }
 
-.btn-whatsapp { --btn-bg: var(--whatsapp); --btn-fg: var(--white); }
+.btn-whatsapp { --btn-bg: var(--whatsapp-a11y); --btn-fg: var(--white); }
 .btn-whatsapp:hover { filter: brightness(1.05); box-shadow: 0 14px 34px oklch(0.68 0.16 150 / 0.4); }
 
 /* Subtle pulse to draw the eye to the primary CTA */
@@ -699,7 +713,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
   color: var(--char-900);
   transition: color .2s ease;
 }
-.faq-acc__q:hover { color: var(--gold-700); }
+.faq-acc__q:hover { color: var(--gold-800); }
 .faq-acc__q:focus-visible { outline: 3px solid var(--gold-500); outline-offset: -3px; border-radius: var(--radius); }
 
 /* Plus icon (rotates to × when open) — sits on the inline-end (left in RTL) */
@@ -720,7 +734,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 }
 .faq-acc__icon::before { inset-inline: 0; inset-block-start: 50%; height: 2px; transform: translateY(-50%); }
 .faq-acc__icon::after  { inset-block: 0; inset-inline-start: 50%; width: 2px; transform: translateX(-50%); }
-.faq-acc__item.is-open .faq-acc__icon { transform: rotate(45deg); color: var(--gold-600); }
+.faq-acc__item.is-open .faq-acc__icon { transform: rotate(45deg); color: var(--gold-700); }
 
 /* Smooth height open/close */
 .faq-acc__a {
@@ -1140,7 +1154,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 .legal-content ul { padding-inline-start: 22px; margin-block-end: 12px; display: grid; gap: 8px; }
 .legal-content li { color: var(--ink-700); line-height: 1.7; list-style: disc; }
 .legal-content a { color: var(--navy-700); text-decoration: underline; }
-.legal-content a:hover { color: var(--gold-700); }
+.legal-content a:hover { color: var(--gold-800); }
 .legal-content strong { color: var(--char-900); }
 
 .legal-highlight {
@@ -1183,6 +1197,11 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
   transition: inset-block-start .2s ease;
 }
 .skip-link:focus { inset-block-start: 0; }
+
+/* Global keyboard-focus safety net (IS 5568 / WCAG 2.4.7): every
+   interactive element gets a visible ring even if no component-specific
+   :focus-visible rule above already covers it (nav/footer links, etc). */
+:focus-visible { outline: 3px solid var(--gold-500); outline-offset: 2px; }
 
 /* =========================================================
    HEADER
@@ -1605,7 +1624,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 .contact-list { display: grid; gap: 14px; }
 .contact-list li { display: flex; align-items: center; gap: 12px; font-weight: 500; }
 .contact-list a { transition: color .2s ease; }
-.contact-list a:hover { color: var(--gold-700); }
+.contact-list a:hover { color: var(--gold-800); }
 .ci-icon {
   width: 42px; height: 42px;
   display: grid; place-items: center;
@@ -1675,7 +1694,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 .hp-field { position: absolute; inset-inline-start: -9999px; width: 1px; height: 1px; overflow: hidden; }
 
 .form-status { font-weight: 600; text-align: center; min-height: 1.2em; }
-.form-status.ok { color: var(--whatsapp-dark); }
+.form-status.ok { color: var(--whatsapp-a11y); }
 .form-status.err { color: oklch(0.55 0.2 25); }
 
 /* =========================================================
@@ -1975,4 +1994,185 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
   .js .reveal { opacity: 1; transform: none; filter: none; }
   /* No background motion — show the static fallback image instead of the video */
   .hero-video { display: none; }
+}
+
+/* =========================================================
+   ACCESSIBILITY WIDGET (IS 5568 / WCAG AA)
+   Floating toggle + panel: text size, high contrast, pause
+   animations. Markup is injected by main.js on every page that
+   loads it. Positioned opposite the share-fab (inline-end = left
+   in RTL) and lifted above the mobile action bar on small screens.
+   ========================================================= */
+.a11y-widget {
+  position: fixed;
+  inset-block-end: 24px;
+  inset-inline-end: 20px;
+  z-index: 500;
+}
+@media (max-width: 859px) {
+  .a11y-widget { inset-block-end: calc(88px + env(safe-area-inset-bottom)); }
+}
+.a11y-toggle {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  background: var(--char-950);
+  color: var(--gold-500);
+  box-shadow: var(--shadow-md);
+  transition: transform .2s var(--ease-out), box-shadow .2s ease;
+}
+.a11y-toggle svg { width: 28px; height: 28px; }
+.a11y-toggle:hover { transform: translateY(-3px); box-shadow: 0 12px 30px var(--gold-glow); }
+.a11y-toggle:active { transform: scale(0.96); }
+
+.a11y-panel {
+  position: absolute;
+  inset-block-end: calc(100% + 12px);
+  inset-inline-end: 0;
+  width: 268px;
+  max-width: calc(100vw - 32px);
+  background: var(--white);
+  color: var(--ink-900);
+  border: 1px solid var(--marble-200);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+.a11y-panel[hidden] { display: none; }
+.a11y-panel__head { display: flex; align-items: center; justify-content: space-between; font-weight: 800; font-size: 1rem; }
+.a11y-panel__close {
+  border: 0; background: none; cursor: pointer; padding: 4px;
+  font-size: 1.3rem; line-height: 1; color: var(--ink-700);
+}
+.a11y-panel__close:hover { color: var(--gold-800); }
+.a11y-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.9rem; font-weight: 600; }
+.a11y-btns { display: flex; gap: 6px; }
+.a11y-btns button {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  border: 1.5px solid var(--marble-200);
+  background: var(--marble-50);
+  color: var(--ink-900);
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color .15s ease;
+}
+.a11y-btns button:hover { border-color: var(--gold-600); }
+.a11y-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%;
+  border: 1.5px solid var(--marble-200);
+  background: var(--marble-50);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-900);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.a11y-toggle-row[aria-pressed="true"] { border-color: var(--gold-600); background: oklch(0.82 0.13 88 / 0.15); }
+.a11y-toggle-row .a11y-state { font-weight: 700; color: var(--ink-700); }
+.a11y-toggle-row[aria-pressed="true"] .a11y-state { color: var(--gold-800); }
+.a11y-reset {
+  border: 1.5px dashed var(--marble-200);
+  background: none;
+  border-radius: 10px;
+  padding: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-700);
+  cursor: pointer;
+}
+.a11y-reset:hover { border-color: var(--gold-600); color: var(--gold-800); }
+.a11y-statement-link { font-size: 0.82rem; text-align: center; color: var(--char-700); text-decoration: underline; }
+
+/* --- High contrast mode --- */
+html.a11y-contrast,
+html.a11y-contrast body { background: #000 !important; color: #fff !important; }
+html.a11y-contrast section,
+html.a11y-contrast header,
+html.a11y-contrast footer,
+html.a11y-contrast nav,
+html.a11y-contrast div,
+html.a11y-contrast article,
+html.a11y-contrast main,
+html.a11y-contrast form {
+  background: #000 !important;
+  background-image: none !important;
+}
+html.a11y-contrast * { text-shadow: none !important; box-shadow: none !important; border-color: #fff !important; }
+html.a11y-contrast a { color: #ffd400 !important; text-decoration: underline !important; }
+html.a11y-contrast .btn,
+html.a11y-contrast button,
+html.a11y-contrast input,
+html.a11y-contrast select,
+html.a11y-contrast textarea {
+  background: #000 !important;
+  color: #fff !important;
+  border: 2px solid #fff !important;
+}
+html.a11y-contrast img,
+html.a11y-contrast video { filter: grayscale(1) contrast(1.2); opacity: .9; }
+html.a11y-contrast .a11y-toggle { border: 2px solid #fff !important; }
+
+/* --- Pause animations (same effect as prefers-reduced-motion, user-triggered) --- */
+html.a11y-reduce-motion *,
+html.a11y-reduce-motion *::before,
+html.a11y-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+html.a11y-reduce-motion .js .reveal { opacity: 1; transform: none; filter: none; }
+html.a11y-reduce-motion .hero-video { display: none; }
+
+/* =========================================================
+   COOKIE CONSENT BANNER
+   ========================================================= */
+.cookie-banner {
+  position: fixed;
+  inset-block-end: 0;
+  inset-inline: 0;
+  z-index: 900;
+  background: var(--char-950);
+  color: oklch(0.9 0.006 264);
+  padding: 18px clamp(16px, 4vw, 32px);
+  box-shadow: 0 -8px 24px oklch(0.17 0.006 264 / 0.3);
+}
+.cookie-banner[hidden] { display: none; }
+.cookie-banner__inner {
+  max-width: var(--maxw);
+  margin-inline: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 24px;
+}
+.cookie-banner p { font-size: 0.9rem; max-width: 62ch; }
+.cookie-banner a { color: var(--gold-500); text-decoration: underline; }
+.cookie-banner__actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.cookie-banner__actions button {
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1.5px solid oklch(1 0 0 / 0.35);
+  background: none;
+  color: var(--white);
+  transition: transform .15s ease, background .15s ease;
+}
+.cookie-banner__actions button:hover { transform: translateY(-2px); }
+.cookie-banner__accept { background: var(--gold-500) !important; color: var(--char-950) !important; border-color: var(--gold-500) !important; }
+@media (max-width: 859px) {
+  .cookie-banner { padding-block-end: calc(18px + env(safe-area-inset-bottom)); }
 }

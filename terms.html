@@ -9,6 +9,19 @@
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
+    // Consent Mode (Privacy Law Amendment 13): analytics storage stays
+    // "denied" until the cookie banner is accepted, unless a prior
+    // choice was already saved (see the cookie banner in main.js).
+    (function () {
+      var granted = false;
+      try { granted = localStorage.getItem('mrp_cookie_consent') === 'accepted'; } catch (e) {}
+      gtag('consent', 'default', {
+        analytics_storage: granted ? 'granted' : 'denied',
+        ad_storage: 'denied',
+        ad_user_data: 'denied',
+        ad_personalization: 'denied'
+      });
+    })();
     gtag('js', new Date());
     gtag('config', 'G-Y9FGVG5WSZ');
   </script>

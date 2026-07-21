@@ -9,6 +9,19 @@
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
+    // Consent Mode (Privacy Law Amendment 13): analytics storage stays
+    // "denied" until the cookie banner is accepted, unless a prior
+    // choice was already saved (see the cookie banner in main.js).
+    (function () {
+      var granted = false;
+      try { granted = localStorage.getItem('mrp_cookie_consent') === 'accepted'; } catch (e) {}
+      gtag('consent', 'default', {
+        analytics_storage: granted ? 'granted' : 'denied',
+        ad_storage: 'denied',
+        ad_user_data: 'denied',
+        ad_personalization: 'denied'
+      });
+    })();
     gtag('js', new Date());
     gtag('config', 'G-Y9FGVG5WSZ');
   </script>
@@ -76,6 +89,7 @@
               <li>עיצוב רספונסיבי המותאם לטלפונים ניידים, טאבלטים ומחשבים.</li>
               <li>אפשרות הגדלת הטקסט באמצעות הדפדפן ללא פגיעה בתצוגה.</li>
               <li>כיבוד העדפת המשתמש לצמצום אנימציות (prefers-reduced-motion).</li>
+              <li><strong>תפריט נגישות צף</strong> (הכפתור בפינת המסך) המאפשר הגדלת/הקטנת גודל הטקסט, מעבר לתצוגת ניגודיות גבוהה, ועצירת אנימציות בלחיצה אחת.</li>
             </ul>
           </section>
 
@@ -93,6 +107,11 @@
               <li><strong>וואטסאפ:</strong> <a href="https://wa.me/972529534540" target="_blank" rel="noopener">שליחת הודעה</a></li>
             </ul>
             <p>בפנייתכם נשמח אם תפרטו את הבעיה, את הדף שבו היא התרחשה ואת סוג הדפדפן והמכשיר שבהם נעשה שימוש, כדי שנוכל לסייע בצורה הטובה ביותר.</p>
+            <p>ככל שהפנייה היא בעיה טכנית ספציפית באתר (תקלת תצוגה, קוד או תאימות לטכנולוגיה מסייעת), ניתן לפנות גם ישירות לאיש הקשר הטכני:</p>
+            <ul>
+              <li><strong>איש קשר טכני / מפתח האתר:</strong> יואב גרין</li>
+              <li><strong>טלפון:</strong> <a href="tel:+972548065348" dir="ltr">054-8065348</a></li>
+            </ul>
           </section>
 
           <div class="legal-back reveal">

@@ -281,7 +281,8 @@
     form_service: "Service type",
     form_service_other: "Other / Not sure",
     form_message: "Additional details (optional)",
-    form_consent: "I agree to be contacted and accept the <a href=\"privacy.html\" target=\"_blank\">privacy policy</a>.",
+    form_privacy_consent: "I have read the <a href=\"privacy.html\" target=\"_blank\">privacy policy</a> and agree to the processing of my details to handle my request.",
+    form_marketing_consent: "I agree to receive marketing content, offers and updates by phone, SMS or WhatsApp (I can opt out at any time).",
     form_submit: "Send request &amp; I'll get back to you 🌟",
 
 
@@ -395,6 +396,14 @@
       var location = form.location.value.trim();
       var service = form.service.value;
       var message = form.message.value.trim();
+      // Spam Law (Amendment 40): marketing consent is a separate, unchecked-
+      // by-default checkbox — never bundled with the (required) privacy
+      // consent above. Recorded here as an internal audit trail only; it's
+      // never added to the customer-facing WhatsApp text below.
+      var marketingConsent = !!(form.marketingConsent && form.marketingConsent.checked);
+      var notesWithConsent = message +
+        (message ? "\n" : "") +
+        "[הסכמה לדיוור שיווקי: " + (marketingConsent ? "כן" : "לא") + "]";
 
       // Build the prefilled WhatsApp message up-front.
       var waText = "היי אורי, שלחתי עכשיו פנייה באתר לגבי " + service +
@@ -430,12 +439,12 @@
           phone: phone,
           location: location,
           service: service,
-          notes: message
+          notes: notesWithConsent
         })
       }).catch(function () { /* DB write is best-effort; WhatsApp is the primary delivery */ });
 
       // Marketing analytics: a validated lead is a successful submission.
-      gaEvent("form_submission", { service: service, location: location || undefined });
+      gaEvent("form_submission", { service: service, location: location || undefined, marketing_consent: marketingConsent });
 
       // 3) UX — confirm, clear the fields, then land on the thank-you page
       //    (Google Ads conversion anchor + WhatsApp fallback button).
@@ -1004,4 +1013,203 @@
   --------------------------------------------------------- */
   var year = document.getElementById("year");
   if (year) year.textContent = String(new Date().getFullYear());
+
+  /* ---------------------------------------------------------
+     11. ACCESSIBILITY WIDGET (IS 5568 / WCAG AA)
+     Floating toggle -> panel with text size, high contrast and
+     pause-animations controls. Injected on every page that loads
+     this script, so it's site-wide with no per-page markup needed.
+     Preferences persist in localStorage across pages/visits.
+  --------------------------------------------------------- */
+  (function initA11yWidget() {
+    var STORAGE_KEY = "mrp_a11y_prefs";
+    var TEXT_STEPS = [87.5, 100, 112.5, 125, 137.5, 150];
+    var root = document.documentElement;
+
+    function loadPrefs() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+      return { scale: 100, contrast: false, motion: false };
+    }
+    function savePrefs(prefs) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs)); } catch (e) {}
+    }
+
+    var prefs = loadPrefs();
+
+    function applyPrefs() {
+      root.style.fontSize = prefs.scale === 100 ? "" : prefs.scale + "%";
+      root.classList.toggle("a11y-contrast", !!prefs.contrast);
+      root.classList.toggle("a11y-reduce-motion", !!prefs.motion);
+    }
+    applyPrefs();
+
+    // Build markup once the DOM is ready for it to be appended.
+    var wrap = document.createElement("div");
+    wrap.className = "a11y-widget";
+    wrap.innerHTML =
+      '<button type="button" class="a11y-toggle" id="a11yToggle" aria-haspopup="true" aria-expanded="false" aria-controls="a11yPanel" aria-label="אפשרויות נגישות">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+          '<circle cx="12" cy="4" r="1.8" fill="currentColor" stroke="none"/>' +
+          '<path d="M4 8.5c2.5 1 5.2 1.5 8 1.5s5.5-.5 8-1.5"/>' +
+          '<path d="M12 10v11"/><path d="M8 21l2.5-6"/><path d="M16 21l-2.5-6"/>' +
+          '<path d="M7 14l5-1.2L17 14"/>' +
+        '</svg>' +
+      '</button>' +
+      '<div class="a11y-panel" id="a11yPanel" role="dialog" aria-label="אפשרויות נגישות" hidden>' +
+        '<div class="a11y-panel__head"><span>אפשרויות נגישות</span>' +
+          '<button type="button" class="a11y-panel__close" id="a11yClose" aria-label="סגירת אפשרויות נגישות">&times;</button>' +
+        '</div>' +
+        '<div class="a11y-row"><span>גודל טקסט</span>' +
+          '<div class="a11y-btns">' +
+            '<button type="button" data-a11y="text-dec" aria-label="הקטנת גודל הטקסט">A-</button>' +
+            '<button type="button" data-a11y="text-reset" aria-label="איפוס גודל הטקסט">A</button>' +
+            '<button type="button" data-a11y="text-inc" aria-label="הגדלת גודל הטקסט">A+</button>' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" class="a11y-toggle-row" id="a11yContrast" data-a11y="contrast" aria-pressed="false">' +
+          '<span>ניגודיות גבוהה</span><span class="a11y-state"></span>' +
+        '</button>' +
+        '<button type="button" class="a11y-toggle-row" id="a11yMotion" data-a11y="motion" aria-pressed="false">' +
+          '<span>עצירת אנימציות</span><span class="a11y-state"></span>' +
+        '</button>' +
+        '<button type="button" class="a11y-reset" data-a11y="reset-all">איפוס כל ההגדרות</button>' +
+        '<a class="a11y-statement-link" href="accessibility.html">הצהרת נגישות מלאה</a>' +
+      '</div>';
+    document.body.appendChild(wrap);
+
+    var toggleBtn = document.getElementById("a11yToggle");
+    var panel = document.getElementById("a11yPanel");
+    var closeBtn = document.getElementById("a11yClose");
+    var contrastRow = document.getElementById("a11yContrast");
+    var motionRow = document.getElementById("a11yMotion");
+    var onLabel = t("On", "פועל");
+    var offLabel = t("Off", "כבוי");
+
+    function syncUI() {
+      contrastRow.setAttribute("aria-pressed", String(!!prefs.contrast));
+      contrastRow.querySelector(".a11y-state").textContent = prefs.contrast ? onLabel : offLabel;
+      motionRow.setAttribute("aria-pressed", String(!!prefs.motion));
+      motionRow.querySelector(".a11y-state").textContent = prefs.motion ? onLabel : offLabel;
+    }
+    syncUI();
+
+    function openPanel() {
+      panel.hidden = false;
+      toggleBtn.setAttribute("aria-expanded", "true");
+      closeBtn.focus();
+    }
+    function closePanel() {
+      panel.hidden = true;
+      toggleBtn.setAttribute("aria-expanded", "false");
+      toggleBtn.focus();
+    }
+
+    toggleBtn.addEventListener("click", function () {
+      if (panel.hidden) openPanel(); else closePanel();
+    });
+    closeBtn.addEventListener("click", closePanel);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !panel.hidden) closePanel();
+    });
+    document.addEventListener("click", function (e) {
+      if (!panel.hidden && !wrap.contains(e.target)) closePanel();
+    });
+
+    panel.addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-a11y]");
+      if (!btn) return;
+      var action = btn.getAttribute("data-a11y");
+      var idx;
+      if (action === "text-inc") {
+        idx = TEXT_STEPS.indexOf(prefs.scale);
+        prefs.scale = TEXT_STEPS[Math.min(TEXT_STEPS.length - 1, (idx === -1 ? 1 : idx) + 1)];
+      } else if (action === "text-dec") {
+        idx = TEXT_STEPS.indexOf(prefs.scale);
+        prefs.scale = TEXT_STEPS[Math.max(0, (idx === -1 ? 1 : idx) - 1)];
+      } else if (action === "text-reset") {
+        prefs.scale = 100;
+      } else if (action === "contrast") {
+        prefs.contrast = !prefs.contrast;
+      } else if (action === "motion") {
+        prefs.motion = !prefs.motion;
+      } else if (action === "reset-all") {
+        prefs = { scale: 100, contrast: false, motion: false };
+      }
+      applyPrefs();
+      syncUI();
+      savePrefs(prefs);
+    });
+  })();
+
+  /* ---------------------------------------------------------
+     12. COOKIE CONSENT BANNER (Privacy Law Amendment 13)
+     GA4 loads with Google Consent Mode defaulted to "denied" (see
+     the inline <head> snippet on every page). This banner is the
+     only place that flips it to "granted" for analytics_storage,
+     and the choice is remembered so the banner shows once.
+  --------------------------------------------------------- */
+  (function initCookieBanner() {
+    var STORAGE_KEY = "mrp_cookie_consent";
+    var stored;
+    try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) {}
+    if (stored) return; // already accepted or rejected — nothing to show
+
+    var banner = document.createElement("div");
+    banner.className = "cookie-banner";
+    banner.setAttribute("role", "region");
+    banner.setAttribute("aria-label", t("Cookie notice", "הודעת עוגיות"));
+    banner.innerHTML =
+      '<div class="cookie-banner__inner">' +
+        '<p>' + t(
+          'We use cookies for analytics (Google Analytics) to improve the site. See our ',
+          'אנו משתמשים בעוגיות למטרות אנליטיקה (Google Analytics) לשיפור האתר. לפרטים ראו את '
+        ) +
+        '<a href="privacy.html">' + t("privacy policy", "מדיניות הפרטיות") + '</a>.</p>' +
+        '<div class="cookie-banner__actions">' +
+          '<button type="button" class="cookie-banner__reject" id="cookieReject">' + t("Reject", "דחייה") + '</button>' +
+          '<button type="button" class="cookie-banner__accept" id="cookieAccept">' + t("Accept", "אישור") + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(banner);
+
+    // The a11y toggle sits in the same corner (bottom, inline-end) as this
+    // banner's action buttons. Lift it above the banner while shown so
+    // neither is obscured or unreachable by keyboard/tap.
+    var a11yWidget = document.querySelector(".a11y-widget");
+    function liftA11yWidget() {
+      if (!a11yWidget) return;
+      var baseBottom = parseFloat(getComputedStyle(a11yWidget).bottom) || 24;
+      a11yWidget.style.bottom = (baseBottom + banner.offsetHeight + 12) + "px";
+    }
+    function resetA11yWidget() {
+      if (a11yWidget) a11yWidget.style.bottom = "";
+    }
+    liftA11yWidget();
+    window.addEventListener("resize", liftA11yWidget);
+
+    function updateConsent(granted) {
+      if (typeof window.gtag === "function") {
+        window.gtag("consent", "update", {
+          analytics_storage: granted ? "granted" : "denied",
+          ad_storage: "denied",
+          ad_user_data: "denied",
+          ad_personalization: "denied"
+        });
+      }
+    }
+
+    function dismiss(choice, granted) {
+      try { localStorage.setItem(STORAGE_KEY, choice); } catch (e) {}
+      updateConsent(granted);
+      window.removeEventListener("resize", liftA11yWidget);
+      resetA11yWidget();
+      banner.remove();
+    }
+
+    document.getElementById("cookieAccept").addEventListener("click", function () { dismiss("accepted", true); });
+    document.getElementById("cookieReject").addEventListener("click", function () { dismiss("rejected", false); });
+  })();
 })();

@@ -9,6 +9,19 @@
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
+    // Consent Mode (Privacy Law Amendment 13): analytics storage stays
+    // "denied" until the cookie banner is accepted, unless a prior
+    // choice was already saved (see the cookie banner in main.js).
+    (function () {
+      var granted = false;
+      try { granted = localStorage.getItem('mrp_cookie_consent') === 'accepted'; } catch (e) {}
+      gtag('consent', 'default', {
+        analytics_storage: granted ? 'granted' : 'denied',
+        ad_storage: 'denied',
+        ad_user_data: 'denied',
+        ad_personalization: 'denied'
+      });
+    })();
     gtag('js', new Date());
     gtag('config', 'G-Y9FGVG5WSZ');
   </script>
@@ -109,7 +122,8 @@
 
           <section class="reveal">
             <h2>עוגיות (Cookies)</h2>
-            <p>האתר עשוי לעשות שימוש בעוגיות ובטכנולוגיות דומות לצורך תפעולו התקין ולשיפור חוויית הגלישה. באפשרותכם להגדיר את הדפדפן כך שיסרב לעוגיות או יתריע על שליחתן; חלק מתכונות האתר עשויות שלא לפעול במלואן ללא עוגיות.</p>
+            <p>האתר עושה שימוש בשירות <strong>Google Analytics</strong> (Google Analytics 4) לצורך איסוף נתונים סטטיסטיים אנונימיים על השימוש באתר (כגון עמודים נצפים ומקור הכניסה), במטרה לשפר את השירות והתוכן. שירות זה משתמש בעוגיות ובמזהים דומים.</p>
+            <p>בכניסה ראשונה לאתר תוצג הודעת עוגיות עם אפשרות <strong>"אישור"</strong> או <strong>"דחייה"</strong>. עוגיות האנליטיקס ייטענו רק לאחר אישור מפורש מצדכם; ניתן לשנות את הבחירה בכל עת על ידי מחיקת נתוני הגלישה (Local Storage) של האתר בדפדפן. כמו כן, באפשרותכם להגדיר את הדפדפן כך שיסרב לעוגיות באופן כללי; חלק מתכונות האתר עשויות שלא לפעול במלואן במקרה זה.</p>
           </section>
 
           <section class="reveal">

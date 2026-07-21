@@ -9,6 +9,19 @@
   <script>
     window.dataLayer = window.dataLayer || [];
     function gtag(){dataLayer.push(arguments);}
+    // Consent Mode (Privacy Law Amendment 13): analytics storage stays
+    // "denied" until the cookie banner is accepted, unless a prior
+    // choice was already saved (see the cookie banner in main.js).
+    (function () {
+      var granted = false;
+      try { granted = localStorage.getItem('mrp_cookie_consent') === 'accepted'; } catch (e) {}
+      gtag('consent', 'default', {
+        analytics_storage: granted ? 'granted' : 'denied',
+        ad_storage: 'denied',
+        ad_user_data: 'denied',
+        ad_personalization: 'denied'
+      });
+    })();
     gtag('js', new Date());
     gtag('config', 'G-Y9FGVG5WSZ');
   </script>
@@ -799,8 +812,13 @@
           </div>
 
           <div class="field field-check">
-            <input type="checkbox" id="lf-consent" name="consent" required />
-            <label for="lf-consent" data-i18n="form_consent">אני מאשר/ת קבלת פנייה חוזרת ומסכים/ה ל<a href="privacy.html" target="_blank">מדיניות הפרטיות</a>.</label>
+            <input type="checkbox" id="lf-privacy-consent" name="privacyConsent" required />
+            <label for="lf-privacy-consent" data-i18n="form_privacy_consent">אני מאשר/ת שקראתי את <a href="privacy.html" target="_blank">מדיניות הפרטיות</a> ומסכים/ה לעיבוד פרטיי לצורך הטיפול בפנייתי.</label>
+          </div>
+
+          <div class="field field-check">
+            <input type="checkbox" id="lf-marketing-consent" name="marketingConsent" />
+            <label for="lf-marketing-consent" data-i18n="form_marketing_consent">אני מאשר/ת לקבל תוכן שיווקי, מבצעים ועדכונים בטלפון, SMS או וואטסאפ (ניתן לבטל בכל עת).</label>
           </div>
 
           <button type="submit" class="btn btn-lg btn-block form-submit-btn">
