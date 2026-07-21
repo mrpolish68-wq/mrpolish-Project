@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-18 (Analytics tab §19 + Content Management archive §20 both confirmed live and verified end-to-end; GitHub Actions CRON_SECRET incident, §20). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-07-21 (§21 — pre-occupancy cleaning service removed; full legal & compliance pass for IS 5568 AA / Spam Law Amendment 40 / Privacy Law Amendment 13, including a new accessibility widget and cookie-consent banner). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -729,3 +729,41 @@ Ori reported a GitHub Actions failure email for "Publish scheduled content" and 
 ### ✅ Status as of 2026-07-18 — live and verified
 
 `supabase-content-queue-archive.sql` has been run. Re-ran `runAgent()` directly against production afterward: `archiveOldContent()` now completes with zero errors (`archived: 0` — nothing in `content_queue` is old enough yet to actually move, which is expected for a pilot this recent; the query itself executes cleanly against the real table, which is what needed proving). `content_queue_archive` and `content_queue.rejected_at` both confirmed to exist via direct REST queries. **This feature is done.** Only remaining gap: no browser-level visual check yet that the "📋 פעילים"/"📜 היסטוריה" toggle switches correctly and reads well — an API/data-level check can't substitute for actually looking at it.
+
+## 21. Service removal + full legal & compliance audit (NEW, 2026-07-21)
+
+### Project Overview & Recent Updates
+
+**Service removal.** The "ניקיון לפני אכלוס" (pre-occupancy / move-in cleaning) service was fully removed at the client's request:
+- Deleted the `.service-card` for it from `index.html` (it sat between the `srv10` sealer card and the closing CTA card).
+- Deleted its `srv11_title`/`srv11_text` English translation strings from `main.js` (the Hebrew side auto-rebuilds from the DOM, so no separate cleanup was needed there — see `main.js`'s `HE` object, built by snapshotting `[data-i18n]` elements on load).
+- Confirmed there was never a dedicated route/page, `sitemap.xml` entry, JSON-LD `Service` entry, or lead-form dropdown option for this service, so no redirects or structured-data changes were required. Grid is now 10 service cards + 1 CTA card.
+
+**Legal & Compliance audit** — a full pass against three Israeli regulations: **IS 5568 (WCAG 2.1 AA)**, **Communications Law Amendment 40 ("Spam Law")**, and **Privacy Protection Law Amendment 13**.
+
+- **Accessibility (IS 5568 AA):**
+  - Accessibility Statement (`accessibility.html`) already existed with solid boilerplate; added the missing **webmaster/technical contact** (יואב גרין, 054-8065348) alongside the existing accessibility officer (אורי מרגלית, 052-9534540).
+  - Audited every `<img>` across the site — all already had correct `alt` text (or an intentional empty `alt=""` for decorative images). No changes needed.
+  - **Measured real color-contrast ratios** (OKLCH → sRGB relative-luminance calculation, not eyeballing) and found/fixed **9 genuine WCAG 1.4.3 failures**, the biggest being the gold `.eyebrow` label used across ~6 sections (was ~3:1 on light backgrounds, now ~4.7–4.9:1 via a new `--gold-800` token). Also fixed: FAQ-answer hover color, legal-page and contact-list link hover colors, the WhatsApp "continue" button and the lead-form success message (were 2.6–3.6:1, now ~4.9:1 via a new `--whatsapp-a11y` token). Dark-background sections were left untouched where the original gold/white combinations already passed comfortably (10+:1).
+  - Added a global `:focus-visible` fallback rule so every interactive element is guaranteed a visible keyboard-focus ring, on top of the many component-specific ones that already existed.
+  - **Built a floating accessibility widget from scratch** (`main.js` §11 + new CSS in `styles.css`): a circular toggle button (bottom-left corner, RTL-aware, positioned opposite the existing share-fab and lifted above the mobile sticky action bar on small screens) opening a panel with text-size steps (A-/A/A+, 87.5%–150% via `<html>` root font-size), a high-contrast mode (forces a black/white/yellow theme via a `.a11y-contrast` class), and a pause-animations mode (`.a11y-reduce-motion`, reusing the same rules as the existing `prefers-reduced-motion` media query). All three preferences persist in `localStorage` (`mrp_a11y_prefs`) and are injected on every page that loads `main.js` (`index.html`, `blog.html`, `accessibility.html`, `privacy.html`, `terms.html` — **not** `admin.html`/`login.html`, which are internal tools with no `main.js`/GA tag at all).
+
+- **Spam Law (Amendment 40):** The lead form's single checkbox previously bundled "contact me back" together with privacy-policy agreement — non-compliant, since marketing consent must be its own unbundled, opt-in choice. Split into two separate checkboxes (`index.html` lead form): a **required** privacy-policy checkbox, and a **separate, unchecked, non-required** marketing-consent checkbox ("אני מאשר/ת לקבל תוכן שיווקי..."). Footer sender details (אורי מרגלית / 052-9534540) were already present and compliant — no change needed.
+
+- **Privacy & Cookies (Amendment 13):** Added the required privacy-policy checkbox to the lead form (see above). Integrated a real cookie-consent banner wired to **Google Consent Mode v2** — every page's inline gtag `<head>` snippet (`index.html`, `blog.html`, `accessibility.html`, `privacy.html`, `terms.html`, `thankyou.html`) now defaults GA4's `analytics_storage` to `"denied"` until the user clicks "אישור" in the banner (`main.js` §12); the choice is persisted in `localStorage` (`mrp_cookie_consent`) so the banner only shows once. No Facebook Pixel exists on the site, so only GA4 needed gating. `privacy.html`'s cookies section was expanded to name Google Analytics explicitly and describe this consent flow.
+
+- **Testing:** `node --check` passed on `main.js`; brace-balance-checked `styles.css`. Ran a **live Playwright browser pass** against the real pages: opened the accessibility panel, toggled high-contrast and text-size (confirmed via DOM/localStorage inspection), verified the lead-form checkboxes' checked/required states, and confirmed **0 console errors** throughout. This live pass caught a real bug before it shipped: the cookie banner and the accessibility toggle button both anchor to the same bottom corner in RTL and were overlapping — fixed by having the accessibility widget measure and lift itself above the banner's rendered height while it's showing (and reset once dismissed).
+
+### Data & Supabase Setup
+
+Marketing-consent values are **not** stored as a new Supabase column. They're recorded as a plain-text audit-trail line appended to the existing `leads.notes` field, e.g. `[הסכמה לדיוור שיווקי: כן/לא]`. This was a deliberate choice: this session doesn't have access to the live Supabase schema for the `leads` table (no migration file for it exists in-repo — see §2's note that it was "reconstructed from queries"), and PostgREST rejects inserts containing unknown columns outright, so adding an untested new column to the insert body risked silently breaking **all** lead capture to the DB (WhatsApp delivery would still work, since it's the primary channel, but the Supabase record would fail entirely). Piggybacking on the existing, known-good `notes` column avoids that risk. **Confirmed with Ori: keep it this way for now.**
+
+### Key Contact Persons
+
+- **Business Owner / Accessibility Officer:** אורי מרגלית (Uri Margalit) — 052-9534540
+- **Developer / Webmaster:** יואב גרין (Yoav Green) — 054-8065348
+
+### Next Steps / Pending Tasks
+
+- **Optional future enhancement:** if a real `marketing_consent` boolean column is ever wanted on `public.leads`, write it as a SQL migration following this repo's existing `supabase-*.sql` convention, confirm the live schema first, then switch the `main.js` insert over from the `notes`-field approach above.
+- **Deploy:** these changes are committed to `main` and pushed to GitHub (commits `2840715` legal/compliance pass, `fccb21d` service removal) — Vercel should pick them up automatically for the live production release. Confirm the live site after deploy, especially the cookie banner and accessibility widget on a real mobile device.
