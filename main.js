@@ -193,8 +193,6 @@
     srv9_text: "Aggressive cleaning of ceramic and porcelain tiles, opening old grout lines and replacing them with new sealed grout.",
     srv10_title: "Protective Sealer Application",
     srv10_text: "Applying an advanced hydrophobic protective layer that seals the floor against absorption of liquids, oils, stains and dirt.",
-    srv11_title: "Post-Construction Deep Cleaning",
-    srv11_text: "A premium service for new or renovated homes — removing paint, cement and construction residue and bringing the home to a sparkling state.",
     srvcta_title: "Not sure what you need?",
     srvcta_text: "We'll be glad to come over, inspect the surface and recommend the best solution for you.",
     srvcta_btn: "Request Inspection",

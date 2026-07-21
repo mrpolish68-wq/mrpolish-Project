@@ -86,6 +86,8 @@ We are starting the step-by-step development of the Mr. Polish business website 
 
 - **About section (#about) premium refresh:** updated existing `#about` IN PLACE (kept its position before #contact, which the nav mirrors — did NOT move it to "after services grid" to avoid desyncing the nav-scroll order; flag if relocation wanted). `about_title` → "אורי מרגלית – מומחה הליטוש והפוליש שלכם"; `about_p1` → the long authoritative 30-yr paragraph; removed `about_p2` + the `.about-points` list (EN keys about_p2/about_pt1-4 now unused, harmless). Kept eyebrow (gold), logo media + "30+ שנות מומחיות" badge, "דברו איתנו" CTA. Added gold accent line under title (`.about-heading::after`) + airier `.about-text p` (line-height 1.9, 1.05rem). EN updated (about_title/about_p1). Verified desktop 2-col + gold accent, mobile 1-col, EN works, overflow 0, 0 console errors.
 
+- **Service #11 "ניקיון לפני אכלוס" (pre-occupancy cleaning) removed per client decision.** Deleted the `.service-card` from `index.html` (was between `srv10` sealer card and the CTA card) and its `srv11_title`/`srv11_text` EN strings from `main.js` (HE dict is auto-built from the DOM, so no HE-side cleanup needed). Grid is now 10 service cards + 1 CTA card. No dedicated route/page, sitemap entry, JSON-LD Service/offer entry, or lead-form dropdown option ever referenced this service, so no redirects or schema changes were needed.
+
 ## Open Items / Reminders
 - Replace placeholder Unsplash gallery images with Uri's real before/after photos.
 - Create the three legal pages (links already wired from homepage + footer).
