@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-21 (§21 — pre-occupancy cleaning service removed; full legal & compliance pass for IS 5568 AA / Spam Law Amendment 40 / Privacy Law Amendment 13, including a new accessibility widget and cookie-consent banner). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-07-24 (§22 — full SEO / Open Graph / local-marketing audit pass: Twitter Cards, schema.org upgrades, gallery alt-text fixes, and a client-side patch for Soro's blog schema). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -767,3 +767,58 @@ Marketing-consent values are **not** stored as a new Supabase column. They're re
 
 - **Optional future enhancement:** if a real `marketing_consent` boolean column is ever wanted on `public.leads`, write it as a SQL migration following this repo's existing `supabase-*.sql` convention, confirm the live schema first, then switch the `main.js` insert over from the `notes`-field approach above.
 - **Deploy:** these changes are committed to `main` and pushed to GitHub (commits `2840715` legal/compliance pass, `fccb21d` service removal) — Vercel should pick them up automatically for the live production release. Confirm the live site after deploy, especially the cookie banner and accessibility widget on a real mobile device.
+
+## 22. Full SEO / Open Graph / local-marketing audit + Soro blog-schema patch (NEW, 2026-07-24)
+
+A prior SEO pass already existed in-repo (`marketing/social-2026-07-02/seo-audit-2026-07-02.md`) and its critical findings — the blog canonical bug, missing `robots.txt`/`sitemap.xml`, and the LocalBusiness `geo`/`sameAs`/reviews gaps — were confirmed **already fixed** in the live code before this session started. This pass covered what was still open, plus a follow-up request to patch a third-party schema gap.
+
+### SEO & Social Optimization
+
+- **Twitter/X Cards added site-wide** — previously missing entirely. `twitter:card`, `twitter:title`, `twitter:description`, `twitter:image` on `index.html` and `blog.html` (`summary_large_image`); `twitter:card` (`summary`) on the three legal pages.
+- **`og:image` upgraded** on `index.html` and `blog.html` from the flat `logo.jpg` to `assets/hero-poster.jpg` — a real 1600×900 photo of finished work, which performs far better than a logo in Facebook/Instagram/WhatsApp link previews. Added `og:image:width`, `og:image:height`, and a descriptive Hebrew `og:image:alt` alongside it.
+- **Homepage meta description rewritten and shortened**: was 182 characters (truncates in Google's ~155–160 char SERP snippet limit) and didn't mention nationwide coverage; now 131 characters and leads with "**בפריסה ארצית**" (nationwide) — the highest-intent phrase from the brief that was missing before. `og:description` updated to match.
+- **Structured data (JSON-LD) upgraded** in `index.html`:
+  - `@type` changed from generic `LocalBusiness` to `["HomeAndConstructionBusiness", "LocalBusiness"]` — a more specific type Google prefers for this vertical.
+  - `image` now points at the hero photo instead of the logo (logo is still used for the separate `logo` field).
+  - Added a full `hasOfferCatalog` node listing all 10 services as `Offer`/`Service` entries — previously the service list existed only as visible HTML, not in structured data.
+- **Legal pages (`privacy.html`, `terms.html`, `accessibility.html`)** had **no canonical tag, no Open Graph tags, and no Twitter Card at all**. Added all three to each, matching the homepage's pattern.
+- **Blog post `og:type`**: the existing per-post JS (in `blog.html`, which already fixes the canonical/`og:url`/H1 on `?post=<slug>` views) now also switches `og:type` from `website` to `article` once a post slug is detected.
+- **Before/after gallery `alt` text fixed** (`main.js`, the `initCompare` IIFE): the slider's two `<img>` tags previously kept the *same generic* alt text ("הרצפה אחרי ליטוש והברקה") regardless of which of the 5 projects was showing. `loadPair()` now takes the project title and rebuilds both images' `alt` per project, e.g. *"אבן בזלת שחורה - הרצפה אחרי ליטוש והברקה \| מיסטר פוליש"*.
+- **Meta Pixel placeholder added** to `index.html`, commented out, directly below the existing GA4 consent-mode block. No Pixel ID exists yet for this business — the placeholder is pre-wired to the same Privacy Law Amendment 13 consent pattern used for GA4 (`ad_storage`/consent gating), so activating it later is just: create a Pixel in Meta Events Manager, drop the ID in, uncomment.
+- **`sitemap.xml`**: bumped `lastmod` to `2026-07-24` on every URL actually touched this session (`/`, `/blog.html`, `/privacy.html`, `/terms.html`, `/accessibility.html`).
+
+### Soro Blog Schema Patch (follow-up request, same session)
+
+The blog's `BlogPosting` JSON-LD is generated by the third-party **Soro** embed (`app.trysoro.com`), not by this repo — and Soro's dashboard has no field to configure `author`/`publisher`, so those were missing from every post's schema (flagged, but explicitly marked as unfixable from this codebase, in the initial pass above).
+
+Fix: a lightweight client-side patcher was added to `blog.html`, inside the same `?post=<slug>`-gated IIFE that already handles the canonical/H1/breadcrumb fixes:
+- Since there's no load event to hook (Soro fetches and injects its schema asynchronously), it **polls every 500ms for up to ~10s**, scanning all `script[type="application/ld+json"]` tags for one with `"@type": "BlogPosting"`.
+- Once found, it **patches that existing script node in place** — `JSON.parse`s its content, adds `author` (`Person`, name "אורי מרגלית", `jobTitle` "מומחה ליטוש וחידוש מרצפות") and `publisher` (`Organization`, name "מיסטר פוליש", `url`, and `logo` pointing at the real `https://mr-polishes.com/logo.jpg`), then writes it back with `JSON.stringify` — rather than injecting a second, competing JSON-LD block.
+- Marks the patched node (`data-authorPatched`) so it's never double-written if the poll loop's interval fires again after a successful patch.
+- Scoped to post pages only (inside the `if (!slug) return;` guard), so it never runs — and never polls — on the blog index.
+
+### Marketing & Strategy Assets
+
+Created `seo-and-marketing-plan.md` (repo root): prioritized Hebrew keyword targets grouped by intent (core service, nationwide/local modifiers, long-tail how-to, B2B/commercial), 5 new blog post ideas (checked against the 7 posts already published so they close real gaps — e.g. pricing, post-renovation care, crystal-vs-wax comparison, בומנייט/בטון מוחלק, grout replacement — rather than duplicating existing content), and 5 Reel/social post ideas (checked against the existing `assets/generated/` reel library, leaning into the "Uri as a named, personally-accountable craftsman" differentiation angle from the earlier competitor research in §8).
+
+### Testing
+
+- `node --check` passed on `main.js`.
+- Every JSON-LD block in `index.html` (2 blocks: LocalBusiness + FAQPage) extracted and `JSON.parse`d successfully.
+- Every inline `<script>` in `blog.html` (3 blocks, including the new patcher) extracted and parsed via `new Function(...)` successfully.
+- No live browser/Playwright pass was run this session (no visual/interactive change was made — this was meta tags, JSON-LD, and one JS string-building fix, not markup/CSS).
+
+### Known limitation
+
+Soro's `BlogPosting` schema is still missing `dateModified` and a proper `mainEntityOfPage` — the `author`/`publisher` patch above covers what this session's request asked for, but those two remaining fields would need either the same DOM-patch technique extended, or a fix on Soro's platform side.
+
+### Status as of 2026-07-24
+
+Committed and pushed to `main`:
+- `90996c6` — the full SEO/OG/schema audit pass (Twitter Cards, `og:image` upgrade, meta description, LocalBusiness→HomeAndConstructionBusiness + `hasOfferCatalog`, legal-page tags, blog `og:type`/breadcrumb, gallery `alt` fix, Meta Pixel placeholder, `sitemap.xml` bump, `seo-and-marketing-plan.md`) — this commit also included the Soro `BlogPosting` author/publisher patcher described above.
+
+**Recommended next steps (outside code, for Ori):**
+1. Submit `sitemap.xml` in Google Search Console and request indexing for the homepage + all 7 blog posts.
+2. Verify/claim the Google Business Profile behind the existing `g.page/r/CRSEpD2_CFoDEBI` link (already referenced in the reviews CTA and schema) and confirm its categories include "Flooring contractor" / "Marble contractor."
+3. Create a Meta Pixel in Meta Events Manager, then uncomment and fill in the placeholder in `index.html`.
+4. Run the homepage through PageSpeed Insights (mobile) for real CrUX field data — a possible preloader-related FCP delay was flagged in the 2026-07-02 audit but couldn't be confirmed reliably from headless rendering.
