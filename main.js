@@ -579,11 +579,15 @@
       probe.onerror = function () { imgEl.removeAttribute("src"); imgEl.style.display = "none"; };
       probe.src = src;
     }
-    function loadPair(angle) {
+    function loadPair(angle, projTitle) {
       w.classList.add("is-swapping");          // fade out
       setTimeout(function () {
         loadImg(beforeImg, angle.before);
         loadImg(afterImg, angle.after);
+        if (projTitle) {
+          beforeImg.alt = projTitle + " - הרצפה לפני הטיפול | מיסטר פוליש";
+          afterImg.alt = projTitle + " - הרצפה אחרי ליטוש והברקה | מיסטר פוליש";
+        }
         w.style.setProperty("--pos", "50%");   // reset divider on swap
         if (handle) handle.setAttribute("aria-valuenow", "50");
         requestAnimationFrame(function () { w.classList.remove("is-swapping"); }); // fade in
@@ -617,7 +621,7 @@
     }
     function selectAngle(i) {
       curAngle = i;
-      loadPair(PROJECTS[curProj].angles[i]);
+      loadPair(PROJECTS[curProj].angles[i], PROJECTS[curProj].title);
       Array.prototype.forEach.call(dotsEl.children, function (d, idx) {
         d.classList.toggle("active", idx === i);
       });
@@ -631,7 +635,7 @@
         t.setAttribute("aria-selected", on ? "true" : "false");
       });
       renderDots(PROJECTS[i]);
-      loadPair(PROJECTS[i].angles[0]);
+      loadPair(PROJECTS[i].angles[0], PROJECTS[i].title);
     }
     function renderTabs() {
       PROJECTS.forEach(function (p, i) {

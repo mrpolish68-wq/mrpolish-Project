@@ -34,14 +34,23 @@
   <meta name="theme-color" content="#1f2024" />
   <link rel="canonical" href="https://mr-polishes.com/blog.html" />
 
-  <!-- Open Graph / Social -->
+  <!-- Open Graph / Social (Facebook, Instagram, WhatsApp link previews) -->
   <meta property="og:type" content="website" />
   <meta property="og:locale" content="he_IL" />
   <meta property="og:site_name" content="מיסטר פוליש" />
   <meta property="og:title" content="בלוג ומדריכים | מיסטר פוליש - אורי מרגלית" />
   <meta property="og:description" content="טיפים ומדריכים מקצועיים בנושא ליטוש, חידוש שיש ואבן ותחזוקת רצפות." />
-  <meta property="og:image" content="https://mr-polishes.com/logo.jpg" />
+  <meta property="og:image" content="https://mr-polishes.com/assets/hero-poster.jpg" />
+  <meta property="og:image:width" content="1600" />
+  <meta property="og:image:height" content="900" />
+  <meta property="og:image:alt" content="רצפת אבן מבריקה לאחר ליטוש וחידוש על ידי מיסטר פוליש" />
   <meta property="og:url" content="https://mr-polishes.com/blog.html" />
+
+  <!-- Twitter/X Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="בלוג ומדריכים | מיסטר פוליש - אורי מרגלית" />
+  <meta name="twitter:description" content="טיפים ומדריכים מקצועיים בנושא ליטוש, חידוש שיש ואבן ותחזוקת רצפות." />
+  <meta name="twitter:image" content="https://mr-polishes.com/assets/hero-poster.jpg" />
 
   <link rel="icon" type="image/webp" href="favicon.webp" />
 
@@ -216,6 +225,8 @@
       if (canonical) canonical.setAttribute("href", postUrl);
       var ogUrl = document.querySelector('meta[property="og:url"]');
       if (ogUrl) ogUrl.setAttribute("content", postUrl);
+      var ogType = document.querySelector('meta[property="og:type"]');
+      if (ogType) ogType.setAttribute("content", "article");
 
       var heroH1 = document.querySelector(".legal-hero h1");
       if (heroH1) {
@@ -228,6 +239,75 @@
         p.textContent = heroH1.textContent;
         heroH1.replaceWith(p);
       }
+
+      // SEO: BreadcrumbList (בית › בלוג ומדריכים › <post title>).
+      // The Soro embed sets document.title asynchronously once it has
+      // fetched the post, so wait for that change instead of guessing —
+      // firing before the real title lands would bake in the generic
+      // "בלוג ומדריכים" label for every post.
+      var titleEl = document.querySelector("title");
+      if (titleEl && "MutationObserver" in window) {
+        var mo = new MutationObserver(function () {
+          mo.disconnect();
+          var postTitle = document.title.split("|")[0].trim() || document.title;
+          var bc = document.createElement("script");
+          bc.type = "application/ld+json";
+          bc.textContent = JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "בית", "item": "https://mr-polishes.com/" },
+              { "@type": "ListItem", "position": 2, "name": "בלוג ומדריכים", "item": "https://mr-polishes.com/blog.html" },
+              { "@type": "ListItem", "position": 3, "name": postTitle, "item": postUrl }
+            ]
+          });
+          document.head.appendChild(bc);
+        });
+        mo.observe(titleEl, { childList: true, characterData: true, subtree: true });
+      }
+
+      // SEO/E-E-A-T: patch author + publisher onto Soro's BlogPosting schema.
+      // The Soro embed injects its own BlogPosting JSON-LD once the post loads,
+      // but has no dashboard option for author/publisher — so instead of adding
+      // a second, competing JSON-LD block, this patches the one Soro already
+      // injected. There's no load event to hook (Soro fetches the post
+      // asynchronously), so it polls briefly until the schema tag appears.
+      (function patchBlogPostingSchema() {
+        var AUTHOR = {
+          "@type": "Person",
+          "name": "אורי מרגלית",
+          "jobTitle": "מומחה ליטוש וחידוש מרצפות"
+        };
+        var PUBLISHER = {
+          "@type": "Organization",
+          "name": "מיסטר פוליש",
+          "url": "https://mr-polishes.com/",
+          "logo": "https://mr-polishes.com/logo.jpg"
+        };
+
+        function tryPatch() {
+          var scripts = document.querySelectorAll('script[type="application/ld+json"]');
+          for (var i = 0; i < scripts.length; i++) {
+            var s = scripts[i];
+            if (s.dataset.authorPatched) continue;
+            var data;
+            try { data = JSON.parse(s.textContent); } catch (e) { continue; }
+            if (!data || data["@type"] !== "BlogPosting") continue;
+            data.author = AUTHOR;
+            data.publisher = PUBLISHER;
+            s.textContent = JSON.stringify(data);
+            s.dataset.authorPatched = "true";
+            return true;
+          }
+          return false;
+        }
+
+        var attempts = 0;
+        var timer = setInterval(function () {
+          attempts++;
+          if (tryPatch() || attempts >= 20) clearInterval(timer); // give up after ~10s
+        }, 500);
+      })();
     })();
   </script>
 
