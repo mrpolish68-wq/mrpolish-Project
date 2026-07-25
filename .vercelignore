@@ -1,0 +1,24 @@
+# Marketing working files — not part of the deployed site
+marketing/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+
+# Dependencies
+node_modules/
+
+# Logs & temp
+*.log
+npm-debug.log*
+
+# Local verification artifacts (Playwright / screenshots)
+.playwright-mcp/
+*.tmp
+
+.vercel
+.env*
