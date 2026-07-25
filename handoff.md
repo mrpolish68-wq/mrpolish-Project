@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-24 (§22 — full SEO / Open Graph / local-marketing audit pass: Twitter Cards, schema.org upgrades, gallery alt-text fixes, and a client-side patch for Soro's blog schema). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-07-25 (§23 — isolated `marketing/` from git/build/deploy with a `.vercelignore`). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -822,3 +822,16 @@ Committed and pushed to `main`:
 2. Verify/claim the Google Business Profile behind the existing `g.page/r/CRSEpD2_CFoDEBI` link (already referenced in the reviews CTA and schema) and confirm its categories include "Flooring contractor" / "Marble contractor."
 3. Create a Meta Pixel in Meta Events Manager, then uncomment and fill in the placeholder in `index.html`.
 4. Run the homepage through PageSpeed Insights (mobile) for real CrUX field data — a possible preloader-related FCP delay was flagged in the 2026-07-02 audit but couldn't be confirmed reliably from headless rendering.
+
+## 23. `marketing/` folder isolation for Claude Cowork use (NEW, 2026-07-25)
+
+Ori is using the repo's `marketing/` folder (marketing plans, content drafts, research — docx/pptx/xlsx/md, no code) with Claude Cowork. Request was to confirm it can never leak into the deployed site.
+
+- **Git tracking:** already handled in an earlier session — `marketing/` was untracked and added to `.gitignore` in commit `d92c095`. Verified still correctly ignored (`git check-ignore -v marketing/` → matches `.gitignore:13`) and not present in `git ls-files` or `git log --all -- marketing/` beyond that untrack commit.
+- **Build/dev-server:** this is a static site with no `package.json`, no Next.js/bundler, so there's no dev server or file watcher that scans `marketing/` or could trigger a rebuild from it. `vercel.json` only configures cron schedules, `api/*.js` function settings, and response headers — nothing path-related to `marketing/`.
+- **Deployment:** added `.vercelignore` (didn't exist before), mirroring `.gitignore`'s exclusions with `marketing/` listed first. Deployment is git-integration based (`.vercel/repo.json` + GitHub), so untracked files never reach the Vercel build regardless — this is belt-and-suspenders for the case of a manual `vercel` CLI deploy run locally from this directory (the CLI falls back to `.gitignore` only when no `.vercelignore` exists, so once one exists it must be self-sufficient — hence mirroring the full list rather than just `marketing/`).
+- **Scope check:** confirmed via `git status` that only `.vercelignore` was added — `api/`, `assets/`, and everything else untouched.
+
+### Status as of 2026-07-25
+
+Committed and pushed to `main`: `aadc47a` — adds `.vercelignore`.
