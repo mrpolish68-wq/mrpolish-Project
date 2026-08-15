@@ -7,4 +7,84 @@ Disallow: /admin.html
 Disallow: /login.html
 Disallow: /thankyou.html
 
+# ===== GEO: explicit allow-list for AI search/answer-engine crawlers =====
+# The default "User-agent: *" above already permits all of these, but GEO
+# audits (and the crawlers themselves) look for an explicit named rule, so
+# each is listed separately rather than relying on the wildcard alone.
+
+# OpenAI — realtime ChatGPT Search fetches (not training)
+User-agent: ChatGPT-User
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# OpenAI — GPTBot training crawl
+User-agent: GPTBot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Perplexity — answer-engine crawl + realtime fetch
+User-agent: PerplexityBot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+User-agent: Perplexity-User
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Anthropic — Claude web search + training crawl
+User-agent: ClaudeBot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+User-agent: Claude-User
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+User-agent: Claude-SearchBot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Google — Gemini / AI Overviews training crawl (separate from Googlebot,
+# which is already covered by the wildcard rule and indexes for Search)
+User-agent: Google-Extended
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Microsoft — Copilot / Bing Chat
+User-agent: Bingbot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Common Crawl — feeds many third-party LLM training sets
+User-agent: CCBot
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
+# Apple — Apple Intelligence / Siri
+User-agent: Applebot-Extended
+Allow: /
+Disallow: /admin.html
+Disallow: /login.html
+Disallow: /thankyou.html
+
 Sitemap: https://mr-polishes.com/sitemap.xml
