@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-08-15 (§28 — session close-out summary: the Work Order → Price Quote rename + quote history (§24), the GEO/AI-answer-engine audit (§25), and the zero-conversions root-cause fix + QA pass (§26-27) all shipped and are live on `main` at commit `59d2151`. Also captures scoping notes for the next task — a Smart Receipt & Business Expense Scanner — not yet started. Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-08-15 (§29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -56,6 +56,8 @@ Card badges, calendar dots+legend, the status filter dropdown, and the Weekly Pl
 
 **Separate table, separate migration chain:** `public.reviews` has its own hardening file, independent of everything above — `supabase-reviews-harden.sql` (run once, after the original `supabase-reviews.sql`). Tightens the `anon` INSERT policy from `with check (true)` to `with check (approved = false)`, closing a self-approval bypass (see §18) where a direct PostgREST call could set `approved: true` and skip Ori's moderation gate. **⚠️ Not yet run as of this writing.**
 
+**Business expenses + receipt scanning, another separate chain, all run and live:** `supabase-business-expenses.sql` (base table) → `supabase-business-expenses-receipts.sql` (migrates `category` from 4 vendor names to a 6-value expense-type taxonomy, adds `vendor_name`/`invoice_number`/`vat_amount`/`amount_before_vat`/`receipt_url`/`source`/`ocr_confidence_notes`, creates the private `receipts` Storage bucket + policies — see §2 and §29). If the Telegram bot is also wanted on a fresh clone: `supabase-telegram-receipts.sql` (base `telegram_pending_receipts` table) → `supabase-telegram-receipts-edit.sql` (`message_id`/`awaiting_edit_field`, for pre-confirmation editing) → `supabase-telegram-receipts-claim.sql` (`claimed_at`, closes a double-save race — see §31) — run in that order, all three required for the bot to work correctly (not just partially).
+
 ### Current hard constraints (Meta platform limits, not implementation gaps)
 
 - **Instagram has no scheduling API.** Every IG Graph API publish call goes live immediately. A future-dated Instagram (or "both") post cannot be pre-sent to Meta — it must wait, either for the cron or a same-day manual re-approve, until its actual `scheduled_for` arrives.
@@ -77,6 +79,14 @@ A full four-domain audit (injection/auth surfaces in `api/*.js`, RLS policies in
 - **CDN Subresource Integrity** — `admin.html`/`login.html` now load `supabase-js` pinned to an exact version (`@2.110.2`, was a floating `@2`) plus `html2canvas`/`jsPDF`/`ExcelJS`, all with SHA-384 `integrity` + `crossorigin="anonymous"`. **On any future CDN library upgrade, the version number and the integrity hash must be bumped together** — a version bump alone will fail the hash check and silently break script loading (SRI mismatches block execution, not just warn).
 - **Standard content-ingestion tool, now documented:** `tools/insert-content-queue.js` (pre-existing, undocumented until this pass) is the standing, validated way to bulk-insert a content batch into `content_queue` — see §7's addendum and §18 for detail. Enforces the same story/media_type fail-closed guard `publishOne` does, so a malformed row never reaches `pending_approval` in the first place.
 - **CSP rollout in progress, report-only (added 2026-07-17):** `vercel.json`'s `headers` block now sends `Content-Security-Policy-Report-Only` on every route, built from the site's actual external dependencies (Google Fonts, jsDelivr/cdnjs CDN libs, Supabase, Graph API, GTM, the `trysoro` blog widget). Violations land in `api/csp-report.js` (unauthenticated, rate-limited, logs via `console.log`). `'unsafe-inline'` is required for script/style since every page has inline `<script>`/`<style>`/JSON-LD and this is a static site with no per-request nonce templating — a known, deliberate relaxation, not an oversight. **Not yet enforced** — flip `Content-Security-Policy-Report-Only` → `Content-Security-Policy` in `vercel.json` only after a report-only monitoring period (watch `/api/csp-report`'s Vercel logs) turns up nothing unexpected. Also added: `.well-known/mta-sts.txt` (mode `testing`, to be served by pointing a `mta-sts.mr-polishes.com` DNS record at this Vercel project) as prep for the MTA-STS/TLS-RPT/CAA/DMARC/DNSSEC domain hardening — those are DNS-provider changes (IONOS, confirmed by live NS lookup) made manually outside this repo, not code.
+
+### Receipt scanning: two entry points, one extraction core (Phase 1 + Phase 2, 2026-08-15 — full detail in §29-31)
+
+Ori can log a business expense from a receipt three ways: manually (unchanged since the `expenses` tab first shipped), via the dashboard's "📷 סרוק קבלה / העלה קובץ" scanner, or by sending a photo/PDF straight to the `@mrpolish_expenses_bot` Telegram bot. The AI extraction logic lives in exactly one place — `api/parse-receipt.js`'s `callGemini`/`normalizeExtraction`/`CATEGORIES` — and both the dashboard's own `/api/parse-receipt` HTTP handler and `api/telegram-webhook.js` import and reuse it directly, matching this codebase's established "share the core, not the HTTP wrapper" pattern (`publish-scheduled-content.js`/`publish-now.js` did this first).
+
+Both entry points follow the same non-negotiable rule already established by the content queue's AI ratings: **the AI suggests, a human confirms.** Nothing is ever written to `business_expenses` without an explicit save/confirm action, and a receipt with no legible total amount can never be auto-saved with a fabricated placeholder — on either surface. Both surfaces also run the identical duplicate-detection check (exact `invoice_number` match, or same date + amount + similar vendor name) before saving and surface the matched row's real details so Ori can decide whether to save anyway, never a silent block.
+
+**This is the first external AI API integration in this codebase** (every other "AI" surface — `api/analytics-agent.js`'s daily tips — is a deterministic heuristic, deliberately, to avoid an API key/cost, see §19) and provider is **Google Gemini**, currently pinned to `gemini-3.5-flash`. Gemini model versions get retired without much notice — `gemini-2.0-flash` (the original Phase 1 pin) 404'd as "no longer available" a few weeks after shipping, caught live during Phase 2 development, not from a user report. If `/api/parse-receipt` or the Telegram bot start failing extraction with a 404-ish Gemini error, re-check `https://generativelanguage.googleapis.com/v1beta/models` (with the live `GOOGLE_AI_API_KEY`) for a current non-preview `*-flash` model before assuming anything else is broken.
 
 ## 1. Project Context
 
@@ -114,28 +124,60 @@ Columns referenced in code: `id`, `created_at`, `name`, `phone`, `location`, `se
 ### `public.site_stats` — page view / WhatsApp click counters (no migration file)
 Columns: `metric` (text, e.g. `"page_views"`, `"whatsapp_clicks"`), `count` (integer). Incremented via an `increment_metric` RPC called from the public site.
 
-### `public.business_expenses` — **NEW**, business expense ledger (file: `supabase-business-expenses.sql`)
+### `public.business_expenses` — business expense ledger + receipt scanning (files: `supabase-business-expenses.sql`, `supabase-business-expenses-receipts.sql`)
+✅ Both migrations run and live. Current full schema:
 ```sql
 create type public.business_expense_category as enum (
-  'סעדון יבוא שיווק והדברה בע"מ',
-  'אשלי כלי יהלומים בע"מ',
-  'דלק',
+  'חומרי עבודה/פוליש',
+  'דלק/רכב',
+  'שיווק/פרסום',
+  'ציוד ותחזוקה',
+  'הוצאות משרד',
   'שונות'
 );
 
 create table public.business_expenses (
-  id          uuid primary key default gen_random_uuid(),
-  date        date not null default current_date,
-  category    public.business_expense_category not null,
-  amount      numeric(10,2) not null check (amount > 0),
-  description text,
-  created_at  timestamptz not null default now()
+  id                   uuid primary key default gen_random_uuid(),
+  date                 date not null default current_date,
+  category             public.business_expense_category not null,
+  amount               numeric(10,2) not null check (amount > 0),
+  description          text,
+  created_at           timestamptz not null default now(),
+  vendor_name          text,
+  invoice_number       text,
+  vat_amount           numeric(10,2),
+  amount_before_vat    numeric(10,2),
+  receipt_url          text,   -- Storage OBJECT PATH in the "receipts" bucket, not a public URL
+  source               text not null default 'manual' check (source in ('manual', 'ocr')),
+  ocr_confidence_notes text
 );
 ```
 Index: `business_expenses_date_idx` on `(date desc)`.
-RLS: **no `anon` policy at all** — only `authenticated` (Uri's logged-in session) may `SELECT`/`INSERT`/`UPDATE`/`DELETE` (`for all to authenticated using (true) with check (true)`). This is private financial data, unlike `reviews`/`leads` which have public-facing policies.
+RLS: unchanged from the original table — **no `anon` policy at all**, only `authenticated` (Uri's logged-in session) may `SELECT`/`INSERT`/`UPDATE`/`DELETE` (`for all to authenticated using (true) with check (true)`). This is private financial data, unlike `reviews`/`leads` which have public-facing policies.
 
-**⚠️ This migration has not been run yet** — you (or Uri) must execute `supabase-business-expenses.sql` in the Supabase SQL Editor before the new dashboard tab will show real data (it will show a load error until then).
+**Category taxonomy migrated, not appended** (see §29). The original 4 values were vendor/company names (`'סעדון יבוא שיווק והדברה בע"מ'`, `'אשלי כלי יהלומים בע"מ'`, `'דלק'`, `'שונות'`), which didn't fit an AI-suggested-category workflow. `supabase-business-expenses-receipts.sql` swaps the enum for the 6 expense-type values above via the standard safe Postgres pattern (new type → `alter column ... type ... using (case ...)` remapping every existing row → drop old type → rename new type into place) — guarded so re-running the migration is a safe no-op instead of silently resetting already-migrated rows back to `'שונות'`. Old→new mapping: the materials/import vendor → `'חומרי עבודה/פוליש'`, the diamond-tools vendor → `'ציוד ותחזוקה'`, `'דלק'` → `'דלק/רכב'`, `'שונות'` stays `'שונות'`.
+
+**New columns are all nullable** except `source` (defaulted `'manual'`) — every pre-existing manually-entered row is unaffected, and the manual "➕ הוספת הוצאה" modal still only writes `date`/`category`/`amount`/`description`. `source` distinguishes AI-scanned rows (`'ocr'`, set by both the dashboard scanner and the Telegram bot) from hand-typed ones. `receipt_url` is a **Storage object path**, not a browsable URL — viewing a receipt always goes through an on-demand `sb.storage.from("receipts").createSignedUrl(path, 3600)` call (1-hour expiry), never a stored public link. Full UI/extraction detail: §29 (dashboard), §30 (Telegram bot).
+
+**Storage: `receipts` bucket** (created by `supabase-business-expenses-receipts.sql`) — private (`public: false`), policies scoped to `bucket_id = 'receipts'`: `authenticated` may `INSERT` (upload) and `SELECT` (required for `createSignedUrl` to work, not just for direct reads) — no `anon` access, no `UPDATE`/`DELETE` policy for `authenticated` (deleting a `business_expenses` row does **not** delete its Storage file — a known, deliberate Phase 1 scope cut, not a bug; an orphaned-file cleanup pass would be a reasonable future addition). The Telegram bot reads/writes this same bucket via the `service_role` key (bypasses RLS, same posture as every other bot/cron write in this codebase).
+
+### `public.telegram_pending_receipts` — Telegram bot staging table (files: `supabase-telegram-receipts.sql`, `supabase-telegram-receipts-edit.sql`, `supabase-telegram-receipts-claim.sql`)
+✅ All three migrations run and live.
+```sql
+create table public.telegram_pending_receipts (
+  id                  uuid primary key default gen_random_uuid(),
+  chat_id             bigint not null,
+  receipt_path        text not null,   -- Storage object path in "receipts", same bucket as business_expenses
+  extracted           jsonb not null,  -- normalizeExtraction()'s output (vendor_name/date/total_amount/vat_amount/amount_before_vat/invoice_number/category/confidence_notes)
+  created_at          timestamptz not null default now(),
+  message_id          bigint,          -- the Telegram summary message this pending receipt is tied to
+  awaiting_edit_field text,            -- 'date' | 'amount' | null — set while waiting for a free-text edit reply
+  claimed_at          timestamptz      -- atomic claim/lease marker, closes a double-save race, see §31
+);
+
+create index on public.telegram_pending_receipts (created_at);
+```
+RLS: **enabled, zero policies** — a deliberate "only `service_role` may ever touch this" stance (service_role bypasses RLS regardless of policies defined, so this isn't a gap; Supabase's linter flags it as an INFO-level `rls_enabled_no_policy` finding, expected and harmless). Only `api/telegram-webhook.js` ever reads/writes this table, always via `SUPABASE_SERVICE_ROLE_KEY` — there's no Supabase Auth session in a Telegram webhook to gate access with. Full lifecycle detail: §30.
 
 ### `public.content_queue` — **NEW**, content approval + publishing pipeline (file: `supabase-content-queue.sql`)
 **⚠️ This block shows only the original schema.** `content_status` has since gained a `'scheduled'` value and the table has gained `trigger_source`/`publish_attempts`/`last_publish_attempt_at`/`pin_requested`/`pin_confirmed_at` — see **§0's schema table** for the complete, current column set and the exact migration files/order.
@@ -210,16 +252,17 @@ Dashboard tabs (`admin.html`, sidebar `data-view` → `#view-*`):
 1. **`dash`** (📊 לוח בקרה ופעילות) — live metric cards (visits, leads, form submissions, WhatsApp clicks) + recent activity feed, from `site_stats` + `leads`.
 2. **`leads`** (📋 ניהול לידים) — full searchable/sortable leads table (client-side filter/sort over a one-time fetch).
 3. **`ai`** (🧾 הצעות מחיר) — price-quote form + price calculator → **PDF** via `html2canvas` + `jsPDF` (off-screen iframe render, hex-only CSS because html2canvas 1.4.1 can't handle `oklch()`), plus a quote history table backed by the `quotes` Supabase table (search, edit + re-save, re-download PDF) — see §24.
-4. **`expenses`** (💰 הוצאות עסק) — **NEW, this session:**
+4. **`expenses`** (💰 הוצאות עסק) — original manual-entry + Excel export shipped this session; **AI receipt scanning (dashboard + Telegram bot), inline editing, and duplicate detection were added later — see §29-31 for full detail, only the parts unchanged since this section was written are kept below:**
    - Summary card: total of all expenses dated `>= 2026-03-01` (the `EXPENSES_SINCE` constant in the JS — change this one line if the tracking start date needs to move).
-   - Filterable table: category dropdown + from/to date range, client-side filtering over a one-time fetch (same pattern as the leads tab).
-   - "➕ הוספת הוצאה" button opens a modal (`#expModal`) — date, category (4-option enum dropdown), amount, optional description → `INSERT` into `business_expenses`.
+   - Filterable table: category dropdown + from/to date range, client-side filtering over a one-time fetch (same pattern as the leads tab). Each row also has ✏️ edit (§29) and, when a receipt is attached, 📄 view-receipt buttons alongside 🗑 delete.
+   - "➕ הוספת הוצאה" button opens a modal (`#expModal`) — date, category (**6-option** enum dropdown, see §29's taxonomy migration — was 4 when this section was first written), amount, optional description → `INSERT` into `business_expenses`. The same modal now also runs a live duplicate-receipt check against date+amount as Ori types (§30).
+   - **"📷 סרוק קבלה / העלה קובץ" button + drag-and-drop** — AI-scans a photographed/uploaded receipt via Gemini, pre-fills a review modal, human confirms before anything saves. Full detail: §29.
      - **Continuous-entry UX (updated):** the modal has two submit buttons — **"שמירה"** (primary) saves the expense, shows a green "✅ ההוצאה נשמרה בהצלחה" toast inside the modal (`#expToast`, auto-hides after ~2.5s), and **keeps the modal open** — it clears only the amount + description fields and refocuses the amount field, while **date and category are left untouched**, so Ori can log a run of same-day/same-category historical expenses (backfilling from March 2026) without reopening the modal each time. **"שמירה וסגירה"** (secondary) saves and fully closes the modal (same as the old single-button behavior). The `×` close button, the "ביטול" button, clicking the overlay, or `Escape` all still abandon/close without saving. Implemented via `e.submitter` on the form's `submit` event to tell which button was clicked (both are `type="submit"` inside the same `<form id="expForm">`).
    - 🗑 delete button per row (with a confirm prompt) → `DELETE` from `business_expenses`.
    - **"📊 ייצוא לאקסל" button — multi-sheet, categorized:** generates and downloads a `.xlsx` file client-side via **ExcelJS** (loaded from CDN, `cdnjs.cloudflare.com/.../exceljs/4.4.0/exceljs.min.js`). Exports the **full** expense list (not just the currently-filtered view) so the accountant always gets the complete ledger. Structure:
      - **One worksheet per calendar month** that has expenses, tab-named e.g. `"מרץ 2026"`, `"אפריל 2026"` (Hebrew month name + year), in chronological order. Expenses are grouped into `byMonth[YYYY-MM]` client-side, then one sheet is built per key via the `addMonthSheet(workbook, sheetName, monthRows)` helper (defined just above the `exportBtn` click handler in the `loadExpenses` IIFE).
-     - **Every sheet repeats the same header block:** the Mr. Polish logo image (a *fresh* `workbook.addImage()` per sheet — each sheet embeds its own copy, verified 3 separate `image*.jpeg` files in the `.xlsx` zip for a 3-month export), business name, "עוסק פטור 023062185" status line, and a "דו״ח הוצאות עסק — {חודש שנה} — עבור: טל כרמלי, רואה חשבון" line, then the column header row (תאריך / קטגוריה / סכום / תיאור, bold white-on-charcoal) which is **frozen** (`views: [{ state: "frozen", ySplit: 5 }]`) so it stays visible while scrolling.
-     - **Grouped by category** in the fixed `CATEGORY_ORDER` array (`'סעדון יבוא שיווק והדברה בע"מ'`, `'אשלי כלי יהלומים בע"מ'`, `"דלק"`, `"שונות"`) — a category only gets a group if it has expenses that month. Each group starts with a merged, gold-tinted label row for the category name, lists that category's rows (still repeating the category in its own column, for filterability), then a **bold sub-total row** (`'סה"כ <קטגוריה>'`) with a top border.
+     - **Every sheet repeats the same header block:** the Mr. Polish logo image (a *fresh* `workbook.addImage()` per sheet — each sheet embeds its own copy, verified 3 separate `image*.jpeg` files in the `.xlsx` zip for a 3-month export), business name, "עוסק פטור 023062185" status line, and a "דו״ח הוצאות עסק — {חודש שנה} — עבור: טל כרמלי, רואה חשבון" line, then the column header row — **תאריך / קטגוריה / סכום / מס' חשבונית / מע"מ / תיאור, 6 columns since §29 added the last two** (was just 4 when this section was first written), bold white-on-charcoal, **frozen** (`views: [{ state: "frozen", ySplit: 5 }]`) so it stays visible while scrolling.
+     - **Grouped by category** in the fixed `CATEGORY_ORDER` array — **now the 6 expense-type values from §29's taxonomy migration** (`'חומרי עבודה/פוליש'`, `'דלק/רכב'`, `'שיווק/פרסום'`, `'ציוד ותחזוקה'`, `'הוצאות משרד'`, `'שונות'`; was 4 vendor names when this section was first written) — a category only gets a group if it has expenses that month. Each group starts with a merged, gold-tinted label row for the category name, lists that category's rows (still repeating the category in its own column, for filterability), then a **bold sub-total row** (`'סה"כ <קטגוריה>'`) with a top border.
      - Ends with a bold, charcoal-filled **grand-total row** ("סה\"כ הוצאות לחודש") summing the whole month.
      - **Print-friendly:** `sheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: {...} }` on every sheet.
      - `HEBREW_MONTHS` and `CATEGORY_ORDER` are declared once near the top of the `loadExpenses` IIFE (next to `EXPENSES_SINCE`) — update `CATEGORY_ORDER` here (and the `<select>` options in the HTML + the Postgres enum in the SQL migration) together if a category is ever added/renamed.
@@ -1001,14 +1044,137 @@ Ori reported growing traffic (~404 page views) but zero real leads, ever. Invest
 - **No `get_advisors` security regressions** introduced by any of this session's schema changes (checked after the `quotes` table creation).
 - **What to check in a few days**: whether `leads` finally starts gaining real (non-test) rows now that the RLS bug is fixed and deployed — that's the actual signal this session's core fix worked in the wild, not just in testing.
 
-## Next up: Phase 1 — Smart Receipt & Business Expense Scanner
+## 29. Smart Receipt & Business Expense Scanner — Phase 1: AI Vision OCR pipeline (NEW, 2026-08-15)
 
-Not started yet — planning context only, captured here so the next session doesn't need Ori to re-explain it.
+Lets Ori scan or upload a receipt/invoice from the `expenses` tab and have Google Gemini extract the structured fields, instead of typing every field by hand. Additive, not a replacement — the original manual "➕ הוספת הוצאה" flow is completely unchanged.
 
-- **Goal:** let Ori photograph or upload a paper receipt/invoice from his phone (likely via the existing "הוצאות עסק" / Business Expenses tab in `admin.html`, which already has manual expense entry + the accountant Excel export — this would be an additive faster-entry path, not a replacement) and have AI OCR extract the structured fields automatically instead of typing them in by hand.
-- **Expected pieces, based on how similar features are already built in this codebase:**
-  - **Storage:** Supabase Storage bucket for the receipt image/PDF itself (no existing bucket in this project yet — `business_expenses` currently has no file/attachment column at all, so this needs a new storage bucket + a new column on `business_expenses` referencing it, or a separate `business_expense_receipts` table if one receipt can span multiple expense line items).
-  - **OCR/AI extraction:** an `api/*.js` serverless function (matching the existing pattern of `api/publish-now.js`, `api/check-pin-status.js`, etc.) that takes the uploaded image and returns structured fields (date, amount, category guess, vendor/description) — needs a model/OCR provider decision (not yet made).
-  - **Validation modal:** per the existing `.exp-modal` pattern in `admin.html` (`business_expenses` tab), but pre-filled from the OCR result instead of blank, so Ori reviews/corrects before saving rather than the AI writing directly to the table — matches this codebase's consistent pattern of AI-assisted-but-human-confirmed writes (e.g. the content queue's AI recommendations are suggestions, never auto-published).
-  - **Monthly export integration:** should plug into the *existing* ExcelJS-based accountant export (`addMonthSheet()` in `admin.html`, already grouped by category with sub-totals) rather than building a separate export path — the receipt image itself probably doesn't need to be embedded in that export (Tal Carmeli gets the structured numbers), but worth confirming with Ori.
-- **Nothing built yet** — no migration, no API route, no UI. This is scoping notes only, to accelerate whichever session picks it up next.
+### `api/parse-receipt.js` — the extraction endpoint + core
+
+**Auth: session-gated**, same pattern as `check-pin-status.js`/`publish-now.js` (real Supabase `access_token` verified against `/auth/v1/user` with the anon key — never a bypass, just proves the caller is logged in). **Rate limit: 15 requests / 5 minutes**, tighter than the other session-gated routes since each call has a real Gemini API cost, unlike the free Graph API reads those routes make.
+
+**Request contract:** `POST { image: "<base64, no data: prefix>", mimeType: "image/jpeg" | "image/png" | "image/webp" | "application/pdf" }`. Validates method, auth, presence/type of `image`, mime allowlist, and a base64-length cap (`MAX_BASE64_LENGTH`, ~4MB of base64 text) as a server-side safety net — the client is expected to already be under this (see below), so hitting it server-side means something skipped the client-side guard.
+
+**Model: Google Gemini, pinned to an exact version** (`GEMINI_MODEL` constant, currently `gemini-3.5-flash`) — never a floating alias like `gemini-flash-latest`, same "pin exact + verify, don't float" discipline as the CDN `integrity=` SRI pins in `admin.html`'s `<head>`. **This matters in practice, not just in principle**: the original Phase 1 pin (`gemini-2.0-flash`) started 404ing with "no longer available" a few weeks later, caught live while building Phase 2, not from a support ticket. If a future call ever 404s the same way, re-check `https://generativelanguage.googleapis.com/v1beta/models` (with the live `GOOGLE_AI_API_KEY`) for a current non-preview `*-flash` model before picking a replacement — don't assume, verify against the real API like last time.
+
+**Prompt is a function, not a static string** (`getExtractionPrompt()`), specifically so its current-year hint (*"The current calendar year is {year}... do not default to an older year like 2020 just because a digit is hard to read"* — added after real testing showed blurry/handwritten two-digit years could get misread as an older year) is computed fresh via `new Date().getFullYear()` on every call. A plain top-level `const` would go stale the moment a warm serverless instance survives a New Year's rollover, silently reintroducing the exact bug the hint exists to prevent.
+
+**Response schema** (`RESPONSE_SCHEMA`, passed as Gemini's `generationConfig.responseSchema` so the model is structurally constrained, not just prompted): `vendor_name`, `date` (`YYYY-MM-DD`), `total_amount`, `vat_amount`, `amount_before_vat`, `invoice_number` — all nullable — plus `category`, which is **enum-constrained to exactly the 6 `business_expense_category` values** (`required: ["category"]`, so Gemini always returns one of them, never free text) and `confidence_notes` (a short Hebrew sentence flagging anything not read with high confidence, empty string if everything's clear). `normalizeExtraction()` double-checks `category` against the same 6-value list before returning — defense in depth, since a schema violation upstream should never silently reach the database.
+
+**`CATEGORIES`, `ALLOWED_MIME_TYPES`, `callGemini`, `normalizeExtraction` are all exported** from this file and reused as-is by `api/telegram-webhook.js` (§30) — one prompt/schema/normalization, two entry points, matching the `publish-scheduled-content.js` → `publish-now.js` reuse pattern already established in this codebase.
+
+### Client-side (`admin.html`, `expenses` tab)
+
+- **"📷 סרוק קבלה / העלה קובץ" button** + the whole `#expPanel` doubles as a drag-and-drop zone (dragenter/dragover/dragleave/drop with a depth counter to avoid flicker from child-element events). Hidden `<input type="file" accept="image/*,application/pdf" capture="environment">` — `capture="environment"` opens the phone's rear camera directly on mobile, is simply ignored on desktop.
+- **Client-side downscale before sending for analysis** (`downscaleImage()`, canvas-based, long edge capped at 1600px, JPEG quality 0.85) — **this is a hard requirement, not an optimization**: Vercel serverless functions reject request bodies over ~4.5MB total, and base64 inflates size ~33%, so an un-downscaled phone photo (often 3-8MB) would fail at the platform level before `/api/parse-receipt`'s own code ever runs. PDFs skip the resize step (not an image) and are capped separately at 2.5MB raw (chosen specifically so the resulting base64 stays under the same 4.5MB platform ceiling with headroom). **The original, full-quality file is untouched** — the downscaled copy is only for the AI call; what actually gets uploaded to Storage on save is the real file.
+- **Review modal** (`#expReceiptModal`) — shows a live preview (image or a generic PDF icon), a loading spinner while `/api/parse-receipt` is in flight, then pre-fills every field from the response. Ori can freely edit any field before saving. If `confidence_notes` came back non-empty, it's shown as a small amber notice. **Nothing is written to Supabase until the explicit "אישור ושמירה בהוצאות" click** — matches the content queue's AI-suggests-human-confirms pattern exactly.
+- **Every failure path degrades to a still-usable manual-entry state**, never a dead end: unsupported file type/oversized file → alert before upload even starts; download/network failure, Gemini failure, or a malformed Gemini response → a friendly Hebrew message in the modal, fields stay editable, save button stays enabled. All deliberately-thrown rejections carry a `userMessage` property (`friendlyError()` helper) so a raw technical/English error can never leak into the Hebrew UI — only a final catch-all fallback string does, and even that's Hebrew.
+- **Duplicate-receipt warning** — see §30 (same rule, documented once there since the check is duplicated by hand across the browser/server boundary).
+- **✏️ Edit button per row** opens `#expEditModal`, pre-filled with every field (including a "view existing receipt" link), writes a single `UPDATE` on save — the only way to correct a wrong AI extraction (or a manual-entry typo) after the fact.
+
+### Excel export (`addMonthSheet()` in `admin.html`)
+
+Gained two columns — **מס' חשבונית** (invoice number) and **מע"מ (₪)** (VAT) — inserted between סכום and תיאור. `CATEGORY_ORDER` updated to the 6 new category values; the existing per-category subtotal + grand-total logic needed no other changes since it already just iterates whatever `CATEGORY_ORDER` contains. **The receipt file itself is deliberately not linked/embedded in the export** — the bucket is private and signed URLs expire, so a link baked into a spreadsheet an accountant might open weeks later would go stale; Tal Carmeli gets the structured numbers instead.
+
+### Environment variable
+- `GOOGLE_AI_API_KEY` — Vercel project env var (and local `.env` for testing tools/scripts). No fallback path if missing — the endpoint returns a clear 500 rather than silently degrading.
+
+### Status
+✅ Live and verified. Both migrations run (`supabase-business-expenses.sql`, `supabase-business-expenses-receipts.sql`). See §31 for full test coverage.
+
+## 30. Telegram Bot Integration — Phase 2: receipt scanning via chat (NEW, 2026-08-15)
+
+Lets Ori photograph a receipt straight from Telegram (`@mrpolish_expenses_bot`) — no need to open the dashboard at all. Reuses `api/parse-receipt.js`'s extraction core as-is (§29).
+
+### `api/telegram-webhook.js` — necessarily sessionless, secured differently from every other route
+
+Telegram calls this endpoint directly — there's no Supabase Auth session to check — so it's gated by two independent layers instead:
+1. **`TELEGRAM_WEBHOOK_SECRET`** — Telegram's own webhook `secret_token` feature. Set once via `tools/set-telegram-webhook.js` (see below), Telegram echoes it back on the `X-Telegram-Bot-Api-Secret-Token` header of every real call. Compared with `crypto.timingSafeEqual` (not a plain `!==`), closing a timing side-channel — see §31. A mismatch (401) means the request did not come from Telegram; this is the primary access boundary.
+2. **`TELEGRAM_ALLOWED_CHATS`** — a comma-separated allowlist of chat ids. **Fails CLOSED**: if unset, nothing is processed at all. Necessary because check #1 alone only proves a message is genuinely from Telegram, not that it's from Ori — Telegram will legitimately relay a message from any stranger who finds and messages the bot. A non-allowlisted chat gets **total silence**, not even an error reply, so the allowlist also functions as "does this bot even do anything for you" concealment.
+
+Every Supabase write here uses the `service_role` key (bypasses RLS) — same posture as the cron-triggered writes in `publish-scheduled-content.js`/`analytics-agent.js`.
+
+### Webhook registration — `tools/set-telegram-webhook.js`
+
+```
+node tools/set-telegram-webhook.js https://mr-polishes.com    # register
+node tools/set-telegram-webhook.js info                       # inspect current registration
+node tools/set-telegram-webhook.js delete                     # unregister
+```
+Reads `TELEGRAM_BOT_TOKEN` from `.env`; auto-generates `TELEGRAM_WEBHOOK_SECRET` and saves it to `.env` if not already set (never prints the value — same discipline as the Meta token tools). **The same secret must also be set in Vercel's project env vars** — the script can't do that part for you, and a mismatch there means the deployed function 401s every real Telegram call while looking otherwise fine.
+
+### Staging table & the callback_data problem
+
+Telegram's inline-keyboard `callback_data` has a **hard 64-byte limit** — nowhere near enough to carry a full extracted receipt payload. So the moment extraction succeeds, the result is parked in `telegram_pending_receipts` (§2) keyed by a short uuid, and that uuid is what actually rides in `callback_data` (`"confirm:<uuid>"`, `"cancel:<uuid>"`, etc.) — the message that uploads a photo and the later tap on a button are two completely separate, stateless webhook invocations, possibly on different serverless instances, and the pending row is what bridges them.
+
+### Data flow
+photo/PDF in → download from Telegram (`getFile` + file download, size-capped at 15MB) → Gemini extraction (shared core) → upload original to the private `receipts` Storage bucket (§29's bucket, same one) → insert pending row → build the summary message (duplicate check + formatted text + keyboard, see below) → send, with edit/Confirm/Cancel buttons → optional edits → tap Confirm → **atomically claim the row** (§31) → insert into `business_expenses` (`source: "ocr"`) → pending row deleted, Telegram message updated in place to show the saved state.
+
+### Pre-confirmation editing — three extra buttons beyond Confirm/Cancel
+
+`✏️ שנה תאריך`, `✏️ שנה סכום`, `🏷️ שנה קטגוריה` let Ori correct a wrong extraction without leaving the chat:
+- **Category is a fixed 6-value enum**, so its button just **cycles** to the next value on every tap — fully synchronous, no extra state, no free-text parsing needed for a closed set.
+- **Date and amount are free-form**, so tapping their button sets `telegram_pending_receipts.awaiting_edit_field` and prompts Ori to reply with the new value as a plain text message. The **next** plain-text message from that chat — **within a 30-minute freshness window** (`findAwaitingEdit`, deliberately scoped so a stray edit-prompt from an hour ago can't hijack an unrelated later message) — is interpreted as that reply rather than a new receipt upload attempt. `parseDateReply()` accepts ISO or Israeli `DD/MM/YYYY`(`.`-separated too, 2-or-4-digit year); `parseAmountReply()` strips `₪`/commas/`ש"ח` and validates a positive number. An unparseable reply gets a retry prompt and **keeps** `awaiting_edit_field` set, rather than silently giving up.
+- **The pending row's `message_id` is stored** specifically so these edits — which arrive as plain messages, not `callback_query`s, and so don't carry their own message context back to us the way a button tap does — can still edit the **one** summary message in place instead of spamming a new message into the chat for every correction.
+- **A receipt with no legible amount can never be confirmed as-is** — there's no way to type a brand-new amount except through the explicit "✏️ שנה סכום" flow, so a bare Confirm tap on a missing-amount receipt is refused (with the pending row and its Storage file cleaned up), never saved with a fabricated placeholder.
+
+### Duplicate-receipt detection (same rule on both surfaces — Telegram and the dashboard, §29)
+
+Checked via `findDuplicateExpense()` before every render of the confirm keyboard (initial send, after a category cycle, when prompting for an edit, and after an edit reply is applied — an edit to date/amount is exactly the kind of change that can create or remove a match, so this is never cached, always re-run):
+1. **Exact `invoice_number` match** (trimmed, non-empty) — the strongest signal, checked first.
+2. **Same `date` + same `amount` + same/similar `vendor_name`** (substring match either direction, so `"פז"` catches `"פז חברת הדלק"`). If no `vendor_name` was extracted at all, date+amount alone is the fallback signal.
+
+**Advisory only, never a hard block** — fails open on any query error (an advisory feature should never prevent a legitimate save because the check itself hiccuped). When a match is found, the matched row's real details (date, vendor, amount, invoice number) are prepended above the summary as a Hebrew warning block, and the Confirm button relabels to **"⚠️ אשר בכל זאת"** — tapping it still saves normally, the human is just better-informed first. On the dashboard side (`admin.html`), the identical rule runs client-side against the already-loaded `allExpenses` array (no extra Supabase round-trip) inside both the receipt-review modal and the manual add-expense modal (which has no vendor/invoice field to collect, so it falls back to date+amount alone), showing a live-reactive amber banner and the same button-relabeling treatment. The two implementations are **kept in sync by hand** — there's no shared module across the browser/server boundary in this zero-dependency project.
+
+### Rate limiting
+
+Uses `_rate-limit.js`'s lower-level `rateLimit()` directly (not the `enforce()` wrapper the session-gated routes use), keyed by **`chat_id`, not IP** — deliberately, since all real traffic arrives from Telegram's own servers regardless of which end-user chat it's relaying, so IP-based limiting would be meaningless here. 10 messages / 10 minutes per chat, 20 callback taps / minute per chat.
+
+### Environment variables
+- `TELEGRAM_BOT_TOKEN` — from @BotFather.
+- `TELEGRAM_WEBHOOK_SECRET` — generated by `tools/set-telegram-webhook.js`, must match in both `.env` and Vercel.
+- `TELEGRAM_ALLOWED_CHATS` — comma-separated chat ids. **Fails closed if unset** — the bot silently does nothing until this is set.
+
+### Status
+✅ Live and verified — Ori has used the real bot in production (confirmed by finding real, non-test `business_expenses` rows created via the bot during Phase 2 development, correctly left untouched by every test pass since). Both base migrations run (`supabase-telegram-receipts.sql`, `supabase-telegram-receipts-edit.sql`); see §31 for the third (`claimed_at`) and full test coverage.
+
+## 31. Security & regression audit — receipt scanner + Telegram bot (NEW, 2026-08-15)
+
+A full audit across §29 and §30 requested after both shipped: static security review, live regression + edge-case testing, a database/RLS audit, and cleanup. Found and fixed 3 real bugs plus one hardening improvement.
+
+### Bug: double-save race condition on Telegram Confirm (medium severity)
+
+`processCallbackQuery`'s confirm handler used to read the pending row, then insert into `business_expenses`, then delete the pending row — with no atomicity between the read and the insert. A fat-finger double-tap on "✅ אשר" (or Telegram redelivering the same `callback_query` if our response was slow) could let two concurrent requests both see the row as "still there" before either deleted it, producing **two** `business_expenses` rows for one receipt. **Fixed with an atomic claim**: `claimPendingRow()` does a conditional `UPDATE` (`claimed_at IS NULL OR claimed_at < lease_cutoff`) that only one concurrent caller can win, gating the insert — the exact same claim/lease pattern already used by `publish-scheduled-content.js`'s `claimRow()`/`CLAIM_LEASE_MS` for `content_queue` (§18). The 2-minute lease also self-heals a crash mid-processing: a stale claim becomes reclaimable again rather than permanently stuck. Migration: `supabase-telegram-receipts-claim.sql` (`claimed_at` column), run and live. **Proved fixed**, not just reasoned about: a dedicated test fires two simultaneous confirm taps via `Promise.all` against the same pending row — exactly one `business_expenses` row results, the race loser gets a graceful "כבר בטיפול" response, both requests still return 200.
+
+### Bug: silent failure on network drops (admin.html, medium severity)
+
+Four Supabase promise chains had no `.catch()`: delete-row, edit-modal save, manual-add save, and the shared receipt-viewing signed-URL helper (`openReceiptSignedUrl()`, used by 3+ buttons — row list, edit modal, duplicate-warning banners). A network drop mid-request left the clicked button permanently disabled with **zero** user feedback and an unhandled promise rejection — no crash, but no way to recover without reloading the page. All four now restore button state and show a clear Hebrew error on failure. Verified by simulating `ERR_CONNECTION_REFUSED` on each of the four flows in a live browser.
+
+### Bug: stale documentation
+
+`parse-receipt.js`'s header comment still named the retired `gemini-2.0-flash` model (the code itself had already been fixed to `gemini-3.5-flash`, the comment just never got updated). Now references the `GEMINI_MODEL` constant instead of a literal, so it can't drift out of sync again.
+
+### Hardening: constant-time secret comparison
+
+The Telegram webhook secret check now uses `crypto.timingSafeEqual` instead of a plain `!==`, closing a timing side-channel on the endpoint's primary access boundary. Low practical exploitability given Vercel's own network jitter, but a one-line correct fix — the textbook right way to compare a secret token.
+
+### Test coverage
+
+**90 assertions across 5 local test harnesses**, run directly against real Gemini + real Supabase (mocking only the Telegram wire calls, so extraction quality and database writes are genuinely exercised, not simulated):
+- 32 — core flows: photo/PDF upload, OCR, confirm/cancel, missing-amount refusal.
+- 21 — pre-confirmation editing: category cycling (incl. wraparound), date/amount edit-prompt-reply-retry cycle, unrelated-message non-hijacking.
+- 15 — duplicate detection: exact invoice match, date+amount+vendor triplet match, false-positive avoidance (different vendor), live re-check on edit, confirm-despite-duplicate still saves.
+- 5 — concurrency: proves the double-save race fix (above).
+- 17 — edge cases: `parse-receipt.js` payload validation (wrong method, missing/invalid fields, oversized payload, garbage non-image bytes, empty string), Telegram-side network drops at every stage (file download, Gemini call, Supabase insert) — handler never throws, always responds 200 to avoid a Telegram retry storm — and sparse/missing extracted-data fields not crashing message formatting.
+
+Plus a live Playwright pass of `admin.html`: category filtering, every modal's open/close/Escape lifecycle, and the Excel export — the generated `.xlsx` **blob was captured and re-parsed with the same ExcelJS instance** to verify actual cell values, not just that a file downloaded (confirmed per-category subtotals and the grand total are mathematically exact). Zero console warnings, errors, or unhandled rejections throughout.
+
+### Database & Storage audit
+
+- `business_expenses`: RLS enabled, `authenticated`-only, as designed.
+- `telegram_pending_receipts`: RLS enabled, zero policies (intentional, see §2).
+- `receipts` bucket: private, `authenticated` INSERT+SELECT only, no `anon` access.
+- `get_advisors`: no new findings beyond the pre-existing, already-understood items (the `rls_enabled_no_policy` INFO on `telegram_pending_receipts` is expected; the other two predate this feature entirely).
+- **Cleanup performed**: 2 orphaned `telegram_pending_receipts` test rows and 2 orphaned Storage test files (leftover from an earlier test pass that cleaned its DB rows but not the underlying Storage objects) found and removed — verified against real `business_expenses.receipt_url` values before deleting anything, so Ori's 2 real bot-created expense records and their receipt files were never at risk and are confirmed intact throughout.
+
+### Status
+✅ All fixes live on `main` (commit `d741969`). Nothing currently queued as a known follow-up for this feature.
