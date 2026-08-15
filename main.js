@@ -495,7 +495,14 @@
       } catch (e) {}
 
       // 2) BACKGROUND DB — store the lead in the Supabase "leads" table.
-      //    Fire-and-forget so it never blocks the redirect below.
+      //    Fire-and-forget so it never blocks the redirect below, BUT still
+      //    surfaced on failure (see the .then() below) — a bare .catch() on
+      //    fetch() only catches network-level failures, never HTTP error
+      //    responses like a 401 from Row-Level Security, so a rejected
+      //    insert used to fail completely silently while the visitor saw
+      //    "Thanks!" and the lead was never saved (found + fixed 2026-08-15).
+      //    location/notes are sent as `null` (never "") when blank — the
+      //    optional-field RLS check only accepts NULL or a real value.
       fetch(SUPABASE_URL + "leads", {
         method: "POST",
         headers: {
@@ -507,11 +514,23 @@
         body: JSON.stringify({
           name: name,
           phone: phone,
-          location: location,
+          location: location || null,
           service: service,
-          notes: notesWithConsent
+          notes: notesWithConsent || null
         })
-      }).catch(function () { /* DB write is best-effort; WhatsApp is the primary delivery */ });
+      }).then(function (res) {
+        if (!res.ok) {
+          return res.text().then(function (body) {
+            console.error("Lead DB insert failed (" + res.status + "): " + body);
+            gaEvent("lead_db_error", { status: res.status });
+          });
+        }
+      }).catch(function (err) {
+        // Real network failure (offline, DNS, etc.) — WhatsApp is still the
+        // primary delivery path, but log it so it isn't completely invisible.
+        console.error("Lead DB insert network error: " + err);
+        gaEvent("lead_db_error", { status: "network" });
+      });
 
       // Marketing analytics: a validated lead is a successful submission.
       gaEvent("form_submission", { service: service, location: location || undefined, marketing_consent: marketingConsent });
@@ -1076,10 +1095,19 @@
   bumpMetric("page_views");
 
   document.addEventListener("click", function (e) {
-    var link = e.target.closest && e.target.closest('a[href*="wa.me"]');
-    if (!link) return;
-    gaEvent("whatsapp_click");
-    bumpMetric("whatsapp_clicks");
+    var waLink = e.target.closest && e.target.closest('a[href*="wa.me"]');
+    if (waLink) {
+      gaEvent("whatsapp_click");
+      bumpMetric("whatsapp_clicks");
+      return;
+    }
+    // Call-button tracking (header, hero, contact info, footer, mobile action
+    // bar) — previously had zero visibility at all, found during the
+    // 2026-08-15 audit. Mirrors the wa.me tracking above exactly.
+    var callLink = e.target.closest && e.target.closest('a[href^="tel:"]');
+    if (!callLink) return;
+    gaEvent("call_click");
+    bumpMetric("call_clicks");
   });
 
   /* ---------------------------------------------------------

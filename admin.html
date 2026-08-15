@@ -709,6 +709,7 @@
             <div class="metric"><div class="ic">🎯</div><div class="num" id="metricLeads">0</div><div class="lbl">לידים חדשים</div><div class="trend" id="trendLeads">טוען…</div></div>
             <div class="metric"><div class="ic">📝</div><div class="num" id="metricForms">0</div><div class="lbl">שליחות טופס</div><div class="trend" id="trendForms">טוען…</div></div>
             <div class="metric"><div class="ic">💬</div><div class="num" id="metricWa">—</div><div class="lbl">פניות וואטסאפ</div><div class="trend muted" id="trendWa">סה״כ מצטבר</div></div>
+            <div class="metric"><div class="ic">📞</div><div class="num" id="metricCalls">—</div><div class="lbl">לחיצות על חייגו עכשיו</div><div class="trend muted" id="trendCalls">סה״כ מצטבר</div></div>
           </div>
           <div class="panel">
             <h3>פעילות אחרונה</h3>
@@ -1278,13 +1279,14 @@
           }, 24);
         }
 
-        // Native site metrics (page views + WhatsApp clicks) from the counter table.
+        // Native site metrics (page views + WhatsApp clicks + call clicks) from the counter table.
         sb.from("site_stats").select("metric, count").then(function (res) {
           if (res.error || !res.data) return; // keep "—" placeholders on error
           var map = {};
           res.data.forEach(function (row) { map[row.metric] = Number(row.count) || 0; });
           if (map.page_views != null) countUp(document.getElementById("metricVisits"), map.page_views);
           if (map.whatsapp_clicks != null) countUp(document.getElementById("metricWa"), map.whatsapp_clicks);
+          if (map.call_clicks != null) countUp(document.getElementById("metricCalls"), map.call_clicks);
         });
 
         function timeAgo(iso) {

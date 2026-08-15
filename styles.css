@@ -2176,7 +2176,15 @@ html.a11y-reduce-motion .hero-video { display: none; }
 .cookie-banner__actions button:hover { transform: translateY(-2px); }
 .cookie-banner__accept { background: var(--gold-500) !important; color: var(--char-950) !important; border-color: var(--gold-500) !important; }
 @media (max-width: 859px) {
-  .cookie-banner { padding-block-end: calc(18px + env(safe-area-inset-bottom)); }
+  /* CRO fix (2026-08-15 audit): the cookie banner used to sit flush to the
+     viewport bottom at a higher z-index than .mobile-bar, so it fully
+     covered AND intercepted taps on the sticky call/WhatsApp/Waze bar for
+     every visitor until they dismissed it — confirmed via
+     elementFromPoint() that a tap on the WhatsApp button hit the banner
+     instead. Shifting the banner up clears the bar (~76px tall including
+     its own bottom offset) instead of raising the bar's z-index over it,
+     which would just create the opposite visual overlap. */
+  .cookie-banner { padding-block-end: calc(18px + env(safe-area-inset-bottom)); inset-block-end: calc(84px + env(safe-area-inset-bottom)); }
 }
 
 /* =========================================================

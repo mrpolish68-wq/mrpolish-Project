@@ -998,61 +998,6 @@
         </div>
       </div>
 
-      <!-- ===== WRITE-A-REVIEW MODAL ===== -->
-      <div class="review-modal" id="reviewModal" hidden>
-        <div class="review-modal__overlay" data-review-close></div>
-        <div class="review-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle" dir="rtl">
-          <button type="button" class="review-modal__close" aria-label="סגירת החלון" data-review-close>&times;</button>
-
-          <!-- FORM STATE -->
-          <div id="reviewFormState">
-            <h3 class="review-modal__title" id="reviewModalTitle" data-i18n="review_modal_title">כתיבת ביקורת</h3>
-            <p class="review-modal__sub" data-i18n="review_modal_sub">נשמח לשמוע על החוויה שלכם. הביקורת תפורסם באתר לאחר אישור.</p>
-
-            <form class="review-form" id="reviewForm" novalidate>
-              <div class="field">
-                <label for="rv-name">שם פרטי ושם משפחה:</label>
-                <input type="text" id="rv-name" name="first_last_name" autocomplete="name" required />
-              </div>
-
-              <div class="field">
-                <label for="rv-date">תאריך עבודה:</label>
-                <input type="text" id="rv-date" name="job_date" placeholder="לדוגמה: יוני 2024" required />
-              </div>
-
-              <div class="field">
-                <label for="rv-type">סוג עבודה:</label>
-                <input type="text" id="rv-type" name="job_type" placeholder="לדוגמה: ליטוש שיש והברקה קריסטלית" required />
-              </div>
-
-              <div class="field">
-                <label for="rv-text">כתיבת ביקורת:</label>
-                <textarea id="rv-text" name="review_text" rows="4" required></textarea>
-              </div>
-
-              <!-- Honeypot for spam protection -->
-              <div class="hp-field" aria-hidden="true">
-                <label for="rv-website">אל תמלאו שדה זה</label>
-                <input type="text" id="rv-website" name="website" tabindex="-1" autocomplete="off" />
-              </div>
-
-              <button type="submit" class="btn btn-lg btn-block form-submit-btn">
-                <span class="label" data-i18n="review_submit">שליחת הביקורת</span>
-              </button>
-              <p class="form-status" id="reviewStatus" role="status" aria-live="polite"></p>
-            </form>
-          </div>
-
-          <!-- SUCCESS STATE -->
-          <div id="reviewSuccessState" hidden>
-            <div class="review-success__icon" aria-hidden="true">✓</div>
-            <h3 class="review-modal__title" data-i18n="review_success_title">תודה רבה!</h3>
-            <p class="review-success__msg" data-i18n="review_success_msg">ההמלצה שלך נשמרה בהצלחה! נשמח מאוד אם תוכל להעתיק אותה ולשתף אותה גם בעמוד הגוגל מפות שלנו כדי לעזור לנו לצמוח.</p>
-            <a class="btn btn-lg btn-block btn-gold review-success__cta" href="https://g.page/r/CRSEpD2_CFoDEBI/review" target="_blank" rel="noopener" data-i18n="review_success_cta">שיתוף המלצה בגוגל מפות 🌟</a>
-            <button type="button" class="review-modal__dismiss" data-review-close data-i18n="review_success_dismiss">סגירה</button>
-          </div>
-        </div>
-      </div>
     </section>
 
     <!-- ============ ABOUT / 30 YEARS ============ -->
@@ -1116,7 +1061,7 @@
 
           <div class="field">
             <label for="lf-phone" data-i18n="form_phone">טלפון</label>
-            <input type="tel" id="lf-phone" name="phone" autocomplete="tel" inputmode="tel" dir="ltr" pattern="[0-9\-\+\s]{9,15}" required />
+            <input type="tel" id="lf-phone" name="phone" autocomplete="tel" inputmode="tel" dir="ltr" pattern="[0-9\-\+\s]{9,20}" required />
           </div>
 
           <div class="field">
@@ -1233,6 +1178,76 @@
     </svg>
   </button>
   <div class="share-toast" id="shareToast" role="status" aria-live="polite"></div>
+
+  <!-- ===== WRITE-A-REVIEW MODAL =====
+       QA fix (2026-08-15): this modal used to live nested inside the
+       testimonials section instead of at the body level. Despite valid
+       "position: fixed; inset: 0" CSS, opening it while nested that deep
+       rendered the modal exactly overlapping its parent section's box
+       instead of the viewport (confirmed via getBoundingClientRect and
+       offsetParent, plus a real screenshot — the modal was completely
+       invisible off-screen, not just mismeasured). The root mechanism was
+       not fully isolated despite checking every standard containing-block
+       trigger (transform, filter, perspective, will-change, contain,
+       backdrop-filter, translate, rotate, scale) on every ancestor — moved
+       to a body-level portal instead, matching the existing pattern
+       already used for the share button, the mobile action bar, and the
+       accessibility widget, which is the robust fix regardless of the
+       exact cause and standard practice for modals generally. -->
+  <div class="review-modal" id="reviewModal" hidden>
+    <div class="review-modal__overlay" data-review-close></div>
+    <div class="review-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle" dir="rtl">
+      <button type="button" class="review-modal__close" aria-label="סגירת החלון" data-review-close>&times;</button>
+
+      <!-- FORM STATE -->
+      <div id="reviewFormState">
+        <h3 class="review-modal__title" id="reviewModalTitle" data-i18n="review_modal_title">כתיבת ביקורת</h3>
+        <p class="review-modal__sub" data-i18n="review_modal_sub">נשמח לשמוע על החוויה שלכם. הביקורת תפורסם באתר לאחר אישור.</p>
+
+        <form class="review-form" id="reviewForm" novalidate>
+          <div class="field">
+            <label for="rv-name">שם פרטי ושם משפחה:</label>
+            <input type="text" id="rv-name" name="first_last_name" autocomplete="name" required />
+          </div>
+
+          <div class="field">
+            <label for="rv-date">תאריך עבודה:</label>
+            <input type="text" id="rv-date" name="job_date" placeholder="לדוגמה: יוני 2024" required />
+          </div>
+
+          <div class="field">
+            <label for="rv-type">סוג עבודה:</label>
+            <input type="text" id="rv-type" name="job_type" placeholder="לדוגמה: ליטוש שיש והברקה קריסטלית" required />
+          </div>
+
+          <div class="field">
+            <label for="rv-text">כתיבת ביקורת:</label>
+            <textarea id="rv-text" name="review_text" rows="4" required></textarea>
+          </div>
+
+          <!-- Honeypot for spam protection -->
+          <div class="hp-field" aria-hidden="true">
+            <label for="rv-website">אל תמלאו שדה זה</label>
+            <input type="text" id="rv-website" name="website" tabindex="-1" autocomplete="off" />
+          </div>
+
+          <button type="submit" class="btn btn-lg btn-block form-submit-btn">
+            <span class="label" data-i18n="review_submit">שליחת הביקורת</span>
+          </button>
+          <p class="form-status" id="reviewStatus" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+
+      <!-- SUCCESS STATE -->
+      <div id="reviewSuccessState" hidden>
+        <div class="review-success__icon" aria-hidden="true">✓</div>
+        <h3 class="review-modal__title" data-i18n="review_success_title">תודה רבה!</h3>
+        <p class="review-success__msg" data-i18n="review_success_msg">ההמלצה שלך נשמרה בהצלחה! נשמח מאוד אם תוכל להעתיק אותה ולשתף אותה גם בעמוד הגוגל מפות שלנו כדי לעזור לנו לצמוח.</p>
+        <a class="btn btn-lg btn-block btn-gold review-success__cta" href="https://g.page/r/CRSEpD2_CFoDEBI/review" target="_blank" rel="noopener" data-i18n="review_success_cta">שיתוף המלצה בגוגל מפות 🌟</a>
+        <button type="button" class="review-modal__dismiss" data-review-close data-i18n="review_success_dismiss">סגירה</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ============ STICKY MOBILE ACTION BAR ============ -->
   <nav class="mobile-bar" aria-label="פעולות מהירות">

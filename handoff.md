@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-08-15 (§25 — GEO/AI-answer-engine audit: entity-graph schema upgrade, direct-answer blocks, HowTo + comparison/pricing tables, AI crawler allow-list in robots.txt). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-08-15 (§27 — pre-commit QA regression pass on the §26 fixes found and fixed two more real bugs: the "Write a Review" modal rendered completely off-screen/invisible whenever opened (position:fixed silently broke, root cause never fully isolated — fixed by moving it to a body-level portal like every other overlay), and the phone regex rejected a realistic dashed international format. Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -887,3 +887,70 @@ All 4 validation categories pass cleanly after the two fixes above (full pass/fa
 ### Status as of 2026-08-15 (§25)
 
 `index.html`, `main.js`, `styles.css`, `robots.txt` all modified — **not yet committed**. Not yet deployed, so AI crawlers won't see any of this until it's pushed to `main`. No Supabase/schema changes involved (this is all static-site content + structured data).
+
+## 26. Zero-conversions diagnostic audit — found + fixed the actual root cause (NEW, 2026-08-15)
+
+Ori reported traffic growing (~404 page views) but **zero real customer leads**, ever. Investigated ground-truth data first (not just code) via the Supabase MCP against the live project (`mmognkxkglkotzkuxzly`):
+
+- `leads` table: 6 rows total, latest dated **2026-06-24** — nearly 7 weeks stale versus "today" (2026-08-15). All 6 are identifiably test data (`"TEST location-field"`, `"בדיקה חיה מורסל"`, 3 submissions from Ori's own name/phone during QA). **Zero real customer leads have ever been captured**, despite continuous traffic since.
+- `site_stats`: `page_views: 404` (matches Ori's number exactly), `whatsapp_clicks: 7`.
+
+### Bug #1 (the actual root cause): lead-form RLS policy silently rejects blank optional fields
+
+The `leads` table's anon-insert RLS policy (`with_check`) required `location` and `notes` to be either `NULL` or above a minimum length — **an empty string satisfies neither**. The lead form's "עיר / יישוב" (city) field is intentionally optional (no `required` attribute), and `main.js` sent `form.location.value.trim()` — which is `""`, not `null`, when a visitor leaves it blank. Any real visitor who skipped that one optional field (very plausible — it feels redundant once you've given your phone number) had their INSERT rejected outright by PostgREST with **HTTP 401 / `"new row violates row-level security policy"`**.
+
+**Why this was completely invisible:** the fetch call was `fetch(...).catch(function () {})` — a bare `.catch()` on `fetch()` only fires for network-level failures (offline, DNS, CORS). It does **not** fire for HTTP error status codes; `fetch()` resolves normally even on a 401. So the rejection produced no console error, no admin notification, nothing — the visitor saw "Thanks! Redirecting…" and landed on `thankyou.html` exactly as if it had worked, while literally zero data was ever saved.
+
+**Confirmed, not just theorized:** replayed the exact POST request `main.js` sends (same anon key, same payload shape) directly against the production REST endpoint via `curl` — reproduced the 401 with `location: ""`, confirmed `location: null` succeeds (HTTP 201). Also ran the real form end-to-end through a live browser exactly as a visitor would use it (blank city field) and confirmed via SQL that the row landed correctly after the fix. All test rows/counters were cleaned up / reset to their pre-audit values afterward (`leads` back to the original 6, `site_stats` back to `page_views:404`/`call_clicks:0`).
+
+**Fix (defense-in-depth, both layers):**
+- `supabase-leads-rls-fix.sql` (applied live via `apply_migration`): the RLS `with_check` now also accepts an empty/whitespace-only string for `location`/`notes`, not just `NULL`. There was no pre-existing checked-in SQL file for the `leads` table at all (unlike `business_expenses`/`quotes`/`content_queue`, which all have one) — this is the first one.
+- `main.js`: the lead-form submit handler now sends `location || null` / `notesWithConsent || null` instead of the raw trimmed string, and the fetch chain now checks `res.ok` and logs (`console.error` + a `gaEvent("lead_db_error", {status})`) on any failure instead of swallowing it — so a future regression of this shape won't be silent again.
+
+### Bug #2: mobile cookie-consent banner completely blocks the sticky CTA bar
+
+`.cookie-banner` (`z-index: 900`, pinned to the very bottom of the viewport) and `.mobile-bar` (the sticky call/WhatsApp/Waze bar, `z-index: 200`, shown only below 860px) occupied the same screen region on mobile. Confirmed with `document.elementFromPoint()` at the WhatsApp button's exact coordinates: **the tap landed on the cookie banner's paragraph text, not the button** — on every first mobile visit, until the visitor explicitly dismisses the banner, the primary mobile conversion mechanism is both visually hidden and functionally unclickable. Screenshotted before/after.
+
+**Fix:** shifted `.cookie-banner` up (`inset-block-end: calc(84px + env(safe-area-inset-bottom))`, mobile-only media query) to clear the bar instead of raising the bar's z-index over the banner (which would have just created the opposite visual overlap — the pill-shaped bar floating over the banner's text/buttons). Verified with `elementFromPoint()` again post-fix: taps now correctly hit the WhatsApp button.
+
+### Bug #3 (gap, not a regression): phone-call clicks had zero tracking
+
+Only `wa.me` link clicks were tracked (`bumpMetric("whatsapp_clicks")`); `tel:` links had no tracking at all, so Ori had no visibility into call-button engagement (header, hero, contact info, footer, mobile bar all have call buttons). Added a mirrored `tel:` click handler in `main.js` (`bumpMetric("call_clicks")` + a `call_click` GA4 event) and a new "לחיצות על חייגו עכשיו" metric card on the admin dashboard. **Important implementation detail:** `increment_metric()` is UPDATE-only (`update site_stats set count = count + 1 where metric = metric_name`) — it does **not** upsert — so a metric name with no pre-existing row silently no-ops forever (the same silent-failure shape as Bug #1, just caught proactively this time instead of the hard way). `supabase-site-stats-call-clicks.sql` seeds the `call_clicks` row before the tracking code went live.
+
+### Checked but not changed
+
+- **Traffic/bot filtering:** `bumpMetric("page_views")` fires unconditionally on every page load with no bot/session filtering. Since it's client-side JS, non-JS crawlers (most AI bots, simple scrapers) never trigger it at all, but a JS-executing bot (headless browser, aggressive uptime monitor) would still inflate the count. Not the cause of zero conversions, so left as-is; flagged as a possible future improvement (e.g. a `navigator.webdriver` check) if Ori suspects the 404 number is meaningfully inflated — not implemented without being asked, since it would change historical counting semantics.
+- **Phone regex mismatch:** the HTML `pattern` attribute on the phone input (`[0-9\-\+\s]{9,15}`) and the DB's RLS regex are different, looser-vs-stricter patterns. Spot-checked common Israeli formats (with/without dashes) and both accept them consistently; no concrete failure found, so left unchanged rather than risk introducing a new edge case — worth a closer look if a specific phone format is ever reported as rejected.
+
+### Status as of 2026-08-15 (§26)
+
+`admin.html`, `main.js`, `styles.css` modified; `supabase-leads-rls-fix.sql` and `supabase-site-stats-call-clicks.sql` added — **not yet committed**. The two SQL migrations **have already been applied live** to the production Supabase project via the MCP (this is why the leads RLS fix and call_clicks tracking work right now, even before any git commit/deploy) — committing is about keeping the repo in sync as the source of truth, not about making the fix take effect. The `main.js`/`admin.html`/`styles.css` changes still need to be committed and deployed before real visitors get the fixed lead-capture flow and unblocked mobile CTA bar.
+
+## 27. Pre-commit QA regression pass on the §26 fixes — 2 more real bugs found (NEW, 2026-08-15)
+
+Before committing §26, ran a systematic regression pass across desktop + mobile (360/390/414px) rather than trusting the earlier spot-checks. Found and fixed two more real, independently-confirmed bugs, plus verified everything else the §26 fixes touched is solid.
+
+### Bug: the "Write a Review" modal was completely invisible whenever opened
+
+Testing mobile hit-targets surfaced this by accident — clicking the review modal's close button never hit it. Investigation showed `#reviewModal` (`position: fixed; inset: 0`) was rendering with the *exact same box* as its parent `<section id="testimonials">` (same x/y/width/height down to the sub-pixel), and `offsetParent` resolved to that section instead of `null` — both symptoms of `position: fixed` not actually taking effect, despite `getComputedStyle` reporting `position: fixed` correctly. A screenshot confirmed it wasn't a measurement artifact: the modal was genuinely off-screen and invisible, full stop — this feature has likely never worked.
+
+Checked every standard containing-block-breaking property (`transform`, `filter`, `perspective`, `will-change`, `contain`, `backdrop-filter`, and the standalone `translate`/`rotate`/`scale` properties) on every single ancestor up to `<html>` — all `none`/`static`. Forcing the position/inset via inline styles didn't help either. The exact Chromium-internal mechanism was never conclusively isolated. Given a 100%-reproducible, multi-method-confirmed (JS measurement + real screenshot) symptom and no identifiable cause, fixed the actual problem instead of chasing the mechanism further: **moved the modal's markup from nested inside `#testimonials` to a body-level portal**, matching the pattern already used correctly elsewhere on the page (`.share-fab`, `.mobile-bar`, the a11y widget). This is standard best practice for modals regardless of root cause. Verified fixed: `offsetParent: null`, rect exactly matches viewport, close button hittable, and a real screenshot shows it rendering correctly, centered, on top of a dimmed backdrop.
+
+### Bug: phone regex rejected a realistic international format
+
+A systematic 17-case payload matrix run directly against the real anon REST endpoint (values, not payload shapes, chosen to match what the audit brief asked for: all-fields-filled, minimum-required-only, blank-vs-whitespace optional fields, five phone formats, Hebrew text with gershayim/apostrophes, English text with quotes, and four invalid-payload cases) caught one real gap: `+972-52-953-4540` (a plausible dashed international format) was rejected by the old 3-group positional regex, because the "52" area-code segment is only 2 digits once the leading 0 is dropped for international dialing, but the regex's middle group required a minimum of 3. It was already masked by the HTML `pattern`'s 15-character cap (which also rejected that string, for an unrelated reason: length), so not currently user-reachable, but fragile — fixed both layers properly instead of leaving it as a latent trap: the RLS check now counts actual digits (9–15, ignoring separator characters) instead of matching rigid positional groups, and the HTML `pattern` max length was widened from 15 to 20 to match. Re-ran the full matrix after the fix: all 17 cases now behave exactly as expected, including the previously-failing case.
+
+### Verified clean (no changes needed)
+
+- **`metricLeads`/`metricForms` on the admin dashboard**: both are live `count` queries against the `leads` table (not a separate counter), so the §26 RLS fix is sufficient by construction — nothing extra to wire up.
+- **Mobile hit-testing at 360/390/414px**: nav toggle, mobile drawer (all 7 links), sticky bar (call/WhatsApp/Waze), and cookie banner buttons all correctly hittable via `elementFromPoint` at every width, both before and after the modal fix.
+- **All `wa.me`/`tel:` links site-wide** (4 + 5, respectively): identical, correctly formatted phone number throughout; the one `wa.me` link with prefilled text decodes to correct, readable Hebrew; the phone-number-less `wa.me/?text=...` in the Quick Share feature is intentional (share-to-any-contact, not a bug).
+- **Click tracking**: WhatsApp and call clicks fire exactly once each, correctly discriminated, don't block or delay the link's own navigation. A `tel:` click briefly logged a Chromium "not allowed to launch" console error during testing — confirmed via a genuine trusted Playwright click (vs. a JS-synthesized one) that this was purely a synthetic-event artifact of the test method, not a real site issue.
+- **i18n/layout stability**: full HE↔EN round-trip at both desktop and 390px mobile — no horizontal overflow, no disappearing elements, sticky bar buttons remain visible and correctly translated both directions.
+- **Console/network health**: zero console messages of any kind and zero failed/404 requests on a clean load; a full interaction pass (nav toggle, modal open/close, language toggle ×2, full form submission) produced no new errors, and `thankyou.html` also loads clean.
+
+All test data (leads rows, `site_stats` counters) created during this pass was cleaned up / reset to the exact pre-audit baseline (`leads`: 6 rows, `page_views`: 404, `whatsapp_clicks`: 7, `call_clicks`: 0) — verified via SQL after cleanup.
+
+### Status as of 2026-08-15 (§27)
+
+`index.html` further modified (review-modal relocation + phone pattern widen); `supabase-leads-rls-fix.sql` updated in place (phone regex fix) and **re-applied live**. All fixes from both §26 and §27 are now live in the database; `admin.html`, `index.html`, `main.js`, `styles.css`, and the two `supabase-*.sql` files are staged for commit.
