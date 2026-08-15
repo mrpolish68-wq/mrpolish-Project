@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-07-25 (§23 — isolated `marketing/` from git/build/deploy with a `.vercelignore`). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-08-15 (§24 — renamed the "הזמנת עבודה"/Work Order tab to "הצעת מחיר"/Price Quote across the whole admin panel and added a Supabase-backed quote history with edit + re-download). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -80,7 +80,7 @@ A full four-domain audit (injection/auth surfaces in `api/*.js`, RLS policies in
 
 ## 1. Project Context
 
-**Mr. Polish (מיסטר פוליש)** is the business site + management dashboard for Uri Margalit (אורי מרגלית), a floor-polishing / stone & marble restoration professional (30 years experience) based in Netanya, serving nationwide. The public site (`index.html`) is a marketing/lead-gen page (Hebrew RTL, English-ready). The **admin dashboard** (`admin.html`) is Uri's private back-office tool: leads, calendar, work-order PDF generation, business expense tracking with accountant Excel export, a live Facebook + Instagram engagement snapshot, and (as of this handoff) **a content approval + scheduled auto-publishing pipeline for Facebook/Instagram**.
+**Mr. Polish (מיסטר פוליש)** is the business site + management dashboard for Uri Margalit (אורי מרגלית), a floor-polishing / stone & marble restoration professional (30 years experience) based in Netanya, serving nationwide. The public site (`index.html`) is a marketing/lead-gen page (Hebrew RTL, English-ready). The **admin dashboard** (`admin.html`) is Uri's private back-office tool: leads, calendar, price-quote PDF generation with saved quote history, business expense tracking with accountant Excel export, a live Facebook + Instagram engagement snapshot, and (as of this handoff) **a content approval + scheduled auto-publishing pipeline for Facebook/Instagram**.
 
 **Stack — read this before assuming anything about tooling:**
 - Plain static HTML/CSS/vanilla JS. **No build step, no bundler, no `package.json`, no npm** for the main site.
@@ -209,7 +209,7 @@ The same migration file also creates a public Supabase Storage bucket `content-m
 Dashboard tabs (`admin.html`, sidebar `data-view` → `#view-*`):
 1. **`dash`** (📊 לוח בקרה ופעילות) — live metric cards (visits, leads, form submissions, WhatsApp clicks) + recent activity feed, from `site_stats` + `leads`.
 2. **`leads`** (📋 ניהול לידים) — full searchable/sortable leads table (client-side filter/sort over a one-time fetch).
-3. **`ai`** (🧾 הזמנות עבודה) — work-order form + price calculator → **PDF** via `html2canvas` + `jsPDF` (off-screen iframe render, hex-only CSS because html2canvas 1.4.1 can't handle `oklch()`).
+3. **`ai`** (🧾 הצעות מחיר) — price-quote form + price calculator → **PDF** via `html2canvas` + `jsPDF` (off-screen iframe render, hex-only CSS because html2canvas 1.4.1 can't handle `oklch()`), plus a quote history table backed by the `quotes` Supabase table (search, edit + re-save, re-download PDF) — see §24.
 4. **`expenses`** (💰 הוצאות עסק) — **NEW, this session:**
    - Summary card: total of all expenses dated `>= 2026-03-01` (the `EXPENSES_SINCE` constant in the JS — change this one line if the tracking start date needs to move).
    - Filterable table: category dropdown + from/to date range, client-side filtering over a one-time fetch (same pattern as the leads tab).
@@ -263,12 +263,12 @@ All the expenses JS lives in one `var loadExpenses = (function () { ... return f
 
 - **Logo files (repo root):** `logo.jpg` (100KB), `logo.webp` (59KB, used in the sidebar `<img>`).
 - **Inline base64 logo constant:** `admin.html` defines `var MRP_LOGO_DATA_URI = "data:image/jpeg;base64,...";` (~line 795 area, search for `MRP_LOGO_DATA_URI`) specifically so PDF/Excel generation never depends on a network fetch (avoids CORS/path issues with html2canvas, and keeps the export self-contained). **The new Excel export reuses this exact same constant** via `workbook.addImage({ base64: MRP_LOGO_DATA_URI, extension: "jpeg" })` — do not duplicate the base64 string if you build another export feature; reference this constant.
-- Business identity strings used in exports (work-order PDF and now the Excel export): brand name **"Mr. Polish" / "מיסטר פוליש"**, address **"רח׳ אהרון אהרונסון 15, נתניה"**, phone **"052-9534540"**, tax status **"עוסק פטור 023062185"** (confirmed — do NOT change to "עוסק מורשה" or add VAT, see `memory.md`).
+- Business identity strings used in exports (quote PDF and the Excel export): brand name **"Mr. Polish" / "מיסטר פוליש"**, address **"רח׳ אהרון אהרונסון 15, נתניה"**, phone **"052-9534540"**, tax status **"עוסק פטור 023062185"** (confirmed — do NOT change to "עוסק מורשה" or add VAT, see `memory.md`).
 - Gallery/marketing photos: `assets/gallery/*.jpeg`, `assets/hero-bg.mp4`, `assets/hero-poster.jpg`.
 
 ## 5. How to Continue — adding the next dashboard feature
 
-Follow the exact pattern used for every existing tab (leads, work-order, and now expenses) — there is no router, no component framework, just this recipe inside `admin.html`:
+Follow the exact pattern used for every existing tab (leads, quotes, and expenses) — there is no router, no component framework, just this recipe inside `admin.html`:
 
 1. **Sidebar nav:** add `<button data-view="yourtab"><span class="ic">🔧</span> שם הטאב</button>` inside `#adminNav`.
 2. **Titles map:** add `yourtab: "שם הטאב"` to the `titles` object (search for `var titles = {`).
@@ -835,3 +835,18 @@ Ori is using the repo's `marketing/` folder (marketing plans, content drafts, re
 ### Status as of 2026-07-25
 
 Committed and pushed to `main`: `aadc47a` — adds `.vercelignore`.
+
+## 24. "הזמנת עבודה" (Work Order) → "הצעת מחיר" (Price Quote) rename + Supabase-backed quote history (NEW, 2026-08-15)
+
+The Tab 3 feature (`data-view="ai"` / `id="view-ai"` — the id is a legacy leftover from an even older "AI" feature and was intentionally left alone, only the visible label changed) previously had **zero persistence**: it generated a PDF via `html2canvas` + `jsPDF` and only ever remembered a running sequence number in `localStorage` (`mrp_order_seq`). Two things changed:
+
+- **Terminology:** every user-facing Hebrew string, the generated PDF's own title/filename, and doc comments referencing "work order"/"הזמנת עבודה" were renamed to "price quote"/"הצעת מחיר" — sidebar nav, topbar title (`titles.ai` in the JS), view heading, form label, generate-button text, and the `.wo-title` line baked into the PDF (`buildDoc()`). CSS class names (`.wo`, `.wo-*`, `WO_CSS`) and JS identifiers (`buildDoc`, `SEQ_KEY`) were deliberately **not** renamed — that's internal plumbing, not user-facing, and renaming it would have meant touching the fragile html2canvas-safe stylesheet for no functional gain.
+- **New `quotes` Supabase table** (`supabase-quotes.sql`, run manually in the SQL Editor like every other migration file in this repo — no live MCP access to this project's Supabase instance from this session, only to an unrelated `personal-dashboard` project): `id, number (unique), quote_date (text — the form field is free-text, not a date picker), client_name, address, description, total, created_at`. RLS mirrors `business_expenses` — `for all to authenticated`, no anon policy (private business data).
+- **Generate flow now saves too:** `renderQuotePdf(data, onDone)` is the old inline PDF-generation code extracted into a standalone function (unchanged internals — same isolated-iframe/html2canvas/jsPDF pipeline) so it can be reused by both the "generate" button and the new history table's "view/download" action. After a successful PDF render, `saveQuoteToDb()` inserts (or updates, if editing) the row.
+- **Quote history panel** added below the form on the same tab (`.panel` with a `leads-table`/`exp-table`-styled table, reusing the existing `leads-search-*`/`leads-count`/`leads-empty` CSS rather than adding new classes) — columns: number, date, client, address, total, and per-row "✏️ ערוך" / "📄 צפה / הורדה" actions. Lazy-loaded on first tab open (`loadQuoteHistory()`), same pattern as every other tab.
+- **Edit mode:** clicking "ערוך" populates the form from the selected row, shows an amber "עורך הצעת מחיר מס׳ N" banner with a cancel button, and swaps the generate button's label to "עדכן ושמור". Saving in edit mode `update()`s the existing row (same quote number) instead of inserting a new one, then clears the form back to a blank new-quote state.
+- **Numbering is now DB-derived, not localStorage-only:** `computeNextNumber()` = `max(highest number in quotes, legacy localStorage counter) + 1` — the old counter is kept purely as a floor so numbering can't jump backward for quotes that were issued (on paper or PDF) before this table existed; once the table has rows, it's the source of truth. This also fixes the original single-device limitation (localStorage doesn't sync across browsers/machines).
+
+### Status as of 2026-08-15
+
+Code changes made to `admin.html` (rename + history feature) and new `supabase-quotes.sql` migration file created — **not yet committed**. The migration has **not yet been run** against the live Supabase project (no MCP access to it from this session); Ori needs to run `supabase-quotes.sql` in the Supabase SQL Editor before the history feature will work — until then, `loadQuoteHistory()` will show a "שגיאה בטעינת ההיסטוריה" error and saving a quote will fail (table doesn't exist).
