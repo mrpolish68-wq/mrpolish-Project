@@ -20,6 +20,11 @@
 //
 // Auth: same real-Supabase-session pattern as check-pin-status.js / publish-now.js —
 // this needs to be logged-in-Ori-only (burns real API quota per call), not public.
+//
+// The extraction core (CATEGORIES/callGemini/normalizeExtraction) is exported below and
+// reused as-is by api/telegram-webhook.js (Phase 2) — same "share the core, not the HTTP
+// wrapper" pattern as publish-scheduled-content.js's publishOne being reused by
+// publish-now.js. Keep the prompt/schema/normalization in exactly one place.
 "use strict";
 
 const { enforce } = require("./_rate-limit.js");
@@ -29,7 +34,15 @@ const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 // only to validate a caller-supplied user access_token against Supabase, never to bypass RLS.
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+// Pinned to a specific version, not a floating alias like "gemini-flash-latest" — same
+// "don't float, pin exact + verify" discipline as the CDN script SRI pins in admin.html's
+// <head>. Google retires Gemini model versions over time (gemini-2.0-flash, live in this
+// file at Phase 1 ship time, returned 404 "no longer available" by the time Phase 2 was
+// built, a few weeks later — confirmed live against this project's real API key before
+// picking a replacement, not assumed). If a future call ever 404s with "no longer
+// available", re-check https://generativelanguage.googleapis.com/v1beta/models (with the
+// live GOOGLE_AI_API_KEY) for a current non-preview "*-flash" model before swapping this.
+const GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent";
 
 // Must match business_expense_category's live enum values exactly
@@ -135,6 +148,24 @@ async function callGemini(apiKey, base64Image, mimeType) {
   return parsed;
 }
 
+// Validates and shapes a raw callGemini() result into the exact field set every caller
+// relies on. Returns null if the result is missing/malformed (category is the one field
+// Gemini's schema always forces to a valid value, so its absence means something went
+// wrong upstream, not a legitimate "unknown" answer).
+function normalizeExtraction(result) {
+  if (!result || CATEGORIES.indexOf(result.category) === -1) return null;
+  return {
+    vendor_name: result.vendor_name || null,
+    date: result.date || null,
+    total_amount: typeof result.total_amount === "number" ? result.total_amount : null,
+    vat_amount: typeof result.vat_amount === "number" ? result.vat_amount : null,
+    amount_before_vat: typeof result.amount_before_vat === "number" ? result.amount_before_vat : null,
+    invoice_number: result.invoice_number || null,
+    category: result.category,
+    confidence_notes: result.confidence_notes || null
+  };
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -188,20 +219,19 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  if (!result || CATEGORIES.indexOf(result.category) === -1) {
+  var normalized = normalizeExtraction(result);
+  if (!normalized) {
     console.error("[parse-receipt] unexpected result shape: " + JSON.stringify(result));
     res.status(502).json({ error: "ניתוח הקבלה החזיר תוצאה לא תקינה. ניתן למלא את הפרטים ידנית." });
     return;
   }
 
-  res.status(200).json({
-    vendor_name: result.vendor_name || null,
-    date: result.date || null,
-    total_amount: typeof result.total_amount === "number" ? result.total_amount : null,
-    vat_amount: typeof result.vat_amount === "number" ? result.vat_amount : null,
-    amount_before_vat: typeof result.amount_before_vat === "number" ? result.amount_before_vat : null,
-    invoice_number: result.invoice_number || null,
-    category: result.category,
-    confidence_notes: result.confidence_notes || null
-  });
+  res.status(200).json(normalized);
 };
+
+// Exported for api/telegram-webhook.js (Phase 2) — same reuse pattern as
+// publish-scheduled-content.js's exports for publish-now.js / check-pin-status.js.
+module.exports.CATEGORIES = CATEGORIES;
+module.exports.ALLOWED_MIME_TYPES = ALLOWED_MIME_TYPES;
+module.exports.callGemini = callGemini;
+module.exports.normalizeExtraction = normalizeExtraction;

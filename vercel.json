@@ -14,7 +14,8 @@
     "api/publish-now.js": { "maxDuration": 60 },
     "api/analytics-agent.js": { "maxDuration": 60 },
     "api/analytics-refresh.js": { "maxDuration": 60 },
-    "api/parse-receipt.js": { "maxDuration": 30 }
+    "api/parse-receipt.js": { "maxDuration": 30 },
+    "api/telegram-webhook.js": { "maxDuration": 30 }
   },
   "headers": [
     {
