@@ -2127,6 +2127,11 @@
               return;
             }
             window.open(res.data.signedUrl, "_blank", "noopener");
+          }).catch(function () {
+            // A rejected promise (network drop, etc.) skips the .then() entirely — without
+            // this, btnEl would stay disabled forever with zero feedback to the user.
+            if (btnEl) btnEl.disabled = false;
+            alert("שגיאה בפתיחת הקבלה. בדקו את החיבור ונסו שוב.");
           });
         }
 
@@ -2240,6 +2245,9 @@
             }
             allExpenses = allExpenses.filter(function (r) { return r.id !== id; });
             renderAll();
+          }).catch(function () {
+            btn.disabled = false;
+            alert("שגיאה במחיקת ההוצאה. בדקו את החיבור ונסו שוב.");
           });
         });
 
@@ -2365,6 +2373,12 @@
               renderAll();
               showToast();
               if (closeAfter) closeModal(); else resetForNextEntry();
+            })
+            .catch(function () {
+              saveBtn.disabled = false;
+              saveCloseBtn.disabled = false;
+              clickedBtn.textContent = clickedLabel;
+              alert("שגיאה בשמירת ההוצאה. בדקו את החיבור ונסו שוב.");
             });
         });
 
@@ -2455,6 +2469,10 @@
             renderAll();
             showToast();
             closeEditModal();
+          }).catch(function () {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = editLabel;
+            alert("שגיאה בעדכון ההוצאה. בדקו את החיבור ונסו שוב.");
           });
         });
 

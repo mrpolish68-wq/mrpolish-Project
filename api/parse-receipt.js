@@ -13,7 +13,7 @@
 // key/ongoing cost (see handoff.md §19) — real OCR genuinely needs a real vision model,
 // so this is the one deliberate exception.
 //
-// Provider: Google Gemini (gemini-2.0-flash, vision + structured JSON output via
+// Provider: Google Gemini (GEMINI_MODEL below, vision + structured JSON output via
 // generationConfig.responseSchema) — chosen for cost, confirmed with the project owner.
 // Called via raw fetch, no SDK — this project has no package.json/npm dependencies by
 // design (same convention as every other api/*.js file's raw REST calls).

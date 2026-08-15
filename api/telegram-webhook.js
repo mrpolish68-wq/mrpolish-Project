@@ -52,8 +52,21 @@
 //   tap on a missing-amount receipt is refused rather than saving a fabricated value.
 "use strict";
 
+const crypto = require("crypto");
 const { rateLimit } = require("./_rate-limit.js");
 const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES, CATEGORIES } = require("./parse-receipt.js");
+
+// Constant-time comparison for the webhook secret — a plain !== short-circuits on the
+// first mismatched byte, which is the textbook timing side-channel for secret
+// comparison. Practically very hard to exploit over the internet through Vercel's own
+// latency jitter, but this is a one-line fix for exactly the class of bug a security
+// audit exists to catch.
+function safeEqual(a, b) {
+  var bufA = Buffer.from(String(a || ""), "utf8");
+  var bufB = Buffer.from(String(b || ""), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 const TELEGRAM_API_ROOT = "https://api.telegram.org/bot";
@@ -151,6 +164,31 @@ async function cleanupStalePending() {
 // Ori tapped an edit button, got distracted, and messages the bot again an hour later
 // about something unrelated, that later text should NOT be silently swallowed as an
 // edit reply for a receipt he's long since forgotten about.
+// Claims a pending row atomically before the one operation that genuinely can't be
+// double-run safely: inserting into business_expenses. A fat-finger double-tap on
+// "✅ אשר", or Telegram redelivering the same callback_query when our response was
+// slow, would otherwise both read the row as "still there" before either deleted it —
+// two business_expenses rows for one receipt. This conditional UPDATE (claimed only if
+// currently unclaimed or past its lease) is atomic per-row in Postgres, so only one
+// concurrent caller ever gets a non-null result back — same claim/lease pattern as
+// publish-scheduled-content.js's claimRow()/CLAIM_LEASE_MS for content_queue. The lease
+// also self-heals a crash mid-processing: after it expires, a retry can reclaim.
+var CLAIM_LEASE_MS = 2 * 60 * 1000;
+
+async function claimPendingRow(id) {
+  var cutoffIso = new Date(Date.now() - CLAIM_LEASE_MS).toISOString();
+  var url = SUPABASE_URL + "/rest/v1/telegram_pending_receipts?id=eq." + encodeURIComponent(id) +
+    "&or=(claimed_at.is.null,claimed_at.lt." + encodeURIComponent(cutoffIso) + ")";
+  var res = await fetch(url, {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
+    body: JSON.stringify({ claimed_at: new Date().toISOString() })
+  });
+  if (!res.ok) throw new Error("Supabase claim failed: " + res.status);
+  var rows = await res.json();
+  return rows[0] || null;
+}
+
 async function findAwaitingEdit(chatId) {
   var cutoff = new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString();
   try {
@@ -612,39 +650,59 @@ async function processCallbackQuery(query, chatId) {
     return;
   }
 
-  // action === "confirm". A receipt with no legible amount can't be saved as-is — Ori
-  // must either tap "✏️ שנה סכום" first or finish the entry manually in the dashboard;
-  // there's no honest way to insert a financial record with a fabricated placeholder.
-  if (pending.extracted.total_amount == null) {
+  // action === "confirm". Claim FIRST — this is the one step that genuinely can't run
+  // twice safely (see claimPendingRow's comment). A losing concurrent tap gets a plain
+  // "already being handled" response rather than risking a duplicate saved expense.
+  var claimed;
+  try {
+    claimed = await claimPendingRow(pendingId);
+  } catch (err) {
+    console.error("[telegram-webhook] claim failed: " + err.message);
+    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה זמנית. נסו שוב.", show_alert: true });
+    return;
+  }
+  if (!claimed) {
+    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "כבר בטיפול…" });
+    return;
+  }
+
+  // A receipt with no legible amount can't be saved as-is — Ori must either tap
+  // "✏️ שנה סכום" first or finish the entry manually in the dashboard; there's no
+  // honest way to insert a financial record with a fabricated placeholder.
+  if (claimed.extracted.total_amount == null) {
     await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
-    await deleteReceiptFromStorage(pending.receipt_path);
+    await deleteReceiptFromStorage(claimed.receipt_path);
     await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "לא ניתן לשמור — חסר סכום.", show_alert: true });
-    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(pending.extracted) + "\n\n❌ לא נשמר — יש להוסיף ידנית בלוח הבקרה." });
+    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(claimed.extracted) + "\n\n❌ לא נשמר — יש להוסיף ידנית בלוח הבקרה." });
     return;
   }
 
   try {
     await supabaseInsert("business_expenses", {
-      date: pending.extracted.date || new Date().toISOString().slice(0, 10),
-      category: pending.extracted.category,
-      amount: pending.extracted.total_amount,
+      date: claimed.extracted.date || new Date().toISOString().slice(0, 10),
+      category: claimed.extracted.category,
+      amount: claimed.extracted.total_amount,
       description: null,
-      vendor_name: pending.extracted.vendor_name,
-      invoice_number: pending.extracted.invoice_number,
-      vat_amount: pending.extracted.vat_amount,
-      amount_before_vat: pending.extracted.amount_before_vat,
-      receipt_url: pending.receipt_path,
+      vendor_name: claimed.extracted.vendor_name,
+      invoice_number: claimed.extracted.invoice_number,
+      vat_amount: claimed.extracted.vat_amount,
+      amount_before_vat: claimed.extracted.amount_before_vat,
+      receipt_url: claimed.receipt_path,
       source: "ocr"
     });
   } catch (err) {
     console.error("[telegram-webhook] business_expenses insert failed: " + err.message);
+    // Release the claim immediately rather than making Ori wait out the full lease —
+    // the row (and its Storage file) are still intact, an instant retry can pick it
+    // back up. Best-effort: if this itself fails, the lease still self-heals in 2 min.
+    await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { claimed_at: null }).catch(function () {});
     await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה בשמירה. נסו שוב.", show_alert: true });
     return;
   }
 
   await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
   await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "✅ נשמר!" });
-  if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(pending.extracted) + "\n\n✅ נשמר בהוצאות העסק." });
+  if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(claimed.extracted) + "\n\n✅ נשמר בהוצאות העסק." });
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +739,7 @@ module.exports = async function handler(req, res) {
   // Telegram echoes back whatever secret_token was set on setWebhook (see
   // tools/set-telegram-webhook.js) on this exact header, on every real call. Anything
   // else did not come from Telegram.
-  if (req.headers["x-telegram-bot-api-secret-token"] !== webhookSecret) {
+  if (!safeEqual(req.headers["x-telegram-bot-api-secret-token"], webhookSecret)) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
