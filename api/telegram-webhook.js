@@ -259,6 +259,76 @@ function nextCategory(current) {
   return CATEGORIES[nextIdx];
 }
 
+// ---------------------------------------------------------------------------
+// Duplicate-receipt detection — same matching rules as admin.html's client-side
+// check (kept in sync by hand; there's no shared module across the browser/server
+// boundary in this zero-dependency project), just querying Supabase directly instead
+// of an in-memory array since there's no already-loaded dataset here. Two ways to
+// flag a match:
+//   1. Exact invoice_number (trimmed, non-empty) — the strongest signal.
+//   2. Same date + same amount + same/similar vendor_name (substring match either
+//      direction, to tolerate e.g. "פז" vs "פז חברת הדלק"). If vendor_name wasn't
+//      extracted at all, date+amount alone is the fallback signal.
+// Fails OPEN on any query error — an advisory feature like this should never block a
+// legitimate save just because the check itself hiccuped.
+// ---------------------------------------------------------------------------
+
+function normalizeInvoice(s) { return String(s || "").trim(); }
+function normalizeForMatch(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+function vendorsMatch(a, b) {
+  var na = normalizeForMatch(a), nb = normalizeForMatch(b);
+  if (!na || !nb) return false;
+  return na === nb || na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1;
+}
+
+async function findDuplicateExpense(extracted) {
+  try {
+    var invoiceNum = normalizeInvoice(extracted.invoice_number);
+    if (invoiceNum) {
+      var byInvoiceRes = await fetch(
+        SUPABASE_URL + "/rest/v1/business_expenses?invoice_number=eq." + encodeURIComponent(invoiceNum) + "&select=*&limit=1",
+        { headers: supabaseHeaders() }
+      );
+      if (byInvoiceRes.ok) {
+        var byInvoiceRows = await byInvoiceRes.json();
+        if (byInvoiceRows[0]) return byInvoiceRows[0];
+      }
+    }
+    if (extracted.date && extracted.total_amount != null) {
+      var byDateAmountRes = await fetch(
+        SUPABASE_URL + "/rest/v1/business_expenses?date=eq." + encodeURIComponent(extracted.date) +
+        "&amount=eq." + encodeURIComponent(extracted.total_amount) + "&select=*&limit=20",
+        { headers: supabaseHeaders() }
+      );
+      if (byDateAmountRes.ok) {
+        var candidates = await byDateAmountRes.json();
+        if (extracted.vendor_name) {
+          var vendorMatch = candidates.filter(function (r) { return vendorsMatch(r.vendor_name, extracted.vendor_name); })[0];
+          if (vendorMatch) return vendorMatch;
+        } else if (candidates.length) {
+          return candidates[0];
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[telegram-webhook] duplicate check failed (failing open): " + err.message);
+  }
+  return null;
+}
+
+function fmtDateIL(iso) {
+  var parts = String(iso || "").split("-");
+  return parts.length === 3 ? (parts[2] + "/" + parts[1] + "/" + parts[0]) : "לא ידוע";
+}
+
+function formatDupWarning(match) {
+  return "⚠️ אזהרה: קיימת כבר הוצאה זהה במערכת!\n" +
+    "• תאריך: " + fmtDateIL(match.date) + "\n" +
+    "• ספק: " + (match.vendor_name || "לא צוין") + "\n" +
+    "• סכום: " + fmtMoney(match.amount) + "\n" +
+    "• מס' חשבונית: " + (match.invoice_number || "לא צוין");
+}
+
 // Plain text, deliberately no parse_mode. vendor_name/confidence_notes are AI-extracted
 // free text from a real-world document — sending them through Telegram's Markdown/
 // MarkdownV2 parser risks a "can't parse entities" 400 (or worse, silently mangled
@@ -282,7 +352,7 @@ function formatSummary(data) {
   return lines.join("\n");
 }
 
-function actionKeyboard(pendingId) {
+function actionKeyboard(pendingId, hasDuplicate) {
   return {
     inline_keyboard: [
       [
@@ -291,11 +361,21 @@ function actionKeyboard(pendingId) {
         { text: "🏷️ שנה קטגוריה", callback_data: "cyclecat:" + pendingId }
       ],
       [
-        { text: "✅ אשר ושמור בהוצאות", callback_data: "confirm:" + pendingId },
+        { text: hasDuplicate ? "⚠️ אשר בכל זאת" : "✅ אשר ושמור בהוצאות", callback_data: "confirm:" + pendingId },
         { text: "❌ בטל", callback_data: "cancel:" + pendingId }
       ]
     ]
   };
+}
+
+// Combines the duplicate check + summary text + keyboard into one call, since every
+// place that (re)renders the summary message needs to re-check for a duplicate too —
+// an edit to date/amount is exactly the kind of change that can create or remove a
+// match, so this is deliberately re-run on every render rather than cached once.
+async function buildSummaryPayload(extracted, pendingId) {
+  var dup = await findDuplicateExpense(extracted);
+  var text = (dup ? formatDupWarning(dup) + "\n\n" : "") + formatSummary(extracted);
+  return { text: text, keyboard: actionKeyboard(pendingId, !!dup) };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,10 +466,11 @@ async function processReceiptMessage(message, chatId) {
     return;
   }
 
+  var initialPayload = await buildSummaryPayload(extracted, pending.id);
   var sent = await tgCallSafe("sendMessage", {
     chat_id: chatId,
-    text: formatSummary(extracted),
-    reply_markup: actionKeyboard(pending.id)
+    text: initialPayload.text,
+    reply_markup: initialPayload.keyboard
   });
   // Needed so a later free-text edit reply (date/amount) can edit THIS message in place
   // instead of sending a new one — see the file header for why a plain message doesn't
@@ -441,11 +522,12 @@ async function processEditReply(pending, text, chatId) {
   }
 
   var fieldLabelHe = field === "date" ? "תאריך" : "סכום";
-  var refreshedText = formatSummary(newExtracted) + "\n\n✏️ עודכן: " + fieldLabelHe;
+  var editReplyPayload = await buildSummaryPayload(newExtracted, pending.id);
+  var refreshedText = editReplyPayload.text + "\n\n✏️ עודכן: " + fieldLabelHe;
   if (pending.message_id) {
-    await tgCallSafe("editMessageText", { chat_id: chatId, message_id: pending.message_id, text: refreshedText, reply_markup: actionKeyboard(pending.id) });
+    await tgCallSafe("editMessageText", { chat_id: chatId, message_id: pending.message_id, text: refreshedText, reply_markup: editReplyPayload.keyboard });
   } else {
-    await tgCallSafe("sendMessage", { chat_id: chatId, text: refreshedText, reply_markup: actionKeyboard(pending.id) });
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: refreshedText, reply_markup: editReplyPayload.keyboard });
   }
 }
 
@@ -501,8 +583,9 @@ async function processCallbackQuery(query, chatId) {
       await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה. נסו שוב.", show_alert: true });
       return;
     }
+    var cyclePayload = await buildSummaryPayload(afterCycle, pendingId);
     await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "קטגוריה: " + afterCycle.category });
-    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(afterCycle), reply_markup: actionKeyboard(pendingId) });
+    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: cyclePayload.text, reply_markup: cyclePayload.keyboard });
     return;
   }
 
@@ -519,11 +602,12 @@ async function processCallbackQuery(query, chatId) {
     var promptNote = field === "date"
       ? "✏️ שלחו כעת את התאריך החדש (למשל 15/08/2026 או 2026-08-15)."
       : "✏️ שלחו כעת את הסכום החדש (מספר בלבד, למשל 245.50).";
-    var promptedText = formatSummary(pending.extracted) + "\n\n" + promptNote;
+    var editPromptPayload = await buildSummaryPayload(pending.extracted, pendingId);
+    var promptedText = editPromptPayload.text + "\n\n" + promptNote;
     if (messageId) {
-      await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: promptedText, reply_markup: actionKeyboard(pendingId) });
+      await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: promptedText, reply_markup: editPromptPayload.keyboard });
     } else {
-      await tgCallSafe("sendMessage", { chat_id: chatId, text: promptedText, reply_markup: actionKeyboard(pendingId) });
+      await tgCallSafe("sendMessage", { chat_id: chatId, text: promptedText, reply_markup: editPromptPayload.keyboard });
     }
     return;
   }

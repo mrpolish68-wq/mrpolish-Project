@@ -374,6 +374,17 @@
     .exp-receipt-error { background:oklch(0.6 0.16 25 / 0.1); border:1px solid oklch(0.6 0.16 25 / 0.35); color:oklch(0.5 0.16 25); }
     .exp-receipt-fields { display:grid; gap:14px; }
 
+    /* Duplicate-expense warning banner — shared shell used inside both the manual
+       add-expense modal and the receipt-review modal. Deliberately louder/more amber
+       than .exp-receipt-notice (a plain AI-confidence note) since this flags a
+       possible double-entry, a real risk of overstating expenses to the accountant. */
+    .exp-dup-warning {
+      background:oklch(0.82 0.16 70 / 0.16); border:1.5px solid oklch(0.75 0.17 60 / 0.55);
+      color:oklch(0.4 0.14 55); border-radius:10px; padding:12px 14px; margin-block-end:16px;
+    }
+    .exp-dup-warning-text { font-size:.88rem; font-weight:600; white-space:pre-line; line-height:1.6; }
+    .exp-dup-warning .exp-view-link { margin-block-start:10px; background:var(--white); }
+
     /* ===== Tab 7: Content Management ===== */
     .cq-toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-block-end:16px; }
     .cq-filters { display:flex; gap:10px; flex-wrap:wrap; }
@@ -1236,6 +1247,10 @@
       <button type="button" class="exp-modal__close" data-exp-close aria-label="סגירה">&times;</button>
       <h3 class="exp-modal__title" id="expModalTitle">הוספת הוצאה</h3>
       <div class="exp-toast" id="expToast" role="status" aria-live="polite" hidden>✅ ההוצאה נשמרה בהצלחה</div>
+      <div class="exp-dup-warning" id="expDupWarning" hidden>
+        <div class="exp-dup-warning-text" id="expDupWarningText"></div>
+        <button type="button" class="exp-view-link" id="expDupViewBtn" hidden>📄 צפייה בהוצאה הקיימת</button>
+      </div>
       <form class="exp-form" id="expForm">
         <div>
           <label for="expDate">תאריך</label>
@@ -1280,6 +1295,10 @@
       <h3 class="exp-modal__title" id="expReceiptModalTitle">בדיקת קבלה לפני שמירה</h3>
       <div class="exp-receipt-notice" id="expReceiptNotice" hidden></div>
       <div class="exp-receipt-error" id="expReceiptError" hidden></div>
+      <div class="exp-dup-warning" id="rcptDupWarning" hidden>
+        <div class="exp-dup-warning-text" id="rcptDupWarningText"></div>
+        <button type="button" class="exp-view-link" id="rcptDupViewBtn" hidden>📄 צפייה בהוצאה הקיימת</button>
+      </div>
       <div class="exp-receipt-layout">
         <div class="exp-receipt-preview" id="expReceiptPreview">
           <div class="exp-receipt-loading" id="expReceiptLoading">
@@ -2095,6 +2114,70 @@
           return "₪" + Number(n || 0).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
 
+        // Opens a receipt file via a freshly-generated signed URL (the "receipts" bucket
+        // is private) — shared by the table row's 📄 button, the edit modal's receipt
+        // link, and the duplicate-warning banners' "view existing" buttons.
+        function openReceiptSignedUrl(path, btnEl) {
+          if (!path) return;
+          if (btnEl) btnEl.disabled = true;
+          sb.storage.from("receipts").createSignedUrl(path, 3600).then(function (res) {
+            if (btnEl) btnEl.disabled = false;
+            if (res.error || !res.data || !res.data.signedUrl) {
+              alert("שגיאה בפתיחת הקבלה. נסו שוב.");
+              return;
+            }
+            window.open(res.data.signedUrl, "_blank", "noopener");
+          });
+        }
+
+        /* ---------- Duplicate-receipt detection ----------
+           Runs entirely against the already-loaded allExpenses array — no extra
+           Supabase round-trip needed. Two ways to match an existing row:
+             1. Exact invoice_number (trimmed, non-empty) — the strongest signal.
+             2. Same date + same amount + same/similar vendor_name (substring match
+                either direction, to tolerate "פז" vs "פז חברת הדלק"-style variants).
+                If the candidate has no vendor_name at all (the manual-entry modal
+                collects no vendor field), date+amount alone is the fallback signal —
+                weaker, but still catches the common "logged this twice by mistake" case. */
+        function normalizeInvoice(s) { return String(s || "").trim(); }
+        function normalizeForMatch(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+        function vendorsMatch(a, b) {
+          var na = normalizeForMatch(a), nb = normalizeForMatch(b);
+          if (!na || !nb) return false;
+          return na === nb || na.indexOf(nb) !== -1 || nb.indexOf(na) !== -1;
+        }
+        function amountsMatch(a, b) {
+          if (a == null || b == null) return false;
+          return Math.abs(Number(a) - Number(b)) < 0.01;
+        }
+        // candidate: { date, amount, vendor_name, invoice_number }
+        function findDuplicateExpense(candidate) {
+          var invoiceNum = normalizeInvoice(candidate.invoice_number);
+          if (invoiceNum) {
+            var byInvoice = allExpenses.filter(function (r) { return normalizeInvoice(r.invoice_number) === invoiceNum; })[0];
+            if (byInvoice) return byInvoice;
+          }
+          if (candidate.date && candidate.amount != null) {
+            for (var i = 0; i < allExpenses.length; i++) {
+              var row = allExpenses[i];
+              if (row.date !== candidate.date || !amountsMatch(row.amount, candidate.amount)) continue;
+              if (candidate.vendor_name) {
+                if (vendorsMatch(row.vendor_name, candidate.vendor_name)) return row;
+              } else {
+                return row;
+              }
+            }
+          }
+          return null;
+        }
+        function formatDupWarningText(match) {
+          return "⚠️ שים לב: קיימת כבר הוצאה זהה במערכת:\n" +
+            "• תאריך: " + fmtDate(match.date) + "\n" +
+            "• ספק: " + (match.vendor_name || "לא צוין") + "\n" +
+            "• סכום: " + fmtAmount(match.amount) + "\n" +
+            "• מס' חשבונית: " + (match.invoice_number || "לא צוין");
+        }
+
         function currentRows() {
           var cat = filterCategory.value, from = filterFrom.value, to = filterTo.value;
           return allExpenses.filter(function (r) {
@@ -2163,17 +2246,7 @@
         body.addEventListener("click", function (e) {
           var btn = e.target.closest(".exp-view-link");
           if (!btn) return;
-          var path = btn.getAttribute("data-receipt-path");
-          if (!path) return;
-          btn.disabled = true;
-          sb.storage.from("receipts").createSignedUrl(path, 3600).then(function (res) {
-            btn.disabled = false;
-            if (res.error || !res.data || !res.data.signedUrl) {
-              alert("שגיאה בפתיחת הקבלה. נסו שוב.");
-              return;
-            }
-            window.open(res.data.signedUrl, "_blank", "noopener");
-          });
+          openReceiptSignedUrl(btn.getAttribute("data-receipt-path"), btn);
         });
 
         body.addEventListener("click", function (e) {
@@ -2190,6 +2263,40 @@
            expenses for March 2026 onward without reopening the modal each
            time. "שמירה וסגירה" saves and closes, matching the old behavior. */
         var lastFocused = null;
+        var expDateInput = document.getElementById("expDate");
+        var expAmountInput = document.getElementById("expAmount");
+        var expDupWarning = document.getElementById("expDupWarning");
+        var expDupWarningText = document.getElementById("expDupWarningText");
+        var expDupViewBtn = document.getElementById("expDupViewBtn");
+        var manualDupMatch = null;
+        // The manual modal has no vendor_name/invoice_number field to collect, so its
+        // duplicate check only has date+amount to go on — weaker than the AI-scanner
+        // and Telegram checks, but still catches the common "logged this twice" slip.
+        function checkManualDup() {
+          var date = expDateInput.value;
+          var amount = parseFloat(expAmountInput.value);
+          manualDupMatch = (date && amount > 0) ? findDuplicateExpense({ date: date, amount: amount, vendor_name: null, invoice_number: null }) : null;
+          if (manualDupMatch) {
+            expDupWarningText.textContent = formatDupWarningText(manualDupMatch);
+            expDupWarning.hidden = false;
+            expDupViewBtn.hidden = !manualDupMatch.receipt_url;
+            if (manualDupMatch.receipt_url) expDupViewBtn.setAttribute("data-receipt-path", manualDupMatch.receipt_url);
+            saveBtn.textContent = "⚠️ שמירה בכל זאת";
+            saveCloseBtn.textContent = "⚠️ שמירה וסגירה בכל זאת";
+          } else {
+            expDupWarning.hidden = true;
+            saveBtn.textContent = "שמירה";
+            saveCloseBtn.textContent = "שמירה וסגירה";
+          }
+        }
+        [expDateInput, expAmountInput].forEach(function (el) {
+          el.addEventListener("input", checkManualDup);
+          el.addEventListener("change", checkManualDup);
+        });
+        expDupViewBtn.addEventListener("click", function () {
+          openReceiptSignedUrl(expDupViewBtn.getAttribute("data-receipt-path"), expDupViewBtn);
+        });
+
         function showToast() {
           clearTimeout(toastTimer);
           toast.hidden = false;
@@ -2200,8 +2307,9 @@
           modal.hidden = false;
           toast.hidden = true;
           document.body.style.overflow = "hidden";
-          document.getElementById("expDate").value = new Date().toISOString().slice(0, 10);
-          document.getElementById("expDate").focus();
+          expDateInput.value = new Date().toISOString().slice(0, 10);
+          expDateInput.focus();
+          checkManualDup();
         }
         function closeModal() {
           modal.hidden = true;
@@ -2209,6 +2317,8 @@
           clearTimeout(toastTimer);
           toast.hidden = true;
           form.reset();
+          expDupWarning.hidden = true;
+          manualDupMatch = null;
           if (lastFocused) lastFocused.focus();
         }
         // Clears only amount + description; date/category stay for the next entry.
@@ -2216,6 +2326,7 @@
           document.getElementById("expAmount").value = "";
           document.getElementById("expDesc").value = "";
           document.getElementById("expAmount").focus();
+          checkManualDup();
         }
         addBtn.addEventListener("click", openModal);
         Array.prototype.forEach.call(modal.querySelectorAll("[data-exp-close]"), function (el) {
@@ -2309,17 +2420,7 @@
           if (e.key === "Escape" && !editModal.hidden) closeEditModal();
         });
         editReceiptBtn.addEventListener("click", function () {
-          var path = editReceiptBtn.getAttribute("data-receipt-path");
-          if (!path) return;
-          editReceiptBtn.disabled = true;
-          sb.storage.from("receipts").createSignedUrl(path, 3600).then(function (res) {
-            editReceiptBtn.disabled = false;
-            if (res.error || !res.data || !res.data.signedUrl) {
-              alert("שגיאה בפתיחת הקבלה. נסו שוב.");
-              return;
-            }
-            window.open(res.data.signedUrl, "_blank", "noopener");
-          });
+          openReceiptSignedUrl(editReceiptBtn.getAttribute("data-receipt-path"), editReceiptBtn);
         });
 
         editForm.addEventListener("submit", function (e) {
@@ -2514,6 +2615,12 @@
         var rcptVat = document.getElementById("rcptVat");
         var rcptInvoiceNum = document.getElementById("rcptInvoiceNum");
         var rcptDesc = document.getElementById("rcptDesc");
+        var rcptDupWarning = document.getElementById("rcptDupWarning");
+        var rcptDupWarningText = document.getElementById("rcptDupWarningText");
+        var rcptDupViewBtn = document.getElementById("rcptDupViewBtn");
+        var receiptDupMatch = null;
+        var RCPT_SAVE_LABEL_DEFAULT = "אישור ושמירה בהוצאות";
+        var RCPT_SAVE_LABEL_DUP = "⚠️ שמירה בכל זאת";
 
         var ALLOWED_RECEIPT_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
         var MAX_RECEIPT_BYTES = 15 * 1024 * 1024; // original-file guard, before downscale
@@ -2622,7 +2729,37 @@
             receiptNotice.textContent = "⚠️ " + data.confidence_notes;
             receiptNotice.hidden = false;
           }
+          checkReceiptDup();
         }
+
+        // Re-runs on every relevant field change (not just once, right after AI
+        // extraction) — Ori might correct the vendor/amount before saving, and that
+        // correction can just as easily create or remove a duplicate match.
+        function checkReceiptDup() {
+          var date = rcptDate.value;
+          var amount = parseFloat(rcptAmount.value);
+          var candidate = { date: date, amount: isNaN(amount) ? null : amount, vendor_name: rcptVendor.value.trim(), invoice_number: rcptInvoiceNum.value.trim() };
+          receiptDupMatch = (candidate.date && candidate.amount != null) || candidate.invoice_number
+            ? findDuplicateExpense(candidate)
+            : null;
+          if (receiptDupMatch) {
+            rcptDupWarningText.textContent = formatDupWarningText(receiptDupMatch);
+            rcptDupWarning.hidden = false;
+            rcptDupViewBtn.hidden = !receiptDupMatch.receipt_url;
+            if (receiptDupMatch.receipt_url) rcptDupViewBtn.setAttribute("data-receipt-path", receiptDupMatch.receipt_url);
+            if (!receiptSaveBtn.disabled) receiptSaveBtn.textContent = RCPT_SAVE_LABEL_DUP;
+          } else {
+            rcptDupWarning.hidden = true;
+            if (!receiptSaveBtn.disabled) receiptSaveBtn.textContent = RCPT_SAVE_LABEL_DEFAULT;
+          }
+        }
+        [rcptDate, rcptAmount, rcptVendor, rcptInvoiceNum].forEach(function (el) {
+          el.addEventListener("input", checkReceiptDup);
+          el.addEventListener("change", checkReceiptDup);
+        });
+        rcptDupViewBtn.addEventListener("click", function () {
+          openReceiptSignedUrl(rcptDupViewBtn.getAttribute("data-receipt-path"), rcptDupViewBtn);
+        });
 
         function closeReceiptModal() {
           receiptModal.hidden = true;
@@ -2632,8 +2769,11 @@
           selectedFile = null;
           receiptForm.reset();
           receiptSaveBtn.disabled = true;
+          receiptSaveBtn.textContent = RCPT_SAVE_LABEL_DEFAULT;
           receiptNotice.hidden = true;
           receiptError.hidden = true;
+          rcptDupWarning.hidden = true;
+          receiptDupMatch = null;
           receiptInput.value = "";
           if (rcptLastFocused) rcptLastFocused.focus();
         }
@@ -2661,7 +2801,10 @@
           document.body.style.overflow = "hidden";
           receiptNotice.hidden = true;
           receiptError.hidden = true;
+          rcptDupWarning.hidden = true;
+          receiptDupMatch = null;
           receiptSaveBtn.disabled = true;
+          receiptSaveBtn.textContent = RCPT_SAVE_LABEL_DEFAULT;
           receiptLoading.hidden = false;
           renderPreviewMedia(file);
 
