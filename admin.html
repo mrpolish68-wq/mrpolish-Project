@@ -341,6 +341,12 @@
       border-radius:8px; padding:6px 10px; cursor:pointer; font-size:.85rem; line-height:1;
     }
     .exp-view-link:hover { background:var(--marble-100); }
+    .exp-edit-btn {
+      background:transparent; border:1px solid var(--marble-200); color:var(--char-800);
+      border-radius:8px; padding:6px 10px; cursor:pointer; font-size:.85rem; line-height:1; transition:background .15s;
+    }
+    .exp-edit-btn:hover { background:var(--marble-100); }
+    .exp-edit-receipt-link { margin-block-end:14px; }
 
     .exp-modal__dialog.exp-modal--wide { width:min(760px,100%); }
     .exp-receipt-layout { display:grid; grid-template-columns:1fr 1.3fr; gap:22px; align-items:start; }
@@ -1331,6 +1337,64 @@
     </div>
   </div>
 
+  <!-- Edit-expense modal — pre-filled from an existing business_expenses row (manual,
+       web-scanner, or Telegram-bot origin, all equally editable), UPDATEs in place. -->
+  <div class="exp-modal" id="expEditModal" hidden>
+    <div class="exp-modal__overlay" data-editexp-close></div>
+    <div class="exp-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="expEditModalTitle">
+      <button type="button" class="exp-modal__close" data-editexp-close aria-label="סגירה">&times;</button>
+      <h3 class="exp-modal__title" id="expEditModalTitle">עריכת הוצאה</h3>
+      <div class="exp-edit-receipt-link" id="expEditReceiptLink" hidden>
+        <button type="button" class="exp-view-link" id="expEditReceiptBtn">📄 צפייה בקבלה המצורפת</button>
+      </div>
+      <form class="exp-form" id="expEditForm">
+        <div>
+          <label for="editExpDate">תאריך</label>
+          <input type="date" id="editExpDate" required />
+        </div>
+        <div>
+          <label for="editExpCategory">קטגוריה</label>
+          <select id="editExpCategory" required>
+            <option value="חומרי עבודה/פוליש">חומרי עבודה/פוליש</option>
+            <option value="דלק/רכב">דלק/רכב</option>
+            <option value="שיווק/פרסום">שיווק/פרסום</option>
+            <option value="ציוד ותחזוקה">ציוד ותחזוקה</option>
+            <option value="הוצאות משרד">הוצאות משרד</option>
+            <option value="שונות">שונות</option>
+          </select>
+        </div>
+        <div>
+          <label for="editExpVendor">ספק / בית עסק (לא חובה)</label>
+          <input type="text" id="editExpVendor" placeholder="לדוגמה: פז חברת הדלק" />
+        </div>
+        <div>
+          <label for="editExpAmount">סכום כולל (₪)</label>
+          <input type="number" id="editExpAmount" inputmode="decimal" min="0.01" step="0.01" required />
+        </div>
+        <div>
+          <label for="editExpBeforeVat">סכום לפני מע״מ (לא חובה)</label>
+          <input type="number" id="editExpBeforeVat" inputmode="decimal" min="0" step="0.01" />
+        </div>
+        <div>
+          <label for="editExpVat">סכום מע״מ (לא חובה)</label>
+          <input type="number" id="editExpVat" inputmode="decimal" min="0" step="0.01" />
+        </div>
+        <div>
+          <label for="editExpInvoiceNum">מספר חשבונית / קבלה (לא חובה)</label>
+          <input type="text" id="editExpInvoiceNum" />
+        </div>
+        <div>
+          <label for="editExpDesc">תיאור (לא חובה)</label>
+          <textarea id="editExpDesc" placeholder="פרטים נוספים על ההוצאה…"></textarea>
+        </div>
+        <div class="exp-form-actions">
+          <button type="submit" class="btn btn-shimmer btn-sm" id="editExpSaveBtn">💾 שמירת שינויים</button>
+          <button type="button" class="btn btn-navy btn-sm" data-editexp-close>ביטול</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
     (function () {
       "use strict";
@@ -2066,6 +2130,7 @@
               '<td class="col-amount">' + fmtAmount(r.amount) + "</td>" +
               '<td class="col-desc">' + (r.description ? esc(r.description) : '<span class="leads-muted">—</span>') + "</td>" +
               '<td><div class="exp-row-actions">' + receiptBtn +
+              '<button type="button" class="exp-edit-btn" data-id="' + esc(r.id) + '" aria-label="עריכת הוצאה">✏️</button>' +
               '<button type="button" class="exp-del-btn" data-id="' + esc(r.id) + '" aria-label="מחיקת הוצאה">🗑</button></div></td>' +
               "</tr>";
           }).join("");
@@ -2109,6 +2174,14 @@
             }
             window.open(res.data.signedUrl, "_blank", "noopener");
           });
+        });
+
+        body.addEventListener("click", function (e) {
+          var btn = e.target.closest(".exp-edit-btn");
+          if (!btn) return;
+          var id = btn.getAttribute("data-id");
+          var row = allExpenses.filter(function (r) { return r.id === id; })[0];
+          if (row) openEditModal(row);
         });
 
         /* ---------- Add-expense modal ----------
@@ -2182,6 +2255,106 @@
               showToast();
               if (closeAfter) closeModal(); else resetForNextEntry();
             });
+        });
+
+        /* ---------- Edit-expense modal ----------
+           Pre-fills every editable field from the row (manual entry, web scanner, or
+           Telegram bot — all equally editable here) and writes a single UPDATE on save.
+           This is the only way to correct a wrong AI extraction or a manual-entry typo
+           after the fact; no such path existed before this. Reuses the same
+           .exp-modal shell/CSS as the add and receipt-review modals. */
+        var editModal = document.getElementById("expEditModal");
+        var editForm = document.getElementById("expEditForm");
+        var editSaveBtn = document.getElementById("editExpSaveBtn");
+        var editReceiptLinkWrap = document.getElementById("expEditReceiptLink");
+        var editReceiptBtn = document.getElementById("expEditReceiptBtn");
+        var editExpDate = document.getElementById("editExpDate");
+        var editExpCategory = document.getElementById("editExpCategory");
+        var editExpVendor = document.getElementById("editExpVendor");
+        var editExpAmount = document.getElementById("editExpAmount");
+        var editExpBeforeVat = document.getElementById("editExpBeforeVat");
+        var editExpVat = document.getElementById("editExpVat");
+        var editExpInvoiceNum = document.getElementById("editExpInvoiceNum");
+        var editExpDesc = document.getElementById("editExpDesc");
+        var editingId = null;
+        var editLastFocused = null;
+
+        function openEditModal(row) {
+          editingId = row.id;
+          editLastFocused = document.activeElement;
+          editExpDate.value = row.date || "";
+          editExpCategory.value = row.category || "";
+          editExpVendor.value = row.vendor_name || "";
+          editExpAmount.value = row.amount != null ? row.amount : "";
+          editExpBeforeVat.value = row.amount_before_vat != null ? row.amount_before_vat : "";
+          editExpVat.value = row.vat_amount != null ? row.vat_amount : "";
+          editExpInvoiceNum.value = row.invoice_number || "";
+          editExpDesc.value = row.description || "";
+          editReceiptLinkWrap.hidden = !row.receipt_url;
+          editReceiptBtn.setAttribute("data-receipt-path", row.receipt_url || "");
+          editModal.hidden = false;
+          document.body.style.overflow = "hidden";
+        }
+        function closeEditModal() {
+          editModal.hidden = true;
+          document.body.style.overflow = "";
+          editingId = null;
+          editForm.reset();
+          if (editLastFocused) editLastFocused.focus();
+        }
+        Array.prototype.forEach.call(editModal.querySelectorAll("[data-editexp-close]"), function (el) {
+          el.addEventListener("click", closeEditModal);
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && !editModal.hidden) closeEditModal();
+        });
+        editReceiptBtn.addEventListener("click", function () {
+          var path = editReceiptBtn.getAttribute("data-receipt-path");
+          if (!path) return;
+          editReceiptBtn.disabled = true;
+          sb.storage.from("receipts").createSignedUrl(path, 3600).then(function (res) {
+            editReceiptBtn.disabled = false;
+            if (res.error || !res.data || !res.data.signedUrl) {
+              alert("שגיאה בפתיחת הקבלה. נסו שוב.");
+              return;
+            }
+            window.open(res.data.signedUrl, "_blank", "noopener");
+          });
+        });
+
+        editForm.addEventListener("submit", function (e) {
+          e.preventDefault();
+          if (!editingId) return;
+          var date = editExpDate.value;
+          var category = editExpCategory.value;
+          var amount = parseFloat(editExpAmount.value);
+          if (!date || !category || !amount || amount <= 0) return;
+
+          var patch = {
+            date: date, category: category, amount: amount,
+            vendor_name: editExpVendor.value.trim() || null,
+            amount_before_vat: editExpBeforeVat.value === "" ? null : parseFloat(editExpBeforeVat.value),
+            vat_amount: editExpVat.value === "" ? null : parseFloat(editExpVat.value),
+            invoice_number: editExpInvoiceNum.value.trim() || null,
+            description: editExpDesc.value.trim() || null
+          };
+
+          editSaveBtn.disabled = true;
+          var editLabel = editSaveBtn.textContent;
+          editSaveBtn.textContent = "שומר…";
+          sb.from("business_expenses").update(patch).eq("id", editingId).select().then(function (res) {
+            editSaveBtn.disabled = false;
+            editSaveBtn.textContent = editLabel;
+            if (res.error || !res.data || !res.data[0]) {
+              alert("שגיאה בעדכון ההוצאה. נסו שוב.");
+              return;
+            }
+            var updated = res.data[0];
+            allExpenses = allExpenses.map(function (r) { return r.id === updated.id ? updated : r; });
+            renderAll();
+            showToast();
+            closeEditModal();
+          });
         });
 
         /* ---------- Excel export for the accountant (Tal Carmeli) ----------

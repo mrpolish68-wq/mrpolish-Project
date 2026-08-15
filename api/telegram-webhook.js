@@ -1,4 +1,5 @@
-// Telegram Bot Integration for Business Expense Receipts — Phase 2.
+// Telegram Bot Integration for Business Expense Receipts — Phase 2 (+ pre-confirmation
+// editing).
 //
 // Lets Ori snap a photo of a receipt straight from Telegram (no need to open the
 // dashboard) and get it AI-extracted and ready to save with two taps. Reuses the exact
@@ -25,19 +26,34 @@
 // has a hard 64-byte limit — nowhere near enough to carry the full extracted payload — so
 // the extraction result is parked in telegram_pending_receipts (service_role-only, RLS
 // enabled with zero policies) keyed by a short uuid, and that uuid is what actually rides
-// in callback_data ("c:<uuid>" / "x:<uuid>"). See supabase-telegram-receipts.sql.
+// in callback_data ("confirm:<uuid>" / "cancel:<uuid>" / etc). See
+// supabase-telegram-receipts.sql + supabase-telegram-receipts-edit.sql.
 //
-// Data flow (deliberately mirrors admin.html's "AI suggests, human confirms" scanner,
-// adapted for Telegram's tap-only interaction — there's no free-text field editing here,
-// so a receipt with no legible total amount can't be auto-saved; see the confirm handler):
+// Pre-confirmation editing: three extra buttons (✏️ שנה תאריך / ✏️ שנה סכום / 🏷️ שנה
+// קטגוריה) let Ori correct a wrong extraction without leaving Telegram. Category is a
+// fixed 6-value enum, so its button just CYCLES to the next value on every tap — fully
+// synchronous, no extra state needed. Date/amount are free-form, so tapping their button
+// sets telegram_pending_receipts.awaiting_edit_field and prompts Ori to reply with the
+// new value as a plain text message; the NEXT plain-text message from that chat (within
+// 30 minutes — see findAwaitingEdit) is then interpreted as that reply rather than a new
+// receipt upload attempt. The pending row's message_id is stored specifically so these
+// edits (which usually arrive as plain messages, not callback_queries — Telegram doesn't
+// hand back the triggering message's id on a plain text reply the way it does on a
+// button tap) can still edit the ONE summary message in place instead of spamming a new
+// message into the chat for every correction.
+//
+// Data flow (deliberately mirrors admin.html's "AI suggests, human confirms" scanner):
 //   photo/PDF in -> download from Telegram -> Gemini extraction -> upload original to the
 //   private "receipts" Storage bucket (Phase 1's bucket) -> pending row + summary message
-//   with Confirm/Cancel buttons -> tap Confirm -> insert into business_expenses
-//   (source: "ocr") -> pending row deleted, Telegram message updated in place.
+//   with edit/Confirm/Cancel buttons -> optional edits -> tap Confirm -> insert into
+//   business_expenses (source: "ocr") -> pending row deleted, Telegram message updated in
+//   place. A receipt with no legible total amount can't be confirmed — there's no way to
+//   type a brand-new amount except via the explicit "✏️ שנה סכום" flow, so a bare Confirm
+//   tap on a missing-amount receipt is refused rather than saving a fabricated value.
 "use strict";
 
 const { rateLimit } = require("./_rate-limit.js");
-const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES } = require("./parse-receipt.js");
+const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES, CATEGORIES } = require("./parse-receipt.js");
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 const TELEGRAM_API_ROOT = "https://api.telegram.org/bot";
@@ -45,6 +61,7 @@ const TELEGRAM_FILE_ROOT = "https://api.telegram.org/file/bot";
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // same guard as the dashboard's client-side check
 const PENDING_TTL_HOURS = 48; // opportunistic sweep, see cleanupStalePending()
+const AWAITING_EDIT_TTL_MS = 30 * 60 * 1000; // see findAwaitingEdit()
 
 // ---------------------------------------------------------------------------
 // Supabase REST helpers (service_role) — this project has no package.json/npm
@@ -73,6 +90,15 @@ async function supabaseSelectOne(table, filterQs) {
   if (!res.ok) throw new Error("Supabase query on " + table + " failed: " + res.status);
   var rows = await res.json();
   return rows[0] || null;
+}
+
+async function supabasePatch(table, filterQs, patch) {
+  var res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs, {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) throw new Error("Supabase patch on " + table + " failed: " + res.status);
 }
 
 async function supabaseDelete(table, filterQs) {
@@ -117,6 +143,29 @@ async function cleanupStalePending() {
     await supabaseDelete("telegram_pending_receipts", "created_at=lt." + encodeURIComponent(cutoff));
   } catch (err) {
     console.error("[telegram-webhook] stale-pending cleanup failed: " + err.message);
+  }
+}
+
+// The most recent pending receipt for this chat that's mid-edit (awaiting_edit_field
+// set), if any, within the freshness window. Scoped to a recent window on purpose: if
+// Ori tapped an edit button, got distracted, and messages the bot again an hour later
+// about something unrelated, that later text should NOT be silently swallowed as an
+// edit reply for a receipt he's long since forgotten about.
+async function findAwaitingEdit(chatId) {
+  var cutoff = new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString();
+  try {
+    var res = await fetch(
+      SUPABASE_URL + "/rest/v1/telegram_pending_receipts?chat_id=eq." + chatId +
+      "&awaiting_edit_field=not.is.null&created_at=gte." + encodeURIComponent(cutoff) +
+      "&order=created_at.desc&limit=1&select=*",
+      { headers: supabaseHeaders() }
+    );
+    if (!res.ok) return null;
+    var rows = await res.json();
+    return rows[0] || null;
+  } catch (err) {
+    console.error("[telegram-webhook] findAwaitingEdit failed: " + err.message);
+    return null;
   }
 }
 
@@ -173,6 +222,43 @@ function fmtMoney(n) {
   return "₪" + Number(n).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function pad2(n) { return n < 10 ? "0" + n : String(n); }
+
+// Accepts "YYYY-MM-DD" or Israeli "DD/MM/YYYY" (also DD.MM.YYYY, 2-digit year). Returns
+// a normalized "YYYY-MM-DD" string, or null if the reply couldn't be understood.
+function parseDateReply(text) {
+  var t = (text || "").trim();
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (iso) {
+    var y = parseInt(iso[1], 10), m = parseInt(iso[2], 10), d = parseInt(iso[3], 10);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) return y + "-" + pad2(m) + "-" + pad2(d);
+    return null;
+  }
+  var il = /^(\d{1,2})[./](\d{1,2})[./](\d{2,4})$/.exec(t);
+  if (il) {
+    var d2 = parseInt(il[1], 10), m2 = parseInt(il[2], 10);
+    var yRaw = il[3];
+    var y2 = yRaw.length === 2 ? 2000 + parseInt(yRaw, 10) : parseInt(yRaw, 10);
+    if (m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= 31) return y2 + "-" + pad2(m2) + "-" + pad2(d2);
+  }
+  return null;
+}
+
+// Strips currency symbols/commas/"ש"ח" and parses a positive number. Returns null if
+// the reply couldn't be understood as a sane amount.
+function parseAmountReply(text) {
+  var cleaned = (text || "").replace(/[₪,\s]/g, "").replace(/ש["׳]?ח/g, "");
+  var n = parseFloat(cleaned);
+  if (!isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function nextCategory(current) {
+  var idx = CATEGORIES.indexOf(current);
+  var nextIdx = idx === -1 ? 0 : (idx + 1) % CATEGORIES.length;
+  return CATEGORIES[nextIdx];
+}
+
 // Plain text, deliberately no parse_mode. vendor_name/confidence_notes are AI-extracted
 // free text from a real-world document — sending them through Telegram's Markdown/
 // MarkdownV2 parser risks a "can't parse entities" 400 (or worse, silently mangled
@@ -191,17 +277,24 @@ function formatSummary(data) {
   if (data.invoice_number) lines.push("🧾 מס' חשבונית: " + data.invoice_number);
   if (data.confidence_notes) lines.push("", "⚠️ " + data.confidence_notes);
   if (data.total_amount == null) {
-    lines.push("", "❌ לא זוהה סכום — לא ניתן לשמור אוטומטית. יש להוסיף את ההוצאה ידנית בלוח הבקרה.");
+    lines.push("", "❌ לא זוהה סכום — לא ניתן לשמור לפני שמעדכנים אותו (\"✏️ שנה סכום\") או ממלאים ידנית בלוח הבקרה.");
   }
   return lines.join("\n");
 }
 
-function confirmKeyboard(pendingId) {
+function actionKeyboard(pendingId) {
   return {
-    inline_keyboard: [[
-      { text: "✅ אשר ושמור בהוצאות", callback_data: "c:" + pendingId },
-      { text: "❌ בטל", callback_data: "x:" + pendingId }
-    ]]
+    inline_keyboard: [
+      [
+        { text: "✏️ שנה תאריך", callback_data: "editdate:" + pendingId },
+        { text: "✏️ שנה סכום", callback_data: "editamount:" + pendingId },
+        { text: "🏷️ שנה קטגוריה", callback_data: "cyclecat:" + pendingId }
+      ],
+      [
+        { text: "✅ אשר ושמור בהוצאות", callback_data: "confirm:" + pendingId },
+        { text: "❌ בטל", callback_data: "cancel:" + pendingId }
+      ]
+    ]
   };
 }
 
@@ -293,28 +386,86 @@ async function processReceiptMessage(message, chatId) {
     return;
   }
 
-  await tgCallSafe("sendMessage", {
+  var sent = await tgCallSafe("sendMessage", {
     chat_id: chatId,
     text: formatSummary(extracted),
-    reply_markup: confirmKeyboard(pending.id)
+    reply_markup: actionKeyboard(pending.id)
   });
+  // Needed so a later free-text edit reply (date/amount) can edit THIS message in place
+  // instead of sending a new one — see the file header for why a plain message doesn't
+  // otherwise carry its own message context the way a callback_query does.
+  if (sent && sent.message_id) {
+    try {
+      await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pending.id), { message_id: sent.message_id });
+    } catch (err) {
+      console.error("[telegram-webhook] message_id patch failed: " + err.message);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Callback query handling — Ori tapped "✅ אשר" or "❌ בטל"
+// Edit-reply handling — Ori tapped "✏️ שנה תאריך"/"✏️ שנה סכום" and then sent the new
+// value as a plain text message.
 // ---------------------------------------------------------------------------
+
+async function processEditReply(pending, text, chatId) {
+  var field = pending.awaiting_edit_field;
+  var newExtracted = Object.assign({}, pending.extracted);
+  var applied = false;
+
+  if (field === "date") {
+    var parsedDate = parseDateReply(text);
+    if (parsedDate) { newExtracted.date = parsedDate; applied = true; }
+  } else if (field === "amount") {
+    var parsedAmount = parseAmountReply(text);
+    if (parsedAmount != null) { newExtracted.total_amount = parsedAmount; applied = true; }
+  }
+
+  if (!applied) {
+    var retryText = field === "date"
+      ? "לא הצלחתי להבין את התאריך. נסו שוב, למשל 15/08/2026 או 2026-08-15."
+      : "לא הצלחתי להבין את הסכום. שלחו מספר בלבד, למשל 245.50.";
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: retryText });
+    return; // awaiting_edit_field stays set — the next reply gets another try
+  }
+
+  try {
+    await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pending.id), {
+      extracted: newExtracted,
+      awaiting_edit_field: null
+    });
+  } catch (err) {
+    console.error("[telegram-webhook] edit reply patch failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה בעדכון. נסו שוב." });
+    return;
+  }
+
+  var fieldLabelHe = field === "date" ? "תאריך" : "סכום";
+  var refreshedText = formatSummary(newExtracted) + "\n\n✏️ עודכן: " + fieldLabelHe;
+  if (pending.message_id) {
+    await tgCallSafe("editMessageText", { chat_id: chatId, message_id: pending.message_id, text: refreshedText, reply_markup: actionKeyboard(pending.id) });
+  } else {
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: refreshedText, reply_markup: actionKeyboard(pending.id) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Callback query handling — Ori tapped one of the inline-keyboard buttons
+// ---------------------------------------------------------------------------
+
+var KNOWN_ACTIONS = ["confirm", "cancel", "editdate", "editamount", "cyclecat"];
 
 async function processCallbackQuery(query, chatId) {
   var data = query.data || "";
-  var isConfirm = data.indexOf("c:") === 0;
-  var isCancel = data.indexOf("x:") === 0;
+  var sep = data.indexOf(":");
+  var action = sep === -1 ? data : data.slice(0, sep);
+  var pendingId = sep === -1 ? "" : data.slice(sep + 1);
   var messageId = query.message && query.message.message_id;
 
-  if (!isConfirm && !isCancel) {
+  if (KNOWN_ACTIONS.indexOf(action) === -1) {
     await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id });
     return;
   }
-  var pendingId = data.slice(2);
 
   var pending;
   try {
@@ -333,7 +484,7 @@ async function processCallbackQuery(query, chatId) {
     return;
   }
 
-  if (isCancel) {
+  if (action === "cancel") {
     await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
     await deleteReceiptFromStorage(pending.receipt_path);
     await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "בוטל" });
@@ -341,10 +492,45 @@ async function processCallbackQuery(query, chatId) {
     return;
   }
 
-  // Confirm. A receipt with no legible amount can't be safely auto-saved — there's no
-  // free-text field editing over Telegram's inline keyboard (unlike the dashboard's
-  // review modal), so the only honest option is to send Ori to the dashboard instead of
-  // fabricating a placeholder amount.
+  if (action === "cyclecat") {
+    var afterCycle = Object.assign({}, pending.extracted, { category: nextCategory(pending.extracted.category) });
+    try {
+      await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { extracted: afterCycle });
+    } catch (err) {
+      console.error("[telegram-webhook] category cycle patch failed: " + err.message);
+      await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה. נסו שוב.", show_alert: true });
+      return;
+    }
+    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "קטגוריה: " + afterCycle.category });
+    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(afterCycle), reply_markup: actionKeyboard(pendingId) });
+    return;
+  }
+
+  if (action === "editdate" || action === "editamount") {
+    var field = action === "editdate" ? "date" : "amount";
+    try {
+      await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { awaiting_edit_field: field });
+    } catch (err) {
+      console.error("[telegram-webhook] awaiting_edit_field patch failed: " + err.message);
+      await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה. נסו שוב.", show_alert: true });
+      return;
+    }
+    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id });
+    var promptNote = field === "date"
+      ? "✏️ שלחו כעת את התאריך החדש (למשל 15/08/2026 או 2026-08-15)."
+      : "✏️ שלחו כעת את הסכום החדש (מספר בלבד, למשל 245.50).";
+    var promptedText = formatSummary(pending.extracted) + "\n\n" + promptNote;
+    if (messageId) {
+      await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: promptedText, reply_markup: actionKeyboard(pendingId) });
+    } else {
+      await tgCallSafe("sendMessage", { chat_id: chatId, text: promptedText, reply_markup: actionKeyboard(pendingId) });
+    }
+    return;
+  }
+
+  // action === "confirm". A receipt with no legible amount can't be saved as-is — Ori
+  // must either tap "✏️ שנה סכום" first or finish the entry manually in the dashboard;
+  // there's no honest way to insert a financial record with a fabricated placeholder.
   if (pending.extracted.total_amount == null) {
     await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
     await deleteReceiptFromStorage(pending.receipt_path);
@@ -456,6 +642,19 @@ module.exports = async function handler(req, res) {
         return;
       }
       await cleanupStalePending();
+
+      // A plain-text message (not a photo/document) might be a reply to an in-progress
+      // "✏️ שנה תאריך"/"✏️ שנה סכום" prompt rather than a new receipt attempt — check
+      // BEFORE falling through to the normal photo/document/help-text routing.
+      if (msg.text && !msg.photo && !msg.document) {
+        var awaitingEdit = await findAwaitingEdit(chatId);
+        if (awaitingEdit) {
+          await processEditReply(awaitingEdit, msg.text, chatId);
+          res.status(200).json({ ok: true });
+          return;
+        }
+      }
+
       await processReceiptMessage(msg, chatId);
       res.status(200).json({ ok: true });
       return;

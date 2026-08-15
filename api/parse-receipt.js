@@ -57,26 +57,41 @@ const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "applicatio
 // Vercel's ~4.5MB total request body ceiling. ~4MB of base64 text here.
 const MAX_BASE64_LENGTH = 4 * 1024 * 1024;
 
-const EXTRACTION_PROMPT =
-  "You are analyzing a photo or scan of a receipt or invoice (קבלה / חשבונית) for an " +
-  "Israeli floor-polishing and stone-restoration contractor business (Mr. Polish / " +
-  'מיסטר פוליש), for the purpose of business expense bookkeeping. Extract the fields ' +
-  "defined by the response schema from the document.\n\n" +
-  "Rules:\n" +
-  '- All amounts must be plain numbers (e.g. 123.45), never include a currency symbol (₪, ש"ח, etc).\n' +
-  "- date must be in YYYY-MM-DD format. If the year is ambiguous or missing, use your best judgement " +
-  "based on any date format conventions visible (Israeli documents are typically DD/MM/YYYY).\n" +
-  "- If VAT (מע\"מ) is shown as a separate line, extract vat_amount and amount_before_vat exactly as printed. " +
-  "If only a single total is shown with no VAT breakdown, leave vat_amount and amount_before_vat as null " +
-  "rather than estimating them.\n" +
-  "- category must be exactly one of the allowed values in the schema — pick the single best fit for what " +
-  "was purchased (e.g. fuel/gas station receipts -> " + '"' + "דלק/רכב" + '"' + ", polishing materials/tools/diamond " +
-  "pads/chemicals -> " + '"' + "חומרי עבודה/פוליש" + '"' + ", office supplies -> " + '"' + "הוצאות משרד" + '"' + "; if genuinely unclear, use " +
-  '"' + "שונות" + '"' + ").\n" +
-  "- confidence_notes: one short sentence in Hebrew naming any field you could not read with high confidence " +
-  "(e.g. blurry total, torn corner covering the date). Leave it an empty string if everything is clearly legible.\n" +
-  "- If a field is simply not present on the document (e.g. no invoice number printed), return null for it — " +
-  "do not invent a value.";
+// A function, not a static string — the current-year rule below must reflect the
+// ACTUAL year at call time, not the year this file happened to be written in. Computing
+// it once at module load (a plain top-level const) would go stale the moment a warm
+// serverless instance survives a New Year's rollover, silently reintroducing the exact
+// "old-year misread" bug this rule exists to prevent.
+function getExtractionPrompt() {
+  var currentYear = new Date().getFullYear();
+  var currentYear2Digit = String(currentYear).slice(2);
+  return (
+    "You are analyzing a photo or scan of a receipt or invoice (קבלה / חשבונית) for an " +
+    "Israeli floor-polishing and stone-restoration contractor business (Mr. Polish / " +
+    'מיסטר פוליש), for the purpose of business expense bookkeeping. Extract the fields ' +
+    "defined by the response schema from the document.\n\n" +
+    "Rules:\n" +
+    '- All amounts must be plain numbers (e.g. 123.45), never include a currency symbol (₪, ש"ח, etc).\n' +
+    "- date must be in YYYY-MM-DD format. The current calendar year is " + currentYear + ". If the year on the " +
+    "document is ambiguous, blurry, faded, or handwritten (e.g. a two-digit year like '" + currentYear2Digit +
+    ", or a digit that could plausibly be misread as an older year), assume it is " + currentYear + " unless the " +
+    "document clearly and unambiguously shows a different year (e.g. a sharp, fully legible 4-digit year, or " +
+    "explicit surrounding context indicating an older archived document). Do not default to an earlier year " +
+    "just because a digit is hard to read — receipts are overwhelmingly recent. Israeli documents are " +
+    "typically in DD/MM/YYYY format.\n" +
+    "- If VAT (מע\"מ) is shown as a separate line, extract vat_amount and amount_before_vat exactly as printed. " +
+    "If only a single total is shown with no VAT breakdown, leave vat_amount and amount_before_vat as null " +
+    "rather than estimating them.\n" +
+    "- category must be exactly one of the allowed values in the schema — pick the single best fit for what " +
+    "was purchased (e.g. fuel/gas station receipts -> " + '"' + "דלק/רכב" + '"' + ", polishing materials/tools/diamond " +
+    "pads/chemicals -> " + '"' + "חומרי עבודה/פוליש" + '"' + ", office supplies -> " + '"' + "הוצאות משרד" + '"' + "; if genuinely unclear, use " +
+    '"' + "שונות" + '"' + ").\n" +
+    "- confidence_notes: one short sentence in Hebrew naming any field you could not read with high confidence " +
+    "(e.g. blurry total, torn corner covering the date). Leave it an empty string if everything is clearly legible.\n" +
+    "- If a field is simply not present on the document (e.g. no invoice number printed), return null for it — " +
+    "do not invent a value."
+  );
+}
 
 const RESPONSE_SCHEMA = {
   type: "OBJECT",
@@ -107,7 +122,7 @@ async function callGemini(apiKey, base64Image, mimeType) {
     contents: [
       {
         parts: [
-          { text: EXTRACTION_PROMPT },
+          { text: getExtractionPrompt() },
           { inline_data: { mime_type: mimeType, data: base64Image } }
         ]
       }
