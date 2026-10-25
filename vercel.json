@@ -15,7 +15,11 @@
     "api/analytics-agent.js": { "maxDuration": 60 },
     "api/analytics-refresh.js": { "maxDuration": 60 },
     "api/parse-receipt.js": { "maxDuration": 30 },
-    "api/telegram-webhook.js": { "maxDuration": 30 }
+    "api/telegram-webhook.js": { "maxDuration": 30 },
+    "api/spike-quote-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,shared/fonts/**}"
+    }
   },
   "headers": [
     {
