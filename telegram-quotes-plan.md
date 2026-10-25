@@ -138,7 +138,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 1b | Supabase live check + this plan file | ✅ done (live check 2026-10-25, see "Live DB state") |
 | 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ✅ done (see "Phase 2 notes") |
 | 2b | Aligned ruled lines under every description line + 13px font floor, both PDF paths | ✅ done (see "Phase 2b notes") |
-| 3 | DB migration (**owner approval required before applying**) | ⏳ |
+| 3a | DB migration file `supabase-quotes-telegram.sql` (written + tested locally, **not applied**) | ✅ done (see "Phase 3a notes") |
+| 3b | Apply the migration (**owner approval required before applying**) + verify | ⏳ |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
@@ -196,7 +197,7 @@ Planned changes:
 
 **Owner answers (after Phase 1b)**
 - Daily quotas are **GLOBAL** across all chats (store `chat_id = 0` in `telegram_daily_usage`).
-- Starting number for `create_quote`: **pending owner confirmation**; needed only in Phase 3.
+- Starting number for `create_quote`: **14** (owner-confirmed: last issued = 13). From now on the DB is the only source of numbering; the panel's per-phone localStorage counter is retired in **Phase 6**.
 - `receipts` bucket gets limits in Phase 3: `allowed_mime_types = {image/*, application/pdf}`, `file_size_limit` 15 MB.
 - Leaked-password protection: skipped for now.
 
@@ -248,6 +249,15 @@ Migration adjustments from the live state:
 - `api/spike-quote-pdf.js` renders through the module; `?long=1` renders a 20-line description (fits at 11px + zoom 0.912, one page).
 - Verified: string equality vs `admin.html@7791b29` for 6 inputs + `WO_CSS` + logo; pixel diff old vs new confined to the VAT row (2 stray pixels elsewhere at 1/255 intensity, i.e. invisible); `admin.html` loads the module with no console errors.
 - ~~For Phase 4: `buildDoc` always draws 7 ruled lines~~. Resolved in Phase 2b.
+
+### Phase 3a notes
+
+- File: `supabase-quotes-telegram.sql` (repo root). Idempotent, commented, with a commented ROLLBACK section. **Not applied.**
+- Contents: quotes columns (`source`, `vat_mode`, `pdf_path`, `telegram_chat_id`, `updated_at`) + checks (incl. `source <> 'telegram' or total > 0`); trigger `quotes_before_update` (updated_at + clears `pdf_path` when a printed field changes); `quote_counter` (floor 14) + `create_quote(jsonb)`; bot tables `telegram_pending_quotes`, `telegram_chat_state`, `telegram_processed_updates`, `telegram_daily_usage` (global, per Israel day); `consume_daily_quota` / `get_daily_quota_remaining` (service_role only); private `quotes-pdf` bucket (5 MB, PDF) + authenticated SELECT policy; `receipts` bucket limits (15 MB; jpeg/png/webp/pdf); `quotes` added to `supabase_realtime`.
+- `create_quote` also **raises `floor_next` after each insert**, so a number is never reused even if the newest quote is deleted.
+- Bot tables additionally `revoke all` from anon/authenticated (defense in depth on top of RLS with zero policies).
+- Until Phase 6 the panel still inserts directly with a locally computed number. If the bot takes a number at the same moment, the unique index rejects the panel's insert and the panel shows its existing "PDF generated but save failed" alert; nothing is overwritten. Phase 6 moves the panel to `create_quote` (insert before rendering).
+- Tested locally in PGlite (Postgres 17.5) with stubs mimicking the live schema and fake data: 53/53 checks passed (apply ×3, numbering, validation, trigger, checks, quotas, grants/RLS, storage, realtime, rollback).
 
 ### Phase 2b notes (owner decisions)
 
