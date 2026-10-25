@@ -135,7 +135,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 |---|---|---|
 | 0 | Read-only recon | ✅ done |
 | 1 | Chromium PDF spike (`be7fd85`) | ✅ done, approved |
-| 1b | Supabase live check + this plan file | 🟡 partial: plan written, **live Supabase check pending** (`supabase` MCP not authenticated) |
+| 1b | Supabase live check + this plan file | ✅ done (live check 2026-10-25, see "Live DB state") |
 | 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ⏳ |
 | 3 | DB migration (**owner approval required before applying**) | ⏳ |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
@@ -145,9 +145,9 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 
 ### Phase 3 migration: working notes
 
-Based on the repo's `supabase-quotes.sql`. These notes **must be re-verified against the live DB** (Phase 1b Part A) before the migration is written.
+Based on the repo's `supabase-quotes.sql`, verified against the live DB in Phase 1b (see "Live DB state" below).
 
-Current repo schema of `public.quotes`:
+Current schema of `public.quotes` (repo and live match):
 - `id uuid`
 - `number int not null`, with unique index `quotes_number_idx`
 - `quote_date text`
@@ -171,7 +171,7 @@ Planned changes:
 - `total` defaults to 0, so a "not null" check alone is not enough.
 
 **Client phone**
-- Ensure no `client_phone` column exists; drop it if the Phase 0 draft or the live DB has one.
+- Never add a `client_phone` column. Live DB confirmed it does not exist; remove it from the Phase 0 draft.
 
 **Trigger**
 - On update of content columns of a `source='telegram'` row: set `pdf_path = null` and bump `updated_at`.
@@ -195,6 +195,43 @@ Planned changes:
 
 **Open item**
 - Whether quotas count per chat or globally. Default: global per day, matching the Gemini project-level limit.
+
+### Live DB state (Phase 1b, 2026-10-25)
+
+Read-only check via the `supabase` MCP server (project `mmognkxkglkotzkuxzly`). Aggregates and structure only.
+
+| Item | Live state |
+|---|---|
+| Migrations | 14 applied; latest `telegram_pending_receipts_claim_column` |
+| `quotes` rows | 8; numbers 6–13 (contiguous), max **13**; created 2026-08-26 → 2026-10-25 |
+| `quotes` columns | `id uuid`, `number int`, `quote_date text not null`, `client_name text not null`, `address`, `description`, `total numeric not null default 0`, `created_at` |
+| `quotes` indexes | `quotes_pkey`, unique `quotes_number_idx`, `quotes_created_at_idx` (desc) |
+| `quotes` RLS / triggers | RLS on; one `authenticated` ALL policy; **no triggers** |
+| `client_phone` | does not exist |
+| Public functions | only `increment_metric` (security definer); no name clash with `create_quote` |
+| Storage buckets | `content-media` (public), `receipts` (private); **neither has a size or MIME limit** |
+| Storage policies | `receipts`: authenticated read + insert; `content-media`: public read, authenticated insert |
+| Realtime publication | **empty**: `quotes` is not published |
+| `telegram_pending_receipts` | RLS on, no policies (service role only), 0 rows |
+
+Advisors relevant to this feature:
+- INFO `rls_enabled_no_policy` on `telegram_pending_receipts`. This is intended (service-role only). The new `telegram_*` tables will raise the same INFO.
+- WARN `anon_security_definer_function_executable` on `increment_metric`. Not part of this feature, but `create_quote` and the usage RPC must **not** repeat it.
+- WARN leaked-password protection is disabled (Auth dashboard toggle, owner decision).
+- INFO `quotes_created_at_idx` unused. Keep it; "📜 הצעות אחרונות" will use it.
+
+Migration adjustments from the live state:
+1. **`client_phone`**: not present. Drop the "drop if exists" step, and simply never add the column.
+2. **New columns backfill safely**: existing 8 rows get `vat_mode='exempt'`, `source='panel'`. The `source <> 'telegram' or total > 0` check passes for all of them.
+3. **`updated_at`**: does not exist; add it as `timestamptz not null default now()`. The trigger is new; `quotes` has none today.
+4. **Numbering floor**: the panel computes `max(dbMax+1, getSeq())`, where `getSeq()` is a **per-device localStorage** counter, so the DB has no floor today. `create_quote` uses a constant floor in SQL (current next number = 14). The panel's local counter is retired in Phase 2/3.
+5. **`quote_date` is text** (panel writes `he-IL` format). The bot must write the same format (today in `Asia/Jerusalem`).
+6. **Realtime**: add `alter publication supabase_realtime add table public.quotes`. RLS already limits events to `authenticated`.
+7. **Storage**: create private `quotes-pdf` with `file_size_limit` (e.g. 2 MB) and `allowed_mime_types = {application/pdf}`; add one `authenticated` SELECT policy scoped to `bucket_id = 'quotes-pdf'`. No insert policy (service role writes).
+8. **RPC grants**: `create_quote` and the usage RPC are `security definer`, `set search_path = ''`. Revoke `execute` from `public` and `anon`. Grant `create_quote` to `authenticated` + `service_role`; grant the usage RPC to `service_role` only.
+9. **Daily quota table**: `telegram_daily_usage (day date, chat_id bigint, kind text check (kind in ('quote','receipt')), count int, primary key (day, chat_id, kind))`. Increment through one RPC, `consume_daily_quota(kind, chat_id, limit) → remaining`, as an atomic `insert … on conflict do update … where count < limit`. `day = (now() at time zone 'Asia/Jerusalem')::date`. If quotas end up global, store `chat_id = 0`.
+10. **Voice-correction cap** (3 per quote) lives on `telegram_pending_quotes.voice_corrections`, not in the daily table.
+11. **No in-flight receipt drafts** (0 rows), so the migration can be applied at any time without disrupting the receipt flow.
 
 ---
 
