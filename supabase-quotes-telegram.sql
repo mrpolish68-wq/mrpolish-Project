@@ -19,6 +19,12 @@
 --
 --  Apply with Supabase MCP apply_migration (runs as one transaction) or the SQL Editor.
 --  A commented ROLLBACK section is at the bottom.
+--
+--  TEST-DATA RULE: any test that calls create_quote() or consume_daily_quota() against the
+--  LIVE project MUST run inside a single transaction that is ROLLED BACK (begin … rollback),
+--  so no quote number is consumed and quote_counter.floor_next stays at 14. Before launch
+--  (Phase 7): delete any test quotes/rows, then set
+--  quote_counter.floor_next = greatest(max(number)+1, 14) and verify.
 -- =============================================================
 
 
@@ -116,8 +122,15 @@ on conflict (id) do nothing;
 -- and — honored ONLY for service_role — source, telegram_chat_id.
 -- Numbering is serialized with a transaction-scoped advisory lock, so two concurrent callers
 -- can never compute the same number: next = greatest(max(number)+1, floor_next).
--- The caller's role comes from the PostgREST JWT claims (request.jwt.claims ->> 'role');
--- SECURITY DEFINER changes current_user, not those claims.
+-- Caller detection: SECURITY DEFINER switches current_user to the owner, so current_user can't
+-- tell us who called. The caller counts as the bot (service_role) if ANY of these says so:
+--   1. request.jwt.claims ->> 'role'   — PostgREST's JWT claims (legacy JWT service key);
+--   2. current_setting('role')         — the role PostgREST switched to with SET LOCAL ROLE.
+--                                        This also covers Supabase's newer secret API keys,
+--                                        whose requests may not carry a JWT 'role' claim;
+--                                        SECURITY DEFINER does not change this setting;
+--   3. request.jwt.claim.role          — the pre-v9 PostgREST per-claim setting (legacy).
+-- None of these can be set by an API client: PostgREST derives them from the verified key.
 create or replace function public.create_quote(p jsonb)
 returns public.quotes
 language plpgsql
@@ -126,7 +139,9 @@ set search_path = ''
 as $$
 declare
   v_claims     text    := nullif(pg_catalog.current_setting('request.jwt.claims', true), '');
-  v_is_service boolean := coalesce((v_claims::jsonb ->> 'role') = 'service_role', false);
+  v_is_service boolean := coalesce((v_claims::jsonb ->> 'role') = 'service_role', false)
+                          or coalesce(pg_catalog.current_setting('role', true) = 'service_role', false)
+                          or coalesce(pg_catalog.current_setting('request.jwt.claim.role', true) = 'service_role', false);
   v_client     text    := btrim(coalesce(p ->> 'client_name', ''));
   v_date       text    := btrim(coalesce(p ->> 'quote_date', ''));
   v_vat        text    := coalesce(nullif(btrim(p ->> 'vat_mode'), ''), 'exempt');

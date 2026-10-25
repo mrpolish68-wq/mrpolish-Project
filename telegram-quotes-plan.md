@@ -139,11 +139,14 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ✅ done (see "Phase 2 notes") |
 | 2b | Aligned ruled lines under every description line + 13px font floor, both PDF paths | ✅ done (see "Phase 2b notes") |
 | 3a | DB migration file `supabase-quotes-telegram.sql` (written + tested locally, **not applied**) | ✅ done (see "Phase 3a notes") |
-| 3b | Apply the migration (**owner approval required before applying**) + verify | ⏳ |
+| 3b | Apply the migration (owner-approved) + live verification | ✅ done (see "Phase 3b notes") |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
+
+**Phase 7 pre-launch checklist (must do before merge):**
+- [ ] Delete any test quotes/rows (quotes, `telegram_*` tables), then set `quote_counter.floor_next = greatest(max(number)+1, 14)` and verify it.
 
 ### Phase 3 migration: working notes
 
@@ -258,6 +261,24 @@ Migration adjustments from the live state:
 - Bot tables additionally `revoke all` from anon/authenticated (defense in depth on top of RLS with zero policies).
 - Until Phase 6 the panel still inserts directly with a locally computed number. If the bot takes a number at the same moment, the unique index rejects the panel's insert and the panel shows its existing "PDF generated but save failed" alert; nothing is overwritten. Phase 6 moves the panel to `create_quote` (insert before rendering).
 - Tested locally in PGlite (Postgres 17.5) with stubs mimicking the live schema and fake data: 53/53 checks passed (apply ×3, numbering, validation, trigger, checks, quotas, grants/RLS, storage, realtime, rollback).
+
+### Phase 3b notes
+
+- **Applied** 2026-10-25 by the owner in the Supabase SQL Editor (the full `supabase-quotes-telegram.sql`), after `apply_migration` (`quotes_telegram_phase3`) was declined by the tool layer three times. Because it ran in the SQL Editor, it is **not** recorded in `supabase_migrations` history (latest listed: `telegram_pending_receipts_claim_column`). Live verification ran 2026-10-25 ~19:50 UTC.
+- **Change before applying:** `create_quote` detects the bot if ANY of `request.jwt.claims->>'role'`, `current_setting('role')` (PostgREST's SET LOCAL ROLE, also covers newer secret API keys; SECURITY DEFINER doesn't change it) or the legacy `request.jwt.claim.role` equals `service_role`. Local PGlite suite: 57/57.
+- **Live verification:** 8 quotes, numbers 6–13, all defaulted panel/exempt; no phone column; 3 checks + trigger present; `quote_counter` = (true, 14); all 5 functions pin `search_path=''` (3 SECURITY DEFINER); execute grants exactly as designed (create_quote: authenticated + service_role; quota functions: service_role only; anon: none); 5 bot tables with RLS on, 0 policies, no anon/authenticated grants; `quotes-pdf` (private, 5 MB, PDF) + its authenticated SELECT policy; `receipts` 15 MB + 4 types; `public.quotes` in `supabase_realtime`.
+- **Rolled-back live tests** (each a single DO-block transaction ending in a raised exception, so it can never commit; `execute_sql` only returns the last statement's result, which rules out a plain `begin … rollback`):
+  - a. bot with JWT claims → `source=telegram`, number 14 ✅
+  - b. bot with role only, no claims → `source=telegram`, number 14 ✅ (fallback works)
+  - c. panel (authenticated) sending source telegram → `source=panel`, chat NULL ✅
+  - d. bot with total 0 → error 22023 "total must be greater than 0" ✅
+  - e. consume ×2 + remaining (limit 15) → 14, 13, 13 ✅
+  - f. anon → 42501 permission denied for create_quote, consume_daily_quota, get_daily_quota_remaining and `telegram_pending_quotes` ✅
+  - panel non-regression: authenticated plain insert (panel payload shape) → panel/exempt; update setting pdf_path keeps it; no-op update keeps it; description change → pdf_path NULL; updated_at set ✅
+  - After all tests: 8 quotes / max 13, counter 14, 0 usage rows, 0 pending rows ✅
+- **Advisors — new items:** INFO `rls_enabled_no_policy` on the 5 new tables (intended); INFO `unused_index` on the new bot-table indexes (tables empty); **WARN `authenticated_security_definer_function_executable` on `create_quote`** — intended (the panel calls it from Phase 6; authenticated callers can't set source/chat and are validated). No new anon-facing warnings.
+- **Test-data rule:** any test that calls `create_quote` or `consume_daily_quota` against the LIVE project must run in a single transaction that is rolled back, so no number is consumed and `quote_counter` stays at 14 (also in the SQL header). See the Phase 7 checklist.
+- **For Phase 4 — stored PDF path:** ONE deterministic object path per quote, `quotes-pdf/<quote id>.pdf`, overwritten with upsert on regeneration, so an invalidated PDF never leaves an orphan file. The server sets `pdf_path` in the same update that stores it (the trigger keeps it).
 
 ### Phase 2b notes (owner decisions)
 
