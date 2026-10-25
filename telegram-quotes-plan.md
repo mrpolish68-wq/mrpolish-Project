@@ -136,7 +136,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 0 | Read-only recon | ✅ done |
 | 1 | Chromium PDF spike (`be7fd85`) | ✅ done, approved |
 | 1b | Supabase live check + this plan file | ✅ done (live check 2026-10-25, see "Live DB state") |
-| 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ⏳ |
+| 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ✅ done (see "Phase 2 notes") |
 | 3 | DB migration (**owner approval required before applying**) | ⏳ |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
@@ -193,8 +193,11 @@ Planned changes:
 **Realtime**
 - Add `public.quotes` to the `supabase_realtime` publication, if not already there.
 
-**Open item**
-- Whether quotas count per chat or globally. Default: global per day, matching the Gemini project-level limit.
+**Owner answers (after Phase 1b)**
+- Daily quotas are **GLOBAL** across all chats (store `chat_id = 0` in `telegram_daily_usage`).
+- Starting number for `create_quote`: **pending owner confirmation**; needed only in Phase 3.
+- `receipts` bucket gets limits in Phase 3: `allowed_mime_types = {image/*, application/pdf}`, `file_size_limit` 15 MB.
+- Leaked-password protection: skipped for now.
 
 ### Live DB state (Phase 1b, 2026-10-25)
 
@@ -232,6 +235,18 @@ Migration adjustments from the live state:
 9. **Daily quota table**: `telegram_daily_usage (day date, chat_id bigint, kind text check (kind in ('quote','receipt')), count int, primary key (day, chat_id, kind))`. Increment through one RPC, `consume_daily_quota(kind, chat_id, limit) → remaining`, as an atomic `insert … on conflict do update … where count < limit`. `day = (now() at time zone 'Asia/Jerusalem')::date`. If quotas end up global, store `chat_id = 0`.
 10. **Voice-correction cap** (3 per quote) lives on `telegram_pending_quotes.voice_corrections`, not in the daily table.
 11. **No in-flight receipt drafts** (0 rows), so the migration can be applied at any time without disrupting the receipt flow.
+12. **`receipts` bucket limits** (owner-approved): `image/*` + `application/pdf`, 15 MB.
+
+### Phase 2 notes
+
+- `shared/quote-template.js` (UMD, no deps): `window.MrpQuoteTemplate` in the browser, `module.exports` in Node. Exports `LOGO_DATA_URI`, `A4_HEIGHT_PX`, `WO_CSS`, `esc`, `buildDoc(data, logoSrc)`, `fitToOnePage(doc, maxH)`.
+- `WO_CSS` and `buildDoc` were moved verbatim from `admin.html`. The only output change is the VAT line. `buildDoc` reads `data.vat_mode`: `'exempt'`/missing renders the exempt line; anything else renders the same line plus a `console.warn` (TODO marks where `'licensed'` goes).
+- `admin.html` loads the module in `<head>` (same origin, covered by CSP `script-src 'self'`). Its own `esc` is kept (quote history uses it). The Excel export now reads `MrpQuoteTemplate.LOGO_DATA_URI`.
+- `fitToOnePage` is **not** applied on the panel's html2canvas path. It is self-contained, so the server runs its source in the page via `page.evaluate`.
+- `shared/quote-logo.js` deleted (owner-approved); the logo lives only in the module.
+- `api/spike-quote-pdf.js` renders through the module; `?long=1` renders a 20-line description (fits at 11px + zoom 0.912, one page).
+- Verified: string equality vs `admin.html@7791b29` for 6 inputs + `WO_CSS` + logo; pixel diff old vs new confined to the VAT row (2 stray pixels elsewhere at 1/255 intensity, i.e. invisible); `admin.html` loads the module with no console errors.
+- **For Phase 4:** `buildDoc` always draws 7 ruled lines, so lines 8+ of a long description have no rule under them (pre-existing, kept to preserve identical panel output). Decide whether the server path should add rules to match the line count.
 
 ---
 
