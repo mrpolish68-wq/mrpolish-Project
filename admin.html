@@ -1787,6 +1787,13 @@
             if (started) return;
             started = true;
             try {
+              // Ruled line under every description line + one-page fit (13px floor, no zoom).
+              var fit = MrpQuoteTemplate.fitToOnePage(idoc);
+              if (!fit.fits) {
+                finish(false);
+                alert("התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור");
+                return;
+              }
               window.html2canvas(idoc.querySelector(".wo"), {
                 scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false, imageTimeout: 20000
               }).then(function (canvas) {

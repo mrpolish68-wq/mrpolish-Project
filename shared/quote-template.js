@@ -5,7 +5,9 @@
  *     window.MrpQuoteTemplate, rendered with html2canvas → jsPDF;
  *   - the server PDF renderer (Node): require("../shared/quote-template.js"), rendered with
  *     headless Chromium page.pdf().
- * Keep the two outputs identical by changing the document ONLY here.
+ * Keep the two outputs identical by changing the document ONLY here. Both paths run
+ * fitToOnePage(document) on the rendered document before capturing it (ruled lines + one page).
+ * The server loads this file into the page as a script for that step.
  *
  * html2canvas-safe: html2canvas 1.4.1 throws on modern color syntax, so WO_CSS must use hex
  * colors and physical properties only — NO oklch(), NO gradients. Ruled lines are real
@@ -25,6 +27,21 @@
 
   // A4 page height in CSS px (297mm at 96dpi); the .wo width (794px) is exactly 210mm.
   var A4_HEIGHT_PX = 1123;
+
+  // Description area ("ruled paper"): one rule under EVERY text line, at least MIN_RULES.
+  // Default 16px text on 32px lines. To fit a longer text on one page, first tighten the line
+  // spacing (down to 1.6× the font), then shrink the font, never below MIN_FONT_PX. No zoom.
+  // TARGET_LINES fit at the default 16px font; MAX_LINES is the most that fit at the floor.
+  var DESC = {
+    FONT_PX: 16,
+    LINE_RATIO: 2,
+    MIN_LINE_RATIO: 1.6,
+    MIN_FONT_PX: 13,
+    MIN_RULES: 7,
+    TARGET_LINES: 12,
+    MAX_LINES: 15,
+    CHARS_PER_LINE: 80 // conservative wrap width at 16px, for estimates without a layout engine
+  };
 
   var WO_CSS =
     ".wo,.wo *{box-sizing:border-box;margin:0;padding:0;}" +
@@ -109,36 +126,79 @@
       '</div>';
   }
 
-  // One-page guarantee for the server renderer. Stage 1: shrink only the description text (and
-  // its ruled lines, so they stay aligned) down to an 11px floor. Stage 2, only if a very long
-  // description still overflows at the floor: zoom the whole document uniformly to fit.
-  // NOT applied on admin.html's html2canvas path (that path already scales to one page).
-  // Must stay SELF-CONTAINED (no outer references): the server injects it into the page as
-  // source text via page.evaluate.
-  function fitToOnePage(doc, maxH) {
-    maxH = maxH || 1123;
-    var wo = doc.querySelector(".wo");
+  // Lays out the description of a rendered buildDoc() document (after fonts load): sets the
+  // text's font size and integer line height, counts the real (wrapped) text lines, and redraws
+  // the rules as one line-height-tall bordered div per line (at least MIN_RULES), so each rule
+  // sits at the bottom of its text line's box, at the same offset below the baseline for every
+  // line and at every size. Plain divs + borders only: html2canvas-safe.
+  function layoutDescription(doc, opts) {
+    opts = opts || {};
+    var fontPx = opts.fontPx || DESC.FONT_PX;
+    var lineHeightPx = Math.round(opts.lineHeightPx || fontPx * DESC.LINE_RATIO);
+    var desc = doc.querySelector(".wo-desc");
     var text = doc.querySelector(".wo-desc-text");
-    var rules = doc.querySelectorAll(".wo-rule");
-    var size = 16;
-    var apply = function (s) {
-      var lh = Math.round(s * 2);
-      text.style.fontSize = s + "px";
-      text.style.lineHeight = lh + "px";
-      for (var i = 0; i < rules.length; i++) rules[i].style.height = lh + "px";
+    var rulesBox = doc.querySelector(".wo-rules");
+    text.style.fontSize = fontPx + "px";
+    text.style.lineHeight = lineHeightPx + "px";
+    var lines = Math.round(text.getBoundingClientRect().height / lineHeightPx);
+    var rules = Math.max(DESC.MIN_RULES, lines);
+    var html = "";
+    for (var i = 0; i < rules; i++) html += '<div class="wo-rule" style="height:' + lineHeightPx + 'px"></div>';
+    rulesBox.innerHTML = html;
+    desc.style.minHeight = rules * lineHeightPx + "px";
+    return { fontPx: fontPx, lineHeightPx: lineHeightPx, lines: lines, rules: rules };
+  }
+
+  // Layouts to try, most preferred first: the default 16px font with line spacing tightened
+  // 32px → 26px, then the font shrunk in 0.5px steps to the 13px floor at 1.6× spacing.
+  function fitSteps() {
+    var steps = [];
+    var minAtDefault = Math.round(DESC.FONT_PX * DESC.MIN_LINE_RATIO);
+    for (var lh = Math.round(DESC.FONT_PX * DESC.LINE_RATIO); lh >= minAtDefault; lh--) {
+      steps.push({ fontPx: DESC.FONT_PX, lineHeightPx: lh });
+    }
+    for (var f = DESC.FONT_PX - 0.5; f >= DESC.MIN_FONT_PX; f -= 0.5) {
+      steps.push({ fontPx: f, lineHeightPx: Math.round(f * DESC.MIN_LINE_RATIO) });
+    }
+    return steps;
+  }
+
+  // One-page guarantee, used by BOTH the panel (in its isolated iframe, before html2canvas) and
+  // the server (before page.pdf()). Picks the first layout that fits on one A4 page. If none
+  // does, nothing is shrunk further: returns fits:false so the caller refuses and asks for a
+  // shorter description. maxLines is how many text lines this page can hold at the floor.
+  function fitToOnePage(doc, maxH) {
+    maxH = maxH || A4_HEIGHT_PX;
+    var wo = doc.querySelector(".wo");
+    var desc = doc.querySelector(".wo-desc");
+    var height = function () { return Math.ceil(wo.getBoundingClientRect().height); };
+    var steps = fitSteps();
+    var r;
+    for (var i = 0; i < steps.length; i++) {
+      r = layoutDescription(doc, steps[i]);
+      if (height() <= maxH) {
+        return { fits: true, fontPx: r.fontPx, lineHeightPx: r.lineHeightPx, lines: r.lines, rules: r.rules, height: height() };
+      }
+    }
+    var room = maxH - (height() - Math.ceil(desc.getBoundingClientRect().height));
+    return {
+      fits: false, fontPx: r.fontPx, lineHeightPx: r.lineHeightPx, lines: r.lines, rules: r.rules,
+      height: height(), maxLines: Math.floor(room / r.lineHeightPx)
     };
-    while (wo.scrollHeight > maxH && size > 11) {
-      size -= 0.5;
-      apply(size);
+  }
+
+  // Layout-free estimate for warning BEFORE rendering (bot drafts, panel): wrapped line count at
+  // 16px using a conservative CHARS_PER_LINE. The rendered fitToOnePage() result is the final word.
+  function estimateDescriptionFits(text) {
+    var paras = String(text == null ? "" : text).replace(/\s+$/, "").split("\n");
+    var lines = 0;
+    if (paras.join("") !== "") {
+      for (var i = 0; i < paras.length; i++) lines += Math.max(1, Math.ceil(paras[i].length / DESC.CHARS_PER_LINE));
     }
-    var zoom = 1;
-    if (wo.scrollHeight > maxH) {
-      zoom = Math.floor((maxH / wo.scrollHeight) * 1000) / 1000;
-      wo.style.zoom = String(zoom);
-      wo.style.margin = "0 auto"; // keep the narrower zoomed page horizontally centred
-    }
-    var finalH = Math.ceil(wo.getBoundingClientRect().height);
-    return { size: size, zoom: zoom, height: finalH, fits: finalH <= maxH };
+    return {
+      lines: lines, targetLines: DESC.TARGET_LINES, maxLines: DESC.MAX_LINES,
+      withinTarget: lines <= DESC.TARGET_LINES, fits: lines <= DESC.MAX_LINES
+    };
   }
 
   return {
@@ -147,6 +207,9 @@
     WO_CSS: WO_CSS,
     esc: esc,
     buildDoc: buildDoc,
-    fitToOnePage: fitToOnePage
+    DESC: DESC,
+    layoutDescription: layoutDescription,
+    fitToOnePage: fitToOnePage,
+    estimateDescriptionFits: estimateDescriptionFits
   };
 });

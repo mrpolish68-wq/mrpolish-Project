@@ -137,6 +137,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 1 | Chromium PDF spike (`be7fd85`) | ✅ done, approved |
 | 1b | Supabase live check + this plan file | ✅ done (live check 2026-10-25, see "Live DB state") |
 | 2 | Shared template module, used by `admin.html` (byte-identical panel output), + VAT line change | ✅ done (see "Phase 2 notes") |
+| 2b | Aligned ruled lines under every description line + 13px font floor, both PDF paths | ✅ done (see "Phase 2b notes") |
 | 3 | DB migration (**owner approval required before applying**) | ⏳ |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
@@ -246,7 +247,18 @@ Migration adjustments from the live state:
 - `shared/quote-logo.js` deleted (owner-approved); the logo lives only in the module.
 - `api/spike-quote-pdf.js` renders through the module; `?long=1` renders a 20-line description (fits at 11px + zoom 0.912, one page).
 - Verified: string equality vs `admin.html@7791b29` for 6 inputs + `WO_CSS` + logo; pixel diff old vs new confined to the VAT row (2 stray pixels elsewhere at 1/255 intensity, i.e. invisible); `admin.html` loads the module with no console errors.
-- **For Phase 4:** `buildDoc` always draws 7 ruled lines, so lines 8+ of a long description have no rule under them (pre-existing, kept to preserve identical panel output). Decide whether the server path should add rules to match the line count.
+- ~~For Phase 4: `buildDoc` always draws 7 ruled lines~~. Resolved in Phase 2b.
+
+### Phase 2b notes (owner decisions)
+
+- **Always-aligned rules:** one ruled line under EVERY description text line (wrapped lines included), at the same offset below the baseline for every line, in BOTH the panel PDF and the server PDF. **At least 7 rules** (empty rules continue below a short description, like the paper form).
+- **Font floor 13px, no zoom.** To fit, line spacing is tightened first (16px text, 32px → 26px lines), then the font shrinks in 0.5px steps to 13px (lines = 1.6× font). Nothing is ever zoomed.
+- **≤ 12 lines** fit at the default 16px font (`DESC.TARGET_LINES`). **15 lines** is the absolute max at 13px (`DESC.MAX_LINES`, matches the measured `maxLines`).
+- **Refusal when too long:** `fitToOnePage()` returns `{ fits:false, lines, maxLines }` and never shrinks further. Panel: alert `התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור`, no PDF, no save. Server (Phase 4/5): refuse and ask for a shorter text. The spike shows this as an HTTP 422 notice page for `?long=1`.
+- Module API added: `DESC` constants, `layoutDescription(doc, {fontPx, lineHeightPx})`, `fitToOnePage(doc)` (now runs the layout), `estimateDescriptionFits(text)` (layout-free estimate for warnings; 80 chars/line at 16px). `buildDoc` and `WO_CSS` are unchanged; the layout step rebuilds the rules after render.
+- The server injects the module into the page (`page.addScriptTag`) and calls `MrpQuoteTemplate.fitToOnePage(document)` before `page.pdf()`.
+- Verified on both paths (Chromium print + html2canvas 1.4.1 @2x) for 6 / 12 / 20 lines: rule−baseline distance identical on every line (spread 0px, DOM and pixels), every line has a rule, short + mid at 16px with no zoom, 20 lines → `fits:false`.
+- The panel's html2canvas output relies on Heebo already being loaded by `admin.html` itself (its head loads Google Fonts). If that ever changes, the quote PDF falls back to a system font. The server path embeds the font and is not affected.
 
 ---
 
