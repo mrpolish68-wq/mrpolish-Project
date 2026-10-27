@@ -229,6 +229,9 @@
     .of-field textarea { min-height:130px; resize:vertical; line-height:1.7; }
     .of-field input::placeholder, .of-field textarea::placeholder { color:oklch(0.62 0.01 264); }
     .of-field input:focus, .of-field textarea:focus { outline:0; border-color:var(--gold-500); box-shadow:0 0 0 3px oklch(0.82 0.13 88 / 0.22); }
+    .of-field .of-hint { display:block; margin-block-start:6px; font-size:.75rem; color:oklch(0.62 0.01 264); }
+    .of-field .of-hint[hidden] { display:none; }
+    .qh-src { display:inline-block; margin-inline-start:6px; padding:2px 8px; border-radius:999px; font-size:.72rem; font-weight:700; color:var(--white); background:oklch(0.5 0.12 250); vertical-align:middle; white-space:nowrap; }
     .of-field .with-prefix { position:relative; }
     .of-field .with-prefix span { position:absolute; inset-block-start:50%; inset-inline-start:12px; transform:translateY(-50%); color:var(--gold-400); font-weight:700; }
     .of-field .with-prefix input { padding-inline-start:30px; font-size:1.2rem; font-weight:800; }
@@ -847,6 +850,7 @@
               <div class="of-field">
                 <label for="ofNum">הצעת מחיר מס׳</label>
                 <input id="ofNum" class="of-readonly" readonly />
+                <small class="of-hint" id="ofNumHint">המספר הסופי ייקבע בשמירה</small>
               </div>
               <div class="of-field">
                 <label for="ofDate">תאריך</label>
@@ -1427,7 +1431,8 @@
 
       // getUser() validates the JWT with Supabase; bounce if invalid/expired.
       sb.auth.getUser().then(function (res) {
-        if (res.error || !res.data || !res.data.user) location.replace("login.html");
+        if (res.error || !res.data || !res.data.user) { location.replace("login.html"); return; }
+        startQuotesSync(); // live quote history (Tab 3), only for a verified session
       });
 
       /* ---------- Tab switching ---------- */
@@ -1451,6 +1456,7 @@
 
       /* ---------- Logout ---------- */
       document.getElementById("logoutBtn").addEventListener("click", function () {
+        stopQuotesSync();
         sb.auth.signOut().then(function () { location.replace("login.html"); });
       });
 
@@ -1694,24 +1700,27 @@
 
       /* ---------- Tab 3: Quote (price quote / הצעת מחיר) ---------- */
       var $ = function (id) { return document.getElementById(id); };
-      var SEQ_KEY = "mrp_order_seq"; // legacy localStorage counter — kept as a floor so numbering never
-                                      // goes backward for quotes issued before the "quotes" table existed
+      // Numbering: the DB allocates the number (create_quote RPC, shared with the Telegram bot), so
+      // two devices or the bot can never get the same one. The form only shows an ESTIMATE (max + 1);
+      // the real number comes back from the RPC. The old per-device localStorage counter
+      // ("mrp_order_seq") is no longer used.
       var editingQuoteId = null;     // non-null while the form is editing a saved quote instead of a new one
-      var allQuotes = [];            // full quote history, fetched once from Supabase (lazy-loaded)
+      var allQuotes = [];            // full quote history, fetched from Supabase (lazy-loaded, kept live)
       var quotesLoaded = false;
+      var QUOTE_COLUMNS = "id, number, quote_date, client_name, address, description, total, source, pdf_path";
 
-      function getSeq() { var v = parseInt(localStorage.getItem(SEQ_KEY), 10); return isNaN(v) ? 3 : v; }
-      function setSeq(v) { localStorage.setItem(SEQ_KEY, String(v)); }
       function pad3(n) { return String(n).padStart(3, "0"); }
-      // Next quote number = one past the highest number ever saved (DB is authoritative once loaded),
-      // falling back to the legacy localStorage counter before the table has been fetched.
       function computeNextNumber() {
         var dbMax = allQuotes.reduce(function (m, r) { return Math.max(m, Number(r.number) || 0); }, 0);
-        return Math.max(dbMax + 1, getSeq());
+        return dbMax + 1;
+      }
+      function showNumberEstimate() {
+        $("ofNum").value = quotesLoaded ? pad3(computeNextNumber()) : "…";
+        $("ofNumHint").hidden = false;
       }
 
-      // Prefill quote number + today's date (renumbered once quote history loads)
-      $("ofNum").value = pad3(getSeq());
+      // Prefill the number estimate + today's date (renumbered once quote history loads)
+      showNumberEstimate();
       $("ofDate").value = new Date().toLocaleDateString("he-IL");
 
       /* ---------- Helper calculator (price × m²) ---------- */
@@ -1750,7 +1759,11 @@
       // Renders `data` to a PDF and triggers the download. Shared by the
       // "generate/update" button and the history table's "view/download" action,
       // so a saved quote can be re-produced pixel-identically at any time.
-      function renderQuotePdf(data, onDone) {
+      // opts.checkOnly: lay out + run the one-page fit check only (no PDF), so a new quote is
+      // refused BEFORE a number is allocated. opts.errorText: replaces the generic render error.
+      function renderQuotePdf(data, onDone, opts) {
+        opts = opts || {};
+        var renderErrorText = opts.errorText || "אירעה שגיאה בהפקת ה-PDF. נסו שוב.";
         if (!window.html2canvas || !(window.jspdf && window.jspdf.jsPDF)) {
           alert("ספריות ה-PDF עדיין נטענות. נסו שוב בעוד רגע.");
           onDone(false);
@@ -1794,6 +1807,7 @@
                 alert("התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור");
                 return;
               }
+              if (opts.checkOnly) { finish(true); return; }
               window.html2canvas(idoc.querySelector(".wo"), {
                 scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false, imageTimeout: 20000
               }).then(function (canvas) {
@@ -1806,11 +1820,11 @@
                 finish(true);
               }).catch(function () {
                 finish(false);
-                alert("אירעה שגיאה בהפקת ה-PDF. נסו שוב.");
+                alert(renderErrorText);
               });
             } catch (e) {
               finish(false);
-              alert("אירעה שגיאה בהפקת ה-PDF. נסו שוב.");
+              alert(renderErrorText);
             }
           };
 
@@ -1833,11 +1847,11 @@
         });
       }
 
-      // Persists a quote (insert for a new one, update when editingId is set)
-      // to the "quotes" table so it shows up in the history list.
+      // Persists a quote. New: the create_quote RPC (the DB allocates the number; the same RPC the
+      // Telegram bot uses). Edit: a plain update of the existing row, keeping its number.
+      // cb(ok, savedRow) is always called, also when the request itself fails.
       function saveQuoteToDb(data, editingId, cb) {
-        var payload = {
-          number: parseInt(data.num, 10),
+        var fields = {
           quote_date: data.date,
           client_name: data.client,
           address: data.address,
@@ -1845,13 +1859,128 @@
           total: parseFloat(data.total) || 0
         };
         var query = editingId
-          ? sb.from("quotes").update(payload).eq("id", editingId).select()
-          : sb.from("quotes").insert(payload).select();
+          ? sb.from("quotes").update(Object.assign({ number: parseInt(data.num, 10) }, fields)).eq("id", editingId).select(QUOTE_COLUMNS)
+          : sb.rpc("create_quote", { p: fields });
         query.then(function (res) {
-          if (res.error || !res.data || !res.data[0]) { cb(false); return; }
-          cb(true, res.data[0]);
+          var row = res && res.data ? (Array.isArray(res.data) ? res.data[0] : res.data) : null;
+          if (res.error || !row || !row.id) { cb(false); return; }
+          cb(true, row);
+        }).catch(function () { cb(false); });
+      }
+
+      function upsertQuoteRow(row) {
+        var found = false;
+        allQuotes = allQuotes.map(function (r) { if (r.id === row.id) { found = true; return row; } return r; });
+        if (!found) allQuotes.unshift(row);
+      }
+
+      /* ---------- Server PDF for Telegram quotes ---------- */
+      // Telegram quotes were rendered on the server (headless Chromium) and stored in the private
+      // "quotes-pdf" bucket. pdf_path set -> a short-lived signed URL; pdf_path null (the quote was
+      // edited since, the DB trigger cleared it) -> the server renders it again (Bearer = this
+      // session's token), which also re-stores it.
+      function triggerDownload(href, filename) {
+        var a = document.createElement("a");
+        a.href = href;
+        a.download = filename;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+
+      function renderServerPdf(row, filename, done) {
+        sb.auth.getSession().then(function (sessionRes) {
+          var token = sessionRes && sessionRes.data && sessionRes.data.session && sessionRes.data.session.access_token;
+          if (!token) { alert("פג תוקף ההתחברות. נא להתחבר מחדש."); done(); return; }
+          return fetch("/api/render-quote-pdf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+            body: JSON.stringify({ quote_id: row.id })
+          }).then(function (res) {
+            if (res.status === 422) { alert("התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור"); done(); return; }
+            if (!res.ok) { alert("אירעה שגיאה בהפקת ה-PDF. נסו שוב."); done(); return; }
+            return res.blob().then(function (blob) {
+              var url = URL.createObjectURL(blob);
+              triggerDownload(url, filename);
+              setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+              done();
+            });
+          });
+        }).catch(function () {
+          alert("אירעה שגיאה בהפקת ה-PDF. בדקו את החיבור ונסו שוב.");
+          done();
         });
       }
+
+      function downloadServerPdf(row, done) {
+        var filename = "הצעת-מחיר-" + pad3(row.number) + ".pdf";
+        if (!row.pdf_path) { renderServerPdf(row, filename, done); return; }
+        sb.storage.from("quotes-pdf").createSignedUrl(row.pdf_path, 60, { download: filename }).then(function (res) {
+          if (res.error || !res.data || !res.data.signedUrl) throw new Error("signed url");
+          triggerDownload(res.data.signedUrl, filename);
+          done();
+        }).catch(function () {
+          renderServerPdf(row, filename, done); // the stored file is missing/unreachable: render it again
+        });
+      }
+
+      /* ---------- Live sync (Realtime + wake-up refetch) ---------- */
+      // Any INSERT/UPDATE/DELETE on public.quotes (the bot, another phone, this tab) -> one debounced
+      // refetch. Installed PWAs suspend the socket in the background, so the list is also refetched
+      // when the page becomes visible again or gets focus (at most once per 10 s).
+      var QUOTES_REFRESH_DEBOUNCE_MS = 400;
+      var QUOTES_WAKE_THROTTLE_MS = 10000;
+      var quotesChannel = null;
+      var quotesRefreshTimer = null;
+      var lastWakeRefresh = 0;
+
+      function fetchQuotes() {
+        return sb.from("quotes").select(QUOTE_COLUMNS).order("number", { ascending: false });
+      }
+
+      function refreshQuoteHistory() {
+        if (!quotesLoaded) return; // never opened: the lazy first load will fetch fresh data
+        fetchQuotes().then(function (res) {
+          if (res.error) return; // keep the current list; the next event/wake-up retries
+          allQuotes = res.data || [];
+          renderQuoteHistory();
+          if (!editingQuoteId) showNumberEstimate();
+        }).catch(function () {});
+      }
+
+      function scheduleQuotesRefresh() {
+        clearTimeout(quotesRefreshTimer);
+        quotesRefreshTimer = setTimeout(refreshQuoteHistory, QUOTES_REFRESH_DEBOUNCE_MS);
+      }
+
+      function startQuotesSync() {
+        if (quotesChannel) return;
+        quotesChannel = sb.channel("quotes-sync")
+          .on("postgres_changes", { event: "*", schema: "public", table: "quotes" }, scheduleQuotesRefresh)
+          .subscribe();
+      }
+
+      function stopQuotesSync() {
+        clearTimeout(quotesRefreshTimer);
+        if (quotesChannel) {
+          try { sb.removeChannel(quotesChannel); } catch (e) {}
+          quotesChannel = null;
+        }
+      }
+
+      function wakeRefresh() {
+        if (Date.now() - lastWakeRefresh < QUOTES_WAKE_THROTTLE_MS) return;
+        lastWakeRefresh = Date.now();
+        refreshQuoteHistory();
+      }
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") wakeRefresh();
+      });
+      window.addEventListener("focus", wakeRefresh);
+      sb.auth.onAuthStateChange(function (event) {
+        if (event === "SIGNED_OUT") stopQuotesSync();
+      });
 
       function fmtQuoteAmount(n) {
         return "₪" + Number(n || 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -1875,7 +2004,7 @@
         }
         body.innerHTML = rows.map(function (r) {
           return "<tr>" +
-            "<td>" + pad3(r.number) + "</td>" +
+            "<td>" + pad3(r.number) + (r.source === "telegram" ? '<span class="qh-src" title="נוצרה בבוט הטלגרם">📱 טלגרם</span>' : "") + "</td>" +
             "<td>" + esc(r.quote_date || "") + "</td>" +
             '<td class="col-name">' + esc(r.client_name || "") + "</td>" +
             '<td class="col-desc">' + (r.address ? esc(r.address) : '<span class="leads-muted">—</span>') + "</td>" +
@@ -1902,6 +2031,7 @@
         $("ofTotal").value = row.total;
         $("ofEditingNum").textContent = pad3(row.number);
         $("ofEditingBanner").hidden = false;
+        $("ofNumHint").hidden = true; // an edit keeps the existing number
         document.querySelector("#ofGenerate .shiny-content").textContent = "🔄 עדכן ושמור הצעת מחיר (PDF)";
         document.querySelector(".order-form").scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -1918,7 +2048,7 @@
         $("ofAddress").value = "";
         $("ofDesc").value = "";
         $("ofTotal").value = "";
-        $("ofNum").value = pad3(computeNextNumber());
+        showNumberEstimate();
         $("ofDate").value = new Date().toLocaleDateString("he-IL");
       });
 
@@ -1936,6 +2066,10 @@
           var vrow = findQuote(viewBtn.getAttribute("data-qh-view"));
           if (!vrow) return;
           viewBtn.disabled = true;
+          if (vrow.source === "telegram") {
+            downloadServerPdf(vrow, function () { viewBtn.disabled = false; });
+            return;
+          }
           renderQuotePdf({
             num: pad3(vrow.number), date: vrow.quote_date, client: vrow.client_name,
             address: vrow.address || "—", desc: vrow.description || "—", total: vrow.total
@@ -1946,9 +2080,7 @@
       function loadQuoteHistory() {
         if (quotesLoaded) return;
         quotesLoaded = true;
-        sb.from("quotes")
-          .select("id, number, quote_date, client_name, address, description, total")
-          .order("number", { ascending: false })
+        fetchQuotes()
           .then(function (res) {
             if (res.error) {
               quotesLoaded = false; // allow retry on next open
@@ -1957,24 +2089,25 @@
             }
             allQuotes = res.data || [];
             renderQuoteHistory();
-            if (!editingQuoteId) $("ofNum").value = pad3(computeNextNumber());
+            if (!editingQuoteId) showNumberEstimate();
+          })
+          .catch(function () {
+            quotesLoaded = false;
+            $("qhBody").innerHTML = '<tr><td colspan="6" class="leads-empty">שגיאה בטעינת ההיסטוריה. נסו לרענן.</td></tr>';
           });
       }
 
       $("ofGenerate").addEventListener("click", function () {
         var btn = this;
         var wasEditing = editingQuoteId;
-        // Use the number already shown in the field (kept in sync with computeNextNumber()
-        // whenever history loads/reloads) rather than re-deriving from the legacy localStorage
-        // counter alone — the DB max can be ahead of it (another device, manual DB edit).
-        var num = wasEditing ? $("ofNum").value.trim() : ($("ofNum").value.trim() || pad3(computeNextNumber()));
         var clientName = $("ofClient").value.trim();
         if (!clientName) {
           alert("נא למלא את שם הלקוח.");
           return;
         }
         var data = {
-          num: num,
+          // Edit: the row's own number. New: a placeholder until create_quote returns the real one.
+          num: wasEditing ? $("ofNum").value.trim() : pad3(computeNextNumber()),
           date: $("ofDate").value.trim() || new Date().toLocaleDateString("he-IL"),
           client: clientName,
           address: $("ofAddress").value.trim() || "—",
@@ -1983,30 +2116,52 @@
         };
 
         btn.disabled = true;
-        renderQuotePdf(data, function (ok) {
-          if (!ok) { btn.disabled = false; return; }
-          saveQuoteToDb(data, wasEditing, function (saveOk, savedRow) {
-            btn.disabled = false;
-            if (!saveOk) {
-              alert("ה-PDF הופק בהצלחה, אך אירעה שגיאה בשמירת ההצעה בהיסטוריה. נסו שוב.");
-              return;
-            }
-            if (wasEditing) {
-              allQuotes = allQuotes.map(function (r) { return r.id === savedRow.id ? savedRow : r; });
+
+        if (wasEditing) {
+          // Edit: render, then a plain update of the same row (number unchanged).
+          renderQuotePdf(data, function (ok) {
+            if (!ok) { btn.disabled = false; return; }
+            saveQuoteToDb(data, wasEditing, function (saveOk, savedRow) {
+              btn.disabled = false;
+              if (!saveOk) {
+                alert("ה-PDF הופק בהצלחה, אך אירעה שגיאה בשמירת ההצעה בהיסטוריה. נסו שוב.");
+                return;
+              }
+              upsertQuoteRow(savedRow);
               exitEditMode();
               $("ofClient").value = "";
               $("ofAddress").value = "";
               $("ofDesc").value = "";
               $("ofTotal").value = "";
-            } else {
-              allQuotes.unshift(savedRow);
-              setSeq(parseInt(data.num, 10) + 1);
-            }
-            renderQuoteHistory();
-            $("ofNum").value = pad3(computeNextNumber());
-            $("ofDate").value = new Date().toLocaleDateString("he-IL");
+              renderQuoteHistory();
+              showNumberEstimate();
+              $("ofDate").value = new Date().toLocaleDateString("he-IL");
+            });
           });
-        });
+          return;
+        }
+
+        // New: 1) one-page check (no number used if it's too long), 2) create_quote allocates the
+        // number, 3) render the PDF with that number.
+        renderQuotePdf(data, function (fits) {
+          if (!fits) { btn.disabled = false; return; }
+          saveQuoteToDb(data, null, function (saveOk, savedRow) {
+            if (!saveOk) {
+              btn.disabled = false;
+              alert("שמירת ההצעה נכשלה, וה-PDF לא הופק. בדקו את החיבור ונסו שוב.");
+              return;
+            }
+            upsertQuoteRow(savedRow);
+            renderQuoteHistory();
+            data.num = pad3(savedRow.number);
+            $("ofNum").value = data.num;
+            renderQuotePdf(data, function () {
+              btn.disabled = false;
+              showNumberEstimate();
+              $("ofDate").value = new Date().toLocaleDateString("he-IL");
+            }, { errorText: "ההצעה נשמרה (מס׳ " + data.num + "), אבל הפקת ה-PDF נכשלה. אפשר להוריד אותה מהיסטוריית ההצעות." });
+          });
+        }, { checkOnly: true });
       });
 
       /* ---------- Tab 5: Business Expenses ---------- */

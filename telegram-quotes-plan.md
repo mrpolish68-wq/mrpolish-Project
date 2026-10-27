@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). **Next:** owner live test on the test bot, then Phase 6 (panel sync).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering). **Next:** owner live test on the preview, then Phase 7 (audit, privacy.html, handoff, spike removal, merge).
 
 ---
 
@@ -149,7 +149,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 5c | Quote draft flow in the bot (start, extract, draft message, ✏️ edits, 🎤 corrections, ✂️, ❌; ✅ = claim only) | ✅ done (see "Phase 5c notes") |
 | 5d | ✅ approve → `create_quote` + PDF (`api/render-quote-pdf.js`) + send it in the chat; 📜 recent, 🔍 search, 📄 resend; `tools/cleanup-test-quotes.js` | ✅ done (see "Phase 5d notes") |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
-| 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
+| 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ✅ done (see "Phase 6 notes") |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
 
 **Phase 7 pre-launch checklist (must do before merge):**
@@ -434,6 +434,36 @@ All in `api/telegram-webhook.js` ("Quote drafts" section), using `api/_quote-ext
   - `--apply` deletes `quotes-pdf/<id>.pdf`, then the rows (re-filtered by source + chat), then sets `quote_counter.floor_next = greatest(max(number)+1, 14)` and prints the next number.
   - A dry run never writes. Ran the dry run 2026-10-27: 0 test quotes. `TELEGRAM_TEST_ALLOWED_CHATS=1230764171` added to `.env` (a chat id, not a secret).
 - **Tests (all mocked; no live quotes):** 5d harness 45/45 (happy path payload/headers/filename/caption/order, concurrent double tap, render failure + retry, send failure + retry, 422 + ✂️ + re-render, `create_quote` failure, ❌ after save, missing secret, 📜, 📄 stored/render/fallback/422/unknown, 🔍 incl. escaping + literal match + short input + menu cancel, production host + prod token, PII-free logs). 5c updated 62/62 (its placeholder ✅ checks moved to 5d), 5b 58/58, 5a-2 27/27, 4b 64/64.
+
+### Phase 6 notes
+
+Only `admin.html` changed: the quote tab (its CSS, the number field, the Tab 3 script) plus two session hooks (start sync after `getUser()` verifies the session; stop it on logout).
+- **Live sync:**
+  - After the session is verified: `sb.channel("quotes-sync").on("postgres_changes", { event: "*", schema: "public", table: "quotes" })` → a debounced (400 ms) refetch of the history. RLS limits events to `authenticated`.
+  - The list is also refetched on `visibilitychange` → visible and on `focus`, throttled to once per 10 s, because the installed PWA suspends the socket.
+  - Refetches run only once the history has been opened (the lazy first load fetches fresh anyway) and never touch the form; the number estimate updates unless editing.
+  - Stopped (`removeChannel`) on logout and on the `SIGNED_OUT` auth event.
+- **History:** `source` + `pdf_path` are now selected. Telegram rows get a `📱 טלגרם` pill (`.qh-src`, same shape as the panel's `cq-badge`) next to the number. No badge on panel rows.
+- **Numbering (the Phase 0 number race is fixed):**
+  - New quote: 1) the one-page fit check (`renderQuotePdf(…, { checkOnly: true })`, so a too-long text never uses a number) → 2) the `create_quote` RPC (`p`: date, client, address, description, total; the DB picks the number) → 3) render the PDF **with the returned number**.
+  - The number field shows the estimate (max + 1) with the hint "המספר הסופי ייקבע בשמירה" (hidden while editing). The per-device localStorage counter `mrp_order_seq` is **no longer used** (left in storage, never read or written).
+  - Edit: unchanged order (render → a plain `update().eq("id")`, same number).
+  - `saveQuoteToDb` now always calls back, also when the request rejects (`.catch`): the button is restored and a Hebrew error shown ("שמירת ההצעה נכשלה, וה-PDF לא הופק…" for a new quote; the existing message for an edit). A PDF failure after a successful save says the quote was saved (מס׳ N) and can be downloaded from the history.
+- **PDF for telegram quotes** ("📄 צפה / הורדה"):
+  - `pdf_path` set → `createSignedUrl(path, 60, { download: "הצעת-מחיר-NNN.pdf" })` from `quotes-pdf` → download.
+  - `pdf_path` null (edited since; the trigger cleared it), or the signed URL fails → `POST /api/render-quote-pdf` with `Authorization: Bearer <session access token>` → blob → download. The server also re-stores it and sets `pdf_path`.
+  - 422 → the existing "התיאור ארוך מדי…" alert; other errors → a Hebrew alert.
+  - Panel quotes keep the html2canvas path unchanged.
+- **Tests:** Playwright (`playwright-core@1.64.0` + installed Chrome, installed in the session scratchpad only) against a local static server, with a Supabase client stub injected by an init script (nothing stubbed in the repo) and `/api/render-quote-pdf` mocked. **34/34**:
+  - subscription filter + timing; badge rows + pill style; estimate + hint;
+  - burst of 3 events → exactly 1 refetch; DELETE; visibility/focus refetch + 10 s throttle;
+  - RPC before html2canvas, payload, PDF named with the returned number, no direct insert, localStorage untouched;
+  - too long → no RPC; RPC error/reject → message + button;
+  - edit → `update().eq()` with the same number, no RPC; edit error/reject (`.catch`);
+  - signed-URL download; server render with Bearer; 422 / 500; signed-URL failure → render fallback; panel html2canvas path;
+  - no request reached Supabase; logout `removeChannel` before `signOut`.
+  - Console: zero errors apart from Chrome's own "Failed to load resource" log of the two deliberately injected 422/500 responses.
+- **Follow-up (outside this phase's scope):** the `Content-Security-Policy-Report-Only` header in `vercel.json` has no `wss://mmognkxkglkotzkuxzly.supabase.co` in `connect-src`, so the Realtime socket will produce CSP *reports*. Nothing is blocked (report-only). Add it before the CSP is ever enforced.
 
 ### Phase 2b notes (owner decisions)
 
