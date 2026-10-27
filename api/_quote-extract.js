@@ -24,8 +24,8 @@
 
 const T = require("../shared/quote-template.js");
 
-// Same pinned model as parse-receipt.js. NOTE: on the free tier this model's daily request quota
-// is per Google Cloud project and shared with the receipt scanner (see api/_quota.js).
+// Same pinned model as parse-receipt.js. The key is on a paid Tier 1 project with a monthly spend
+// cap; a 429 or a spend-cap/quota refusal surfaces as ai_busy (see callGemini).
 const GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent";
 const GEMINI_TIMEOUT_MS = 25000;
@@ -254,6 +254,17 @@ function extractQuotaInfo(data) {
   return null;
 }
 
+// Temporary refusals the bot answers with its friendly "busy" message: rate limits (429), overload
+// (503), and quota / spend-cap / billing refusals, which Google may send as 429 RESOURCE_EXHAUSTED
+// or as a 400/403 whose error mentions billing, quota or the spend cap.
+const BUSY_MESSAGE_RE = /billing|quota|spend|budget|exhausted|exceeded/i;
+function isBusyResponse(status, data) {
+  if (status === 429 || status === 503) return true;
+  var err = (data && data.error) || {};
+  if (err.status === "RESOURCE_EXHAUSTED") return true;
+  return (status === 400 || status === 403) && BUSY_MESSAGE_RE.test(String(err.message || ""));
+}
+
 async function callGemini(op, parts, schema, opts) {
   var apiKey = (opts && opts.apiKey) || process.env.GOOGLE_AI_API_KEY;
   var doFetch = (opts && opts.fetch) || fetch;
@@ -278,7 +289,7 @@ async function callGemini(op, parts, schema, opts) {
     }
     var data = null;
     try { data = await res.json(); } catch (e) { data = null; }
-    if (res.status === 429 || res.status === 503) {
+    if (isBusyResponse(res.status, data)) {
       var quota = extractQuotaInfo(data);
       outcome = "ai_busy(" + res.status + (quota ? " " + quota : "") + ")";
       throw new QuoteExtractError("ai_busy", "Gemini HTTP " + res.status, { retryAfter: extractRetryAfter(data), quota: quota });

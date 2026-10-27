@@ -9,20 +9,18 @@
 // midnight Asia/Jerusalem. voiceCorrections is a per-quote cap kept on
 // telegram_pending_quotes.voice_corrections, not a daily quota, so it has a limit here but no RPC.
 //
-// LIMITS were lowered from the planned 15 / 20 / 3: on the Gemini FREE tier, gemini-3.5-flash
-// allows about 20 requests per day per Google Cloud project (measured by others; Google no longer
-// publishes the number, see telegram-quotes-plan.md "Phase 4b notes"). Receipt scans and quote
-// extraction share that same 20, and a quote can cost more than one call (shorten, voice
-// corrections). Budget: 5 quotes × up to 2 calls + 8 receipts = 18, plus 2 corrections per quote
-// eat into the margin; a Gemini 429 still fails gracefully (ai_busy). Raise these if the project
-// moves to a paid tier or the quota page in AI Studio shows a higher limit.
+// LIMITS are the planned 15 / 20 / 3. The Gemini key is on a PAID Tier 1 project (AI Studio shows
+// ~10K requests/day per model), so Google's quota is far above this; what actually bounds usage is
+// the owner's monthly spend cap. These limits keep a runaway loop or abuse from eating that cap.
+// If the cap is reached (or Google rate-limits), Gemini calls fail as ai_busy and the bot shows
+// its friendly "busy" message.
 //
 // Errors: a DB/network failure throws QuotaError("quota_unavailable"); callers fail closed.
 // Tests must never consume the live quota: pass opts.fetch (a mock).
 "use strict";
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
-const LIMITS = Object.freeze({ quote: 5, receipt: 8, voiceCorrections: 2 });
+const LIMITS = Object.freeze({ quote: 15, receipt: 20, voiceCorrections: 3 });
 const DAILY_KINDS = ["quote", "receipt"];
 const FETCH_TIMEOUT_MS = 8000;
 

@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–4b ✅, **next is Phase 5** (bot flow). Open owner decision: Gemini free-tier quota (see "Phase 4b notes").
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5a ✅, **next:** owner sets the preview-only Vercel vars for the TEST bot, then `register` + a receipt sanity test on the preview, then Phase 5 (bot flow).
 
 ---
 
@@ -89,7 +89,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 - At the limit, a friendly message says to try tomorrow or to create the quote manually in the panel.
 - If the Gemini free-tier daily limit for our model turns out to be lower, our quotas are lowered below it, with a margin.
 
-### Privacy (Gemini stays on the FREE tier)
+### Privacy (Gemini: paid Tier 1 project with a spend cap, see "Phase 4b notes"; minimization stays)
 - Audio is never persisted; it stays in memory only.
 - The transcript lives only in the pending draft and is deleted on approve or cancel.
 - Abandoned drafts are swept after 24h.
@@ -143,7 +143,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 3b | Apply the migration (owner-approved) + live verification | ✅ done (see "Phase 3b notes") |
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ✅ (4a + 4b) |
 | 4a | `api/render-quote-pdf.js`: production quote PDF function (auth, storage upsert, `pdf_path`) | ✅ done (see "Phase 4a notes") |
-| 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes"); **limits lowered, owner decision pending** |
+| 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes") |
+| 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); webhook **not registered yet** |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -320,18 +321,27 @@ Migration adjustments from the live state:
 
 **`api/_quota.js`**
 - `consumeQuota(kind) → { ok, remaining }` and `getRemaining(kind)` via `consume_daily_quota` / `get_daily_quota_remaining` with the service key. `kind`: `quote` | `receipt`. `voiceCorrections` is a per-quote cap (on `telegram_pending_quotes`), not an RPC kind. DB/network errors throw `QuotaError("quota_unavailable")`; callers fail closed.
-- **`LIMITS = { quote: 5, receipt: 8, voiceCorrections: 2 }`** (lowered from 15 / 20 / 3, see below).
+- **`LIMITS = { quote: 15, receipt: 20, voiceCorrections: 3 }`** (the planned values; briefly lowered to 5 / 8 / 2 in 4b, restored in 5a, see below).
 
-**Gemini free-tier finding (2026-10-27)**
-- Google no longer publishes the free-tier numbers (the rate-limits doc only points to AI Studio → Rate limit page). Recent independent measurements give **gemini-3.5-flash: 5 RPM / 20 requests per day**, and gemini-3.5-flash-lite about 15 RPM / 500 RPD. Limits are **per Google Cloud project and per model** (extra API keys don't add quota); the daily count resets at **midnight Pacific** (10:00 Israel time), not Israeli midnight.
-- Not yet confirmed on our project: 13 test calls today got no 429. The owner can see the exact numbers in AI Studio → Rate limit. When a 429 does happen, our log line shows Google's quota id and value.
-- Impact: receipt scans (`parse-receipt.js` + the bot) and quote extraction use the SAME model, so they share ~20 calls/day. A quote costs 1 call, +1 if shortened, +1 per voice correction. 15 quotes + 20 receipts can't fit, hence 5 / 8 / 2 (≈ 18 calls in a busy day).
-- **Owner decision needed (before Phase 5 goes live):** (a) keep the low limits; (b) move quote extraction to `gemini-3.5-flash-lite` (separate, much larger quota; Hebrew quality to be re-tested with the same harness); or (c) enable billing (paid tier: much higher limits, and Google doesn't use paid-tier data to improve products, a privacy plus).
+**Gemini tier (corrected 2026-10-27, Phase 5a)**
+- ~~Free tier, ~20 requests/day~~: wrong for us. The 4b note relied on public measurements of the FREE tier. **The owner confirmed the key is on a PAID Tier 1 project**: AI Studio shows ~10K requests/day per model. There is a **monthly spend cap (~40 ILS) shared with another project**; that cap is the real bound, not Google's request quota.
+- Decision (owner): **keep `gemini-3.5-flash` for quotes** (no flash-lite), and restore the limits to **15 quotes / 20 receipts per day, 3 voice corrections per quote**. They exist to protect the spend cap from a runaway loop or abuse.
+- Spend cap reached or a 429 → `ai_busy` → the bot shows its friendly "busy" message. `isBusyResponse` maps 429, 503, `RESOURCE_EXHAUSTED`, and 400/403 refusals mentioning billing / quota / spend / budget to `ai_busy`; other 4xx stay `ai_failed`.
+- Privacy note: on a paid tier Google doesn't use prompts/responses to improve its products. The minimization rules below (phones stripped, no history, audio not stored, PII-free logs) stay anyway.
 
 **Tests (fake data only)**
 - Offline (mocks, 0 calls, no network): 60/60. Covers `parseAmount` (17 phrasings), phone stripping (7 formats stripped, 5 non-phones kept), the total-evidence rule, item math, mismatch, "never from items", empty input makes no call, phone not in the request, 429/500/bad JSON/network/bad MIME typing, the shorten flow (once, re-check, `too_long`), correction keeping the old total, and quota with a mocked RPC (consume, at limit, remaining, invalid kind, HTTP error, bad response).
 - Live (gemini-3.5-flash, 13 calls, spaced for 5 RPM): 14/14. 10 text cases (full, missing price, hesitations, number words, 3 items, mismatch, phone, correction, garbage, empty) + 4 TTS voice clips (`gemini-3.8-flash-tts`, saved to `test-audio/`, gitignored + vercelignored): full quote, no price, hesitant, voice correction.
 - Latency: 5–9 s per call (text and audio).
+
+### Phase 5a notes
+
+- **Test bot:** `@Mrpolish_test_quotes_bot` (id 9206562607), token in `.env` as `TELEGRAM_TEST_BOT_TOKEN`. **Miri's production bot is not touched until the final merge.**
+- **`tools/set-test-webhook.js`** (`chatid` | `register [baseUrl]` | `info` | `delete`): uses `TELEGRAM_TEST_BOT_TOKEN` only; **refuses to run** if it equals `TELEGRAM_BOT_TOKEN` or has the same bot id (checked before any Telegram call). `register` appends `TELEGRAM_TEST_WEBHOOK_SECRET` to `.env` if missing, then sets the webhook to the branch alias `https://mrpolish-project-git-feature-telegram-quotes-polish1.vercel.app/api/telegram-webhook?x-vercel-protection-bypass=<VERCEL_AUTOMATION_BYPASS_SECRET>` with `secret_token`. `info` redacts the URL's query (it carries the bypass secret). Nothing secret is printed.
+- **Branch alias verified:** it serves the latest branch deployment, and the bypass query param gets through Vercel Authentication (GET `/api/telegram-webhook` → our 405; POST `/api/render-quote-pdf` without auth → our 401).
+- **Preview-only env vars** (owner sets them in Vercel; Production unchanged): `TELEGRAM_BOT_TOKEN` = test token, `TELEGRAM_WEBHOOK_SECRET` = `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_CHATS` = the owner's chat id with the test bot.
+- `chatid` on 2026-10-27 returned no updates (Telegram keeps undelivered updates for 24h only); the owner re-sends a message and re-runs it.
+- **Next:** after the preview vars are set and the preview redeployed → `register`, then the receipt sanity test (photo → existing receipt flow end to end on the preview).
 
 ### Phase 2b notes (owner decisions)
 
