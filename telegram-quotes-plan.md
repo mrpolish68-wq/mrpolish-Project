@@ -150,6 +150,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 5d | ✅ approve → `create_quote` + PDF (`api/render-quote-pdf.js`) + send it in the chat; 📜 recent, 🔍 search, 📄 resend; `tools/cleanup-test-quotes.js` | ✅ done (see "Phase 5d notes") |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ✅ done (see "Phase 6 notes") |
+| 6b | Bot UX fixes from the live test: open-draft amount / follow-up prompt, address format, money format | ✅ done (see "Phase 6b notes") |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
 
 **Phase 7 pre-launch checklist (must do before merge):**
@@ -464,6 +465,28 @@ Only `admin.html` changed: the quote tab (its CSS, the number field, the Tab 3 s
   - no request reached Supabase; logout `removeChannel` before `signOut`.
   - Console: zero errors apart from Chrome's own "Failed to load resource" log of the two deliberately injected 422/500 responses.
 - **Follow-up (outside this phase's scope):** the `Content-Security-Policy-Report-Only` header in `vercel.json` has no `wss://mmognkxkglkotzkuxzly.supabase.co` in `connect-src`, so the Realtime socket will produce CSP *reports*. Nothing is blocked (report-only). Add it before the CSP is ever enforced.
+
+### Phase 6b notes (from the owner's live test)
+
+- **(a) Messages while a draft is OPEN.** Open = no `quote_id` and not claimed by an approve in progress. Routing order: menu → pending edit → chat state → photo/document (receipt) → **open draft** → quote start → unclear.
+  - A message that is **only an amount** (`QX.isAmountOnly`: digits with commas/decimals, or Hebrew number words, optional ₪ / ש"ח / שקל) → the total is updated in code (`parseAmount`, 0 < n < 1,000,000), the draft message is edited in place, and the bot replies `✏️ הסכום עודכן ל-4,200 ₪`. This is the live-test case: "3000" (awaited) then "4200" used to get "לא בטוח שהבנתי".
+  - Any other text or voice (not a menu label/command, not a bare quote trigger) → `יש טיוטה פתוחה (<client>). לעדכן אותה?`:
+    - `✏️ לתקן את הטיוטה` (`q:fix`): `applyCorrection` with the parked message; counts toward the 3-correction cap; hidden, with an explanation, once the cap is used;
+    - `🧾 הצעה חדשה` (`q:new`): the old draft is deleted and the parked message becomes the new quote (same path as the conflict choice);
+    - `✖️ התעלם` (`q:skip`).
+  - The message is parked in `telegram_chat_state` (`draft_followup`, `context = { input, draft_id }`, 30-min freshness): the text, or the voice note's Telegram `file_id` (re-downloaded into memory only when ✏️ is tapped). Never the audio.
+  - A bare trigger ("תכין לי הצעת מחיר") still gets the continue/new choice. Menu labels, commands and photos are unaffected.
+  - `processQuoteCorrection` now takes a quote input (text or voice reference) instead of a Telegram message.
+- **(b) Address format "<street> <number>, <city>":**
+  - the extraction prompt now says so, with "use only the parts that were said; never invent or guess a street, number or city";
+  - plus `normalizeAddress` in code, which only reorders, never adds. A known city said first is moved last ("רעננה אהרון 2" → "אהרון 2, רעננה"). "<street> <number> [ב]<city>" gets its comma; the ב is dropped only when the rest is a known city, so "בת ים" / "באר שבע" / "בית שמש" stay intact. Addresses that already have a comma, or no number, are left as said. Manual ✏️ כתובת edits are kept exactly as typed.
+- **(c) Money "4,200 ₪"** (number, space, ₪, like the PDF) everywhere in the bot: both formatters (`fmtShekel` for quotes, `fmtMoney` for receipts and the monthly summary), so drafts, warnings, captions, lists, receipt summaries and the summary all match.
+- **Tests:** 5c harness extended to 93/93.
+  - (a): the live-test replay, 4 amount spellings, the follow-up prompt + parked text/voice, ✏️ via text and via voice (downloaded only on tap), ✖️, the cap, a forged ✏️, an expired parked message, menu/photo unaffected, claimed and quoted drafts not "open".
+  - (b): the screenshot address + 5 normalization cases + the prompt rule.
+  - (c): every amount the bot sent during the run checked for the "<number> ₪" order, receipts included.
+  - The earlier suites, updated for the new formats/behavior: 5d 45/45, 5b 58/58, 5a-2 27/27, 4b 64/64, panel Playwright 34/34.
+  - Note: the harness hit the bot's real per-chat quote rate limit (10 / 10 min) on one chat, which is correct behavior, so the later checks run on a fresh chat.
 
 ### Phase 2b notes (owner decisions)
 

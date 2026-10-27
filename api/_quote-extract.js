@@ -153,6 +153,46 @@ function verifyStatedTotal(stated, evidence, source, items) {
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
+// True when the whole message is just an amount: digits (commas/decimals) or Hebrew number words,
+// optionally with ₪ / ש"ח / שקל(ים). "4200", "4,200 ₪", "ארבעת אלפים ומאתיים" -> true;
+// "סה"כ 4200", "40 מטר" -> false.
+function isAmountOnly(text) {
+  var t = String(text || "").replace(/₪|ש["״'׳]?ח|שקלים|שקל/g, " ").trim();
+  if (!t) return false;
+  var tokens = t.match(/\d[\d,]*(?:\.\d+)?|[א-ת׳״'"]+|\S/g) || [];
+  return tokens.length > 0 && tokens.every(function (tok) { return /^\d[\d,]*(?:\.\d+)?$/.test(tok) || heWord(tok) !== null; });
+}
+
+// ---------------------------------------------------------------------------
+// Address: "<street> <number>, <city>" (light normalization; nothing is ever added)
+// ---------------------------------------------------------------------------
+
+// Common cities in the service area, to recognize a city said FIRST ("רעננה אהרון 2"). Longest first.
+const KNOWN_CITIES = ["ראשון לציון", "פתח תקווה", "פתח תקוה", "מבשרת ציון", "מעלה אדומים", "גבעת שמואל", "קריית אונו", "קרית אונו",
+  "רמת השרון", "הוד השרון", "כפר סבא", "כפר יונה", "אבן יהודה", "בית שמש", "תל אביב", "רמת גן", "בת ים", "נס ציונה", "ראש העין",
+  "באר שבע", "אור יהודה", "רעננה", "נתניה", "הרצליה", "ירושלים", "גבעתיים", "חיפה", "מודיעין", "רחובות", "אשדוד", "חולון", "קדימה",
+  "צורן", "אפרת", "יהוד", "לוד", "רמלה", "אשקלון"].sort(function (a, b) { return b.length - a.length; });
+
+function normalizeAddress(s) {
+  if (!s) return s;
+  var a = String(s).replace(/\s+/g, " ").replace(/\s+,/g, ",").replace(/,(\S)/g, ", $1").trim();
+  if (a.indexOf(",") !== -1) return a; // already split into parts: leave as said
+  // "<city> <street> <number>" -> "<street> <number>, <city>"
+  for (var i = 0; i < KNOWN_CITIES.length; i++) {
+    var c = KNOWN_CITIES[i];
+    if (a.indexOf(c + " ") === 0 && /\d/.test(a.slice(c.length))) return a.slice(c.length + 1) + ", " + c;
+  }
+  // "<street> <number> <city>" / "<street> <number> ב<city>" -> "<street> <number>, <city>".
+  // The "ב" is dropped only when the rest is a known city, so "בת ים" / "באר שבע" stay intact.
+  var m = a.match(/^(.*\D\s\d+[א-ת]?)\s+([^\d,]+)$/);
+  if (m) {
+    var city = m[2].trim();
+    if (city[0] === "ב" && KNOWN_CITIES.indexOf(city) === -1 && KNOWN_CITIES.indexOf(city.slice(1)) !== -1) city = city.slice(1);
+    return m[1] + ", " + city;
+  }
+  return a;
+}
+
 // ---------------------------------------------------------------------------
 // Gemini
 // ---------------------------------------------------------------------------
@@ -198,7 +238,10 @@ const BUSINESS =
 
 const FIELD_RULES =
   "Rules:\n" +
-  "- client_name / address: exactly as said; null if not said. Never invent them.\n" +
+  "- client_name: exactly as said; null if not said. Never invent it.\n" +
+  "- address: written as \"<street> <number>, <city>\" (e.g. \"אהרון 2, רעננה\", \"הרצל 12, נתניה\"), whatever order it was " +
+  "said in. Use only the parts that were said: no number said -> \"<street>, <city>\"; no city said -> \"<street> <number>\". " +
+  "Never invent or guess a street, number or city. null if no address was said.\n" +
   "- items: one entry per job/service. area_m2 for square meters (מטר / מ\"ר / מטר רבוע), quantity for " +
   "counted things (מדרגות, יחידות); for a fixed-price item set quantity 1. unit_price only if a price per unit " +
   "(or a fixed price for that item) was explicitly said. Approximate words (בערך, כ-, ~) still give the number; " +
@@ -416,7 +459,7 @@ function buildDraft(raw, source, transcript, todayIL, fallback) {
   var description = lines.join("\n");
   var draft = {
     client_name: cleanStr(raw.client_name, 120),
-    address: cleanStr(raw.address, 200),
+    address: normalizeAddress(cleanStr(raw.address, 200)),
     items: items,
     items_sum: itemsSum,
     total: total,
@@ -530,6 +573,8 @@ module.exports = {
   todayIL: todayIL,
   // used by the bot's manual edits (code only, no AI) and the ✂️ button
   parseAmount: parseAmount,
+  isAmountOnly: isAmountOnly,
+  normalizeAddress: normalizeAddress,
   stripPhones: stripPhones,
   shortenIfTooLong: ensureFits,
   shortenDescription: shortenDescription,

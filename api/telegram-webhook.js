@@ -416,8 +416,9 @@ function mimeFromTelegramDocument(doc) {
   return null;
 }
 
+// Money everywhere in the bot reads like the PDF: the number, a space, then ₪ ("4,200 ₪").
 function fmtMoney(n) {
-  return "₪" + Number(n).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(n).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₪";
 }
 
 function pad2(n) { return n < 10 ? "0" + n : String(n); }
@@ -1000,7 +1001,7 @@ async function loadDraftRow(id) {
 }
 
 function fmtShekel(n) {
-  return "₪" + Number(n).toLocaleString("he-IL", { maximumFractionDigits: 2 });
+  return Number(n).toLocaleString("he-IL", { maximumFractionDigits: 2 }) + " ₪";
 }
 
 // Re-derives everything that depends on the fields: description text, one-page fit
@@ -1092,6 +1093,58 @@ function awaitingPatchFor(d) {
   return d.total == null
     ? { awaiting_edit_field: "total", awaiting_since: new Date().toISOString() }
     : { awaiting_edit_field: null, awaiting_since: null };
+}
+
+// --- follow-up messages while a draft is OPEN (Phase 6b) ---
+// Open = not yet approved: no quote created and not claimed by an approve in progress.
+async function findOpenDraft(chatId) {
+  try {
+    var row = await findActiveDraft(chatId);
+    if (!row || row.quote_id) return null;
+    if (row.claimed_at && Date.now() - new Date(row.claimed_at).getTime() < QUOTE_CLAIM_LEASE_MS) return null;
+    return row;
+  } catch (err) {
+    console.error("[telegram-webhook] open draft lookup failed: " + err.message);
+    return null;
+  }
+}
+
+// A message that is only an amount ("4200", "4,200 ₪", "ארבעת אלפים") = the new final price. Code only.
+async function updateDraftTotal(row, text, chatId) {
+  var n = parseQuoteTotal(text);
+  if (n == null) { await tgCallSafe("sendMessage", { chat_id: chatId, text: EDIT_RETRY_TEXT.total }); return; }
+  var d = row.draft;
+  d.total = n;
+  d.total_source = "manual";
+  recomputeDraft(d);
+  try {
+    await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), Object.assign({ draft: d }, awaitingPatchFor(d)));
+  } catch (err) {
+    console.error("[telegram-webhook] draft total patch failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה בעדכון. נסו שוב." });
+    return;
+  }
+  await showDraft(row, chatId, null);
+  await tgCallSafe("sendMessage", { chat_id: chatId, text: "✏️ הסכום עודכן ל-" + fmtShekel(n) });
+}
+
+// Any other text/voice: ask what to do with it. The message is parked in chat state (text, or the
+// voice note's Telegram file_id; never the audio) until a button is tapped.
+async function askDraftFollowup(row, input, chatId) {
+  try { await setChatState(chatId, "draft_followup", { input: input, draft_id: row.id }); } catch (err) {
+    console.error("[telegram-webhook] " + err.message);
+  }
+  var canCorrect = (row.voice_corrections || 0) < LIMITS.voiceCorrections;
+  var buttons = [];
+  if (canCorrect) buttons.push({ text: "✏️ לתקן את הטיוטה", callback_data: "q:fix:" + row.id });
+  buttons.push({ text: "🧾 הצעה חדשה", callback_data: "q:new:" + row.id });
+  buttons.push({ text: "✖️ התעלם", callback_data: "q:skip:" + row.id });
+  await tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: "יש טיוטה פתוחה" + (row.draft && row.draft.client_name ? " (" + row.draft.client_name + ")" : "") + ". לעדכן אותה?" +
+      (canCorrect ? "" : "\n(נגמרו " + LIMITS.voiceCorrections + " התיקונים להצעה הזו. אפשר לערוך בכפתורי ✏️ שבטיוטה.)"),
+    reply_markup: { inline_keyboard: [buttons] }
+  });
 }
 
 // Entry point for 🧾 / /quote / keyword text / voice. input = null for a bare trigger.
@@ -1254,7 +1307,7 @@ async function processQuoteEditReply(awaiting, msg, chatId) {
   if (!row) return;
   var field = row.awaiting_edit_field;
 
-  if (field === "voice") return processQuoteCorrection(row, msg, chatId);
+  if (field === "voice") return processQuoteCorrection(row, quoteInputFromMessage(msg), chatId);
 
   var text = typeof msg.text === "string" ? msg.text.trim() : "";
   var d = row.draft;
@@ -1273,14 +1326,14 @@ async function processQuoteEditReply(awaiting, msg, chatId) {
   await showDraft(row, chatId, "✏️ עודכן: " + QUOTE_FIELD_LABEL[field]);
 }
 
-async function processQuoteCorrection(row, msg, chatId) {
+// input = { kind: "text", text } | { kind: "voice", file_id, … } (a voice note is re-downloaded by file_id).
+async function processQuoteCorrection(row, input, chatId) {
   var used = row.voice_corrections || 0;
   if (used >= LIMITS.voiceCorrections) {
     await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), { awaiting_edit_field: null, awaiting_since: null }).catch(function () {});
     await tgCallSafe("sendMessage", { chat_id: chatId, text: "כבר השתמשנו ב-" + LIMITS.voiceCorrections + " תיקונים להצעה הזו. אפשר לערוך עם כפתורי ✏️." });
     return;
   }
-  var input = quoteInputFromMessage(msg);
   if (!input) { await tgCallSafe("sendMessage", { chat_id: chatId, text: QUOTE_FIELD_PROMPT.voice }); return; }
   var limitErr = voiceLimitError(input);
   if (limitErr) { await tgCallSafe("sendMessage", { chat_id: chatId, text: limitErr }); return; }
@@ -1611,7 +1664,7 @@ async function processQuoteCallback(query, chatId) {
       });
       if (row.message_id) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: row.message_id, text: "🧾 הטיוטה הקודמת בוטלה." });
     }
-    var input = state && state.state === "quote_conflict" && state.context ? state.context.input : null;
+    var input = state && (state.state === "quote_conflict" || state.state === "draft_followup") && state.context ? state.context.input : null;
     if (input) await createDraftFrom(chatId, input);
     else await startQuote(chatId, null);
     return;
@@ -1635,6 +1688,20 @@ async function processQuoteCallback(query, chatId) {
   // Once the quote exists (number taken), only 🔄 retry / ✂️ shorten / ❌ make sense for this draft.
   if (row.quote_id && action !== "retry" && action !== "short" && action !== "ok") {
     await cbNotice(chatId, "ההצעה כבר נשמרה (מס׳ " + pad3(d.quote_number) + "). אפשר ✂️ לקצר או 🔄 לנסות שוב, ולשנות פרטים בלוח הבקרה.");
+    return;
+  }
+
+  if (action === "fix" || action === "skip") {
+    var fstate = await getChatState(chatId);
+    var parked = fstate && fstate.state === "draft_followup" && fstate.context && fstate.context.draft_id === row.id ? fstate.context.input : null;
+    await clearChatState(chatId);
+    if (tappedMessageId) await tgCallSafe("editMessageReplyMarkup", { chat_id: chatId, message_id: tappedMessageId, reply_markup: { inline_keyboard: [] } });
+    if (action === "skip") {
+      await tgCallSafe("sendMessage", { chat_id: chatId, text: "בסדר, הטיוטה נשארה כמו שהיא." });
+      return;
+    }
+    if (!parked) { await cbNotice(chatId, "ההודעה כבר לא זמינה. שלחו אותה שוב."); return; }
+    await processQuoteCorrection(row, parked, chatId); // counts toward the 3-correction cap
     return;
   }
 
@@ -1924,6 +1991,19 @@ async function routeMessage(msg, chatId) {
     if (!(await withinFlowLimit("receipt", chatId))) return;
     await processReceiptMessage(msg, chatId);
     return;
+  }
+
+  // An OPEN draft: a bare amount updates its price; other text/voice asks what to do with it.
+  // (A bare quote trigger like "תכין לי הצעת מחיר" still goes to the continue/new choice below.)
+  var bareTrigger = !isVoice && QUOTE_INTENT_RE.test(text) && isTriggerOnly(text);
+  if ((text || isVoice) && !bareTrigger) {
+    var open = await findOpenDraft(chatId);
+    if (open) {
+      if (!(await withinFlowLimit("quote", chatId))) return;
+      if (!isVoice && QX.isAmountOnly(text)) await updateDraftTotal(open, text, chatId);
+      else await askDraftFollowup(open, quoteInputFromMessage(msg), chatId);
+      return;
+    }
   }
 
   if (isVoice || QUOTE_INTENT_RE.test(text)) {
