@@ -19,6 +19,10 @@
     "api/spike-quote-pdf.js": {
       "maxDuration": 60,
       "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,shared/fonts/**}"
+    },
+    "api/render-quote-pdf.js": {
+      "maxDuration": 60,
+      "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,shared/fonts/**}"
     }
   },
   "headers": [

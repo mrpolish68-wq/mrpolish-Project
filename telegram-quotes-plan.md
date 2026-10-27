@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-26: Phases 0–3b ✅, **next is Phase 4**.
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–3b ✅, 4a ✅ (production PDF function), **next is the rest of Phase 4** (Gemini quote extraction + quotas).
 
 ---
 
@@ -141,7 +141,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 2b | Aligned ruled lines under every description line + 13px font floor, both PDF paths | ✅ done (see "Phase 2b notes") |
 | 3a | DB migration file `supabase-quotes-telegram.sql` (written + tested locally, **not applied**) | ✅ done (see "Phase 3a notes") |
 | 3b | Apply the migration (owner-approved) + live verification | ✅ done (see "Phase 3b notes") |
-| 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ |
+| 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ (4a ✅) |
+| 4a | `api/render-quote-pdf.js`: production quote PDF function (auth, storage upsert, `pdf_path`) | ✅ done (see "Phase 4a notes") |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -280,6 +281,24 @@ Migration adjustments from the live state:
 - **Advisors — new items:** INFO `rls_enabled_no_policy` on the 5 new tables (intended); INFO `unused_index` on the new bot-table indexes (tables empty); **WARN `authenticated_security_definer_function_executable` on `create_quote`** — intended (the panel calls it from Phase 6; authenticated callers can't set source/chat and are validated). No new anon-facing warnings.
 - **Test-data rule:** any test that calls `create_quote` or `consume_daily_quota` against the LIVE project must run in a single transaction that is rolled back, so no number is consumed and `quote_counter` stays at 14 (also in the SQL header). See the Phase 7 checklist.
 - **For Phase 4 — stored PDF path:** ONE deterministic object path per quote, `quotes-pdf/<quote id>.pdf`, overwritten with upsert on regeneration, so an invalidated PDF never leaves an orphan file. The server sets `pdf_path` in the same update that stores it (the trigger keeps it).
+
+### Phase 4a notes
+
+- **File:** `api/render-quote-pdf.js` (CommonJS), reusing the spike's render path: puppeteer-core + @sparticuz/chromium, `shared/quote-template.js` (`buildDoc` + `WO_CSS`, then the module injected with `addScriptTag` and `fitToOnePage(document)` before `page.pdf()`), Heebo embedded from `shared/fonts/`. One A4 page, never zoomed. `vercel.json`: `maxDuration 60` + the same `includeFiles` as the spike.
+- **API:** `POST { quote_id }`.
+  - Auth: `X-Internal-Secret` == `INTERNAL_API_SECRET` (constant-time `safeEqual`; a secret shorter than 32 chars disables this path) **or** `Authorization: Bearer <Supabase access token>` verified via `/auth/v1/user`. Otherwise 401. If `X-Internal-Secret` is sent, it must match (no fallback to the bearer path).
+  - Rate limit: `_rate-limit.js`, 30 per 5 min per IP, applied before auth.
+  - Loads only `id, number, quote_date, client_name, address, description, total, vat_mode, updated_at` with the service-role key. Malformed id → 400, missing → 404.
+  - Row → template mapping is the panel's (`num` = 3-digit padded number, blank address/description → `—`).
+  - Too long (`fits:false`) → **422 `{ error:"too_long", lines, maxLines }`**, nothing stored.
+  - Upload to `quotes-pdf/<id>.pdf` (`x-upsert: true`), then `PATCH quotes set pdf_path = '<id>.pdf'` (nothing else) **conditioned on `updated_at` as loaded**: if the quote was edited while rendering, `pdf_path` is not linked and the caller gets **409 `quote_changed`** (re-render). The stale object is overwritten by the next render.
+  - 200: PDF bytes (`application/pdf`) + `X-Pdf-Path: <id>.pdf` (+ `X-Desc-Lines`, `X-Desc-Font-Px`).
+- **Test-only modes** (`VERCEL_ENV !== "production"`, which includes local): `{ test_data: {num,date,client,address,desc,total,vat_mode} }` and `{ quote_id, dry_run: true }`. Both render and return the PDF without touching Storage or writing to the DB. Production rejects both with 400.
+- **Local runs:** outside Vercel, `LOCAL_CHROME_PATH` (the installed Chrome) is used instead of @sparticuz/chromium.
+- **Logs:** one line per request: `status, mode, cold, launchMs, renderMs, storeMs, totalMs, lines`. No ids, no content, no response bodies.
+- **Secret:** `tools/ensure-internal-api-secret.js` appends `INTERNAL_API_SECRET` (32 random bytes, hex) to `.env` only if missing, never prints it. It must also be set on Vercel (Preview + Production).
+- **Local tests (13/13):** test_data short → 1-page PDF (3 lines, 16px); mid → 1-page PDF (12 lines, 16px); long → 422 (20 lines, max 15); no secret / wrong secret / invalid session → 401; GET → 405; malformed id → 400; unknown id → 404; one real quote, dry run → rendered OK, 1 page, 8 lines (no PII printed); quotes with `pdf_path` before/after = 0/0 (no DB write); production rejects test_data and dry_run → 400. Timings locally: cold ~1.9s, warm ~1.0s.
+- **Not done yet (rest of Phase 4):** a real store-and-link run against the live bucket (first one happens on the preview, or from the bot in Phase 5); the Gemini quote-extraction module; quota tracking. The spike stays until Phase 7.
 
 ### Phase 2b notes (owner decisions)
 
