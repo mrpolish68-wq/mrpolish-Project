@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–3b ✅, 4a ✅ (production PDF function), **next is the rest of Phase 4** (Gemini quote extraction + quotas).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–4b ✅, **next is Phase 5** (bot flow). Open owner decision: Gemini free-tier quota (see "Phase 4b notes").
 
 ---
 
@@ -141,8 +141,9 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 2b | Aligned ruled lines under every description line + 13px font floor, both PDF paths | ✅ done (see "Phase 2b notes") |
 | 3a | DB migration file `supabase-quotes-telegram.sql` (written + tested locally, **not applied**) | ✅ done (see "Phase 3a notes") |
 | 3b | Apply the migration (owner-approved) + live verification | ✅ done (see "Phase 3b notes") |
-| 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ (4a ✅) |
+| 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ✅ (4a + 4b) |
 | 4a | `api/render-quote-pdf.js`: production quote PDF function (auth, storage upsert, `pdf_path`) | ✅ done (see "Phase 4a notes") |
+| 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes"); **limits lowered, owner decision pending** |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -299,6 +300,38 @@ Migration adjustments from the live state:
 - **Secret:** `tools/ensure-internal-api-secret.js` appends `INTERNAL_API_SECRET` (32 random bytes, hex) to `.env` only if missing, never prints it. It must also be set on Vercel (Preview + Production).
 - **Local tests (13/13):** test_data short → 1-page PDF (3 lines, 16px); mid → 1-page PDF (12 lines, 16px); long → 422 (20 lines, max 15); no secret / wrong secret / invalid session → 401; GET → 405; malformed id → 400; unknown id → 404; one real quote, dry run → rendered OK, 1 page, 8 lines (no PII printed); quotes with `pdf_path` before/after = 0/0 (no DB write); production rejects test_data and dry_run → 400. Timings locally: cold ~1.9s, warm ~1.0s.
 - **Not done yet (rest of Phase 4):** a real store-and-link run against the live bucket (first one happens on the preview, or from the bot in Phase 5); the Gemini quote-extraction module; quota tracking. The spike stays until Phase 7.
+
+### Phase 4b notes
+
+**`api/_quote-extract.js`** (helper, not a route; own Gemini call, same model/endpoint style as `parse-receipt.js`, which is unchanged)
+- `extractQuote({ text } | { audio, mimeType }, { todayIL })` and `applyCorrection(draft, { text } | { audio, mimeType })` return a draft: `client_name, address, items[{service, area_m2, quantity, unit, unit_price, notes, line_total}], items_sum, total, total_source, quote_date, quote_date_stated, description_lines, description, transcript, missing[], warnings[], fit`.
+- Gemini's structured output (`responseSchema`): `client_name, address, items[], stated_total, stated_total_evidence, quote_date, description_lines, transcript, missing[]`.
+- **Code rules:**
+  - Item math (`line_total` = unit price × area or quantity, `items_sum`) is computed in code.
+  - `total` comes ONLY from `stated_total`, and only when its evidence (a) appears verbatim in the user's text or transcript (letters and digits compared, punctuation and spacing ignored) and (b) encodes the same number: digits, "4.5 אלף", or Hebrew number words (`parseAmount`: "ארבעת אלפים וחמש מאות", "שלושת אלפים ומאתיים", "אלף וחצי"…). A stated total equal to an item's unit price is rejected unless the evidence has a total cue word (סה"כ / סופי / כולל…). Never filled from items. No total → `missing` includes `"total"`.
+  - Items fully priced and sum ≠ stated total → keep the stated total + warning `sum_mismatch {items_sum, total}`.
+  - `missing` is computed in code (`client_name`, `address`, `description`, `total`); nothing at all → warning `no_quote_content`.
+  - Description lines with a total (סה"כ / סך הכל) are dropped (the total is printed once, in its box). The prompt forbids computed results in the description.
+  - Date: only when said (`D.M.YYYY`), otherwise `todayIL` (Asia/Jerusalem, he-IL format).
+  - Corrections: the full draft is updated, but the total changes only with evidence in the CORRECTION message; otherwise the previous total stays.
+- **Fit:** `estimateDescriptionFits`; if it won't fit (> 15 lines), exactly one `shorten()` call, then a re-check; still too long → warning `too_long`.
+- **Privacy:** phones are stripped from text before sending (Israeli local / +972 formats, and any run of 9+ digits) and from every output string (`[מספר הוסר]`). Gemini gets only the current message (plus the current draft for a correction). Audio stays in memory. Logs: `op, ms, outcome` only (a 429 also logs Google's quota id + value, which carries no user data).
+- **Errors:** `QuoteExtractError.code` = `empty_input` (no Gemini call) | `invalid_input` | `ai_busy` (429/503/timeout; `retryAfter` + `quota` when Google sends them) | `ai_failed`.
+
+**`api/_quota.js`**
+- `consumeQuota(kind) → { ok, remaining }` and `getRemaining(kind)` via `consume_daily_quota` / `get_daily_quota_remaining` with the service key. `kind`: `quote` | `receipt`. `voiceCorrections` is a per-quote cap (on `telegram_pending_quotes`), not an RPC kind. DB/network errors throw `QuotaError("quota_unavailable")`; callers fail closed.
+- **`LIMITS = { quote: 5, receipt: 8, voiceCorrections: 2 }`** (lowered from 15 / 20 / 3, see below).
+
+**Gemini free-tier finding (2026-10-27)**
+- Google no longer publishes the free-tier numbers (the rate-limits doc only points to AI Studio → Rate limit page). Recent independent measurements give **gemini-3.5-flash: 5 RPM / 20 requests per day**, and gemini-3.5-flash-lite about 15 RPM / 500 RPD. Limits are **per Google Cloud project and per model** (extra API keys don't add quota); the daily count resets at **midnight Pacific** (10:00 Israel time), not Israeli midnight.
+- Not yet confirmed on our project: 13 test calls today got no 429. The owner can see the exact numbers in AI Studio → Rate limit. When a 429 does happen, our log line shows Google's quota id and value.
+- Impact: receipt scans (`parse-receipt.js` + the bot) and quote extraction use the SAME model, so they share ~20 calls/day. A quote costs 1 call, +1 if shortened, +1 per voice correction. 15 quotes + 20 receipts can't fit, hence 5 / 8 / 2 (≈ 18 calls in a busy day).
+- **Owner decision needed (before Phase 5 goes live):** (a) keep the low limits; (b) move quote extraction to `gemini-3.5-flash-lite` (separate, much larger quota; Hebrew quality to be re-tested with the same harness); or (c) enable billing (paid tier: much higher limits, and Google doesn't use paid-tier data to improve products, a privacy plus).
+
+**Tests (fake data only)**
+- Offline (mocks, 0 calls, no network): 60/60. Covers `parseAmount` (17 phrasings), phone stripping (7 formats stripped, 5 non-phones kept), the total-evidence rule, item math, mismatch, "never from items", empty input makes no call, phone not in the request, 429/500/bad JSON/network/bad MIME typing, the shorten flow (once, re-check, `too_long`), correction keeping the old total, and quota with a mocked RPC (consume, at limit, remaining, invalid kind, HTTP error, bad response).
+- Live (gemini-3.5-flash, 13 calls, spaced for 5 RPM): 14/14. 10 text cases (full, missing price, hesitations, number words, 3 items, mismatch, phone, correction, garbage, empty) + 4 TTS voice clips (`gemini-3.8-flash-tts`, saved to `test-audio/`, gitignored + vercelignored): full quote, no price, hesitant, voice correction.
+- Latency: 5–9 s per call (text and audio).
 
 ### Phase 2b notes (owner decisions)
 
