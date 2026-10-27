@@ -30,8 +30,10 @@ const GEMINI_MODEL = "gemini-3.5-flash";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/" + GEMINI_MODEL + ":generateContent";
 const GEMINI_TIMEOUT_MS = 25000;
 
-const AUDIO_MIME_TYPES = ["audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac", "audio/flac", "audio/mp4", "audio/m4a"];
-const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // inline audio; a Telegram voice note is far smaller
+const AUDIO_MIME_TYPES = ["audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac", "audio/flac", "audio/mp4", "audio/m4a", "audio/x-m4a"];
+// Same cap as the bot (15 MB). A 3-minute Telegram voice note is under 1 MB; Gemini's inline
+// request limit (~20 MB incl. base64) is only reachable by an unusually high-bitrate file.
+const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_CHARS = 4000;
 const MAX_ITEMS = 20;
 const MAX_LINES = 20;     // hard cap on what we accept from Gemini before the fit check
@@ -406,7 +408,7 @@ function buildDraft(raw, source, transcript, todayIL, fallback) {
   var quoteDate = null;
   var dateStated = false;
   var m = typeof raw.quote_date === "string" ? raw.quote_date.trim().match(DATE_RE) : null;
-  if (m && +m[1] >= 1 && +m[1] <= 31 && +m[2] >= 1 && +m[2] <= 12) { quoteDate = +m[1] + "." + +m[2] + "." + m[3]; dateStated = true; }
+  if (m && +m[1] >= 1 && +m[1] <= 31 && +m[2] >= 1 && +m[2] <= 12) { quoteDate = pad2(+m[1]) + "." + pad2(+m[2]) + "." + m[3]; dateStated = true; }
   else if (raw.quote_date) warnings.push({ code: "date_unreadable" });
   if (!quoteDate && fallback && fallback.quote_date) { quoteDate = fallback.quote_date; dateStated = !!fallback.quote_date_stated; }
   if (!quoteDate) quoteDate = todayIL;
@@ -462,9 +464,15 @@ function shortenPrompt(lines) {
     lines.join("\n");
 }
 
+// Today in Israel as DD.MM.YYYY (zero-padded; he-IL alone gives "5.3.2026").
 function todayIL(date) {
-  return (date || new Date()).toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem" });
+  var parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", day: "2-digit", month: "2-digit", year: "numeric" })
+    .formatToParts(date || new Date());
+  function get(t) { return parts.filter(function (p) { return p.type === t; })[0].value; }
+  return get("day") + "." + get("month") + "." + get("year");
 }
+
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -513,6 +521,10 @@ module.exports = {
   applyCorrection: applyCorrection,
   QuoteExtractError: QuoteExtractError,
   todayIL: todayIL,
+  // used by the bot's manual edits (code only, no AI) and the ✂️ button
+  parseAmount: parseAmount,
+  stripPhones: stripPhones,
+  shortenIfTooLong: ensureFits,
   GEMINI_MODEL: GEMINI_MODEL,
   // exported for tests
   _internal: { stripPhones: stripPhones, parseAmount: parseAmount, verifyStatedTotal: verifyStatedTotal, buildDraft: buildDraft }

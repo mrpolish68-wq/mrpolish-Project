@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). **Next:** Phase 5c (the quote flow itself).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). **Next:** Phase 5d (✅ → `create_quote` + PDF).
 
 ---
 
@@ -146,6 +146,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes") |
 | 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); test webhook registered (5a-2) |
 | 5b | Bot reliability (dedupe, ACK + `waitUntil`, sweeps), routing, menu, receipt quota, known bug fixes | ✅ done (see "Phase 5b notes"); `awaiting_since` column applied 2026-10-27 |
+| 5c | Quote draft flow in the bot (start, extract, draft message, ✏️ edits, 🎤 corrections, ✂️, ❌; ✅ = claim only) | ✅ done (see "Phase 5c notes") |
+| 5d | ✅ approve → `create_quote` + PDF (`api/render-quote-pdf.js`) + send it in the chat | ⏳ next |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -364,6 +366,45 @@ Migration adjustments from the live state:
 - **`tools/set-bot-commands.js`** (`test` | `production` [`show`]): ran for the TEST bot only (`/start`, `/quote`, `/help`). Same production-token guard as `set-test-webhook.js`.
 - **Tests (all mocked, fake values):** 5b harness 58/58 (menu, routing, dedupe incl. fail-open, ACK before work, callback answered once and first, receipt quota before Gemini / at limit / unavailable, edit freshness from the tap + > 30 min + no-column fallback, menu clears edit state, newest edit wins, per-flow limits, no PII/bodies/tokens in logs, sweep targets + throttle, receipt regression); 5a-2 resolver harness 27/27 (updated for `waitUntil`, and "חסר סכום" is now a message); 4b offline 64/64.
 - `npm audit`: 6 high findings, all **zod** (memory exhaustion on oversized validated collections) pulled in by `@vercel/oidc` (via `@vercel/functions`) and, already before 5b, by puppeteer's `chromium-bidi`. Neither validates untrusted input with zod here; not force-fixed (the suggested fix downgrades `@vercel/functions`). Re-check at Phase 7.
+
+### Phase 5c notes
+
+All in `api/telegram-webhook.js` ("Quote drafts" section), using `api/_quote-extract.js`, `api/_quota.js` and `estimateDescriptionFits`.
+- **Start** (🧾, `/quote`, inline `🧾 להכין הצעת מחיר?`, or voice / keyword text):
+  - A bare trigger ("תכין לי הצעת מחיר": no digits and < 6 letters left after removing trigger words) sets `telegram_chat_state = collecting_quote` and asks for client, address, work and final price (simple Hebrew). The next text/voice within 30 min is the details.
+  - A message with details is extracted right away.
+  - "Nothing found" → "לא מצאתי בהודעה פרטים…" and collecting again.
+- **One draft per chat:** a new quote while a draft exists → `↩️ להמשיך בטיוטה` / `🆕 להתחיל הצעה חדשה`. The new message is parked in `telegram_chat_state` (`quote_conflict`, `context.input` = the text, or the voice's Telegram `file_id`, never audio). "New" deletes the old draft (its message → "בוטלה") and processes the parked message.
+- **Quota:** `consumeQuota("quote")` once per NEW draft, before Gemini (corrections, edits and ✂️ are free). At the limit → a friendly message (tomorrow, or the panel). The new draft shows `📊 נותרו היום: N הצעות מחיר`.
+- **Voice:** `voice` / `audio`, ≤ 3 min and ≤ 15 MB (checked before quota and download; `getFile` size re-checked). Downloaded into memory, passed to Gemini inline, never stored or logged. `"⏳ מעבד…"` is sent first and then edited into the draft (for text too).
+- **Draft message** (edited in place via `message_id`; if the edit fails it's re-sent and `message_id` updated):
+  - date (`DD.MM.YYYY`, default today in Israel; `todayIL` now zero-pads), client, address, description lines, `💰 סה״כ לתשלום: ₪…` or `❗ חסר מחיר — מה המחיר הסופי?`;
+  - warnings: sum mismatch, too long;
+  - for voice drafts, `📝 מה הבנתי:` + the transcript cut at 300 chars;
+  - "(מספר ההצעה ייקבע באישור)".
+- **Buttons** (`q:<action>:<uuid>`, ≤ 64 bytes):
+  - `✅ אשר והפק PDF` only when ready: a total > 0, the description fits, **and a client name** (added because `quotes.client_name` is NOT NULL);
+  - `✏️ לקוח / כתובת / תיאור / סכום / תאריך`;
+  - `🎤 תיקון בהקלטה`, hidden after 3;
+  - `✂️ לקצר אוטומטית`, only when too long;
+  - `❌ ביטול`.
+- **Edits, code only:**
+  - total via `parseAmount` (digits or Hebrew words, 0 < total < 1,000,000);
+  - date → `DD.MM.YYYY` (D/M/YYYY, D.M.YY, YYYY-MM-DD, "היום"; real dates only);
+  - description = the reply split into lines (empty lines dropped), re-checked for fit;
+  - client / address trimmed, phones removed;
+  - invalid → a retry prompt, still waiting.
+  - A missing total automatically sets `awaiting_edit_field = total`.
+- **🎤 correction:** the next voice OR text → `applyCorrection` (the total changes only with evidence in the correction). The corrected draft goes into a new message at the bottom, and the old one loses its buttons. `voice_corrections` +1 (optimistic `voice_corrections=eq.n`; DB cap 3).
+- **✂️:** one shorten call (`shortenIfTooLong`), then a re-check.
+- **❌:** deletes the draft row (transcript included) and clears the chat state; the message → "טיוטת הצעת המחיר בוטלה."
+- **✅:** re-checks readiness, claims the row (2-min lease), replies "✅ ההפקה תתווסף בשלב הבא." Nothing is created yet (5d).
+- A stale, cancelled or other chat's draft tap → "ההצעה הזו כבר טופלה או בוטלה." + buttons removed. A menu tap clears the quote's waiting field.
+- **Help text** updated for quotes. `📜` / `🔍` stay a "בקרוב" stub.
+- **Tests:**
+  - 5c mocked harness: 64/64 (every path above, plus: no `public.quotes` / `create_quote` calls, audio never in the DB or Storage, PII-free logs, receipt regression).
+  - LIVE Gemini text (fake data, 3 calls): 4/4. Full quote → total 4500 + ✅; no price → awaiting total; "3,800" → 3800 in code; 🎤 text correction → 50 m², 5200, 1/3.
+  - 5b harness updated (quote paths now reach the flow instead of the stub): 58/58. 5a-2: 27/27. 4b offline: 64/64.
 
 ### Phase 2b notes (owner decisions)
 
