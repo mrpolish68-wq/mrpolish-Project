@@ -1332,12 +1332,262 @@ async function claimDraftRow(id) {
   return rows[0] || null;
 }
 
+function releaseDraftClaim(id) {
+  return supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(id), { claimed_at: null })
+    .catch(function (err) { console.error("[telegram-webhook] draft claim release failed: " + err.message); });
+}
+
+// ---------------------------------------------------------------------------
+// Approve → number → PDF → send (Phase 5d)
+// ---------------------------------------------------------------------------
+// The PDF is rendered by api/render-quote-pdf.js over HTTP (X-Internal-Secret), not by loading
+// it here: Chromium stays out of this function's bundle, rendering gets its own 60 s budget,
+// and the render function already stores quotes-pdf/<id>.pdf and sets pdf_path trigger-safely.
+
+function pad3(n) { return String(n).padStart(3, "0"); }
+
+function quoteCaption(q) {
+  return "הצעת מחיר מס׳ " + pad3(q.number) + " · " + (q.client_name || "") + " · " + fmtShekel(q.total);
+}
+
+// create_quote(jsonb) with the service key: numbering, source='telegram', chat id (bot-only keys).
+async function createQuoteRpc(d, chatId) {
+  var res = await fetch(SUPABASE_URL + "/rest/v1/rpc/create_quote", {
+    method: "POST",
+    headers: supabaseHeaders(),
+    body: JSON.stringify({ p: {
+      client_name: d.client_name,
+      address: d.address || null,
+      description: (d.description_lines || []).join("\n"),
+      total: d.total,
+      quote_date: d.quote_date || QX.todayIL(),
+      vat_mode: "exempt",
+      source: "telegram",
+      telegram_chat_id: chatId
+    } })
+  });
+  var data = await res.json().catch(function () { return null; });
+  if (!res.ok) throw new Error("create_quote failed: " + res.status + (data && data.code ? " " + data.code : ""));
+  var row = Array.isArray(data) ? data[0] : data;
+  if (!row || !row.id) throw new Error("create_quote returned no row");
+  return row;
+}
+
+async function loadQuote(id) {
+  return supabaseSelectOne("quotes", "id=eq." + encodeURIComponent(id)); // full row: number, client, total, pdf_path…
+}
+
+// -> { ok:true, pdf } | { ok:false, tooLong:true, lines, maxLines } | { ok:false, status }
+async function renderQuotePdf(quoteId) {
+  var env = process.env;
+  var host = env.VERCEL_ENV === "production" ? (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL) : env.VERCEL_URL;
+  if (!host || !env.INTERNAL_API_SECRET) {
+    console.error("[telegram-webhook] render: missing VERCEL_URL / INTERNAL_API_SECRET");
+    return { ok: false, status: 0 };
+  }
+  var headers = { "Content-Type": "application/json", "X-Internal-Secret": env.INTERNAL_API_SECRET };
+  if (env.VERCEL_AUTOMATION_BYPASS_SECRET) headers["x-vercel-protection-bypass"] = env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  var res;
+  try {
+    res = await fetch("https://" + host + "/api/render-quote-pdf", {
+      method: "POST", headers: headers, body: JSON.stringify({ quote_id: quoteId }), redirect: "manual",
+      signal: AbortSignal.timeout(55000)
+    });
+  } catch (err) {
+    console.error("[telegram-webhook] render request failed");
+    return { ok: false, status: 0 };
+  }
+  if (res.status === 200) return { ok: true, pdf: Buffer.from(await res.arrayBuffer()) };
+  if (res.status === 422) {
+    var j = await res.json().catch(function () { return {}; });
+    return { ok: false, tooLong: true, lines: j.lines, maxLines: j.maxLines };
+  }
+  console.error("[telegram-webhook] render HTTP " + res.status);
+  return { ok: false, status: res.status };
+}
+
+async function downloadStoredPdf(objectPath) {
+  var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  var res = await fetch(SUPABASE_URL + "/storage/v1/object/quotes-pdf/" + objectPath, { headers: { apikey: key, Authorization: "Bearer " + key } });
+  if (!res.ok) throw new Error("stored PDF download failed: " + res.status);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// Multipart sendDocument (the PDF never touches disk).
+async function tgSendDocument(chatId, pdf, filename, caption) {
+  var form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("caption", caption);
+  form.append("document", new Blob([pdf], { type: "application/pdf" }), filename);
+  var res = await fetch(TELEGRAM_API_ROOT + telegramConfig().botToken + "/sendDocument", { method: "POST", body: form });
+  var data = await res.json().catch(function () { return {}; });
+  if (!data.ok) throw new Error("Telegram API sendDocument failed: " + (data.description || res.status));
+  return data.result;
+}
+
+// Renders (or reuses the stored PDF when allowed) and sends it. -> same shape as renderQuotePdf.
+async function deliverQuotePdf(chatId, quote, useStored) {
+  var pdf = null;
+  if (useStored && quote.pdf_path) {
+    try { pdf = await downloadStoredPdf(quote.pdf_path); } catch (err) { console.error("[telegram-webhook] " + err.message + " (re-rendering)"); }
+  }
+  if (!pdf) {
+    await tgCallSafe("sendChatAction", { chat_id: chatId, action: "upload_document" });
+    var r = await renderQuotePdf(quote.id);
+    if (!r.ok) return r;
+    pdf = r.pdf;
+  }
+  try {
+    await tgSendDocument(chatId, pdf, "הצעת-מחיר-" + pad3(quote.number) + ".pdf", quoteCaption(quote));
+  } catch (err) {
+    console.error("[telegram-webhook] " + err.message);
+    return { ok: false, status: "send" };
+  }
+  return { ok: true };
+}
+
+// After ✅ (row is claimed): create the quote ONCE (quote_id on the draft guards against a second
+// one), then PDF + send. On a PDF/send failure the quote is kept and the draft offers 🔄 / ✂️.
+async function finishApprovedQuote(row, chatId) {
+  var d = row.draft;
+  var say = function (text, keyboard) {
+    var p = { chat_id: chatId, message_id: row.message_id, text: text };
+    if (keyboard) p.reply_markup = keyboard;
+    return row.message_id ? tgCallSafe("editMessageText", p) : tgCallSafe("sendMessage", { chat_id: chatId, text: text, reply_markup: keyboard });
+  };
+  var quote;
+  if (!row.quote_id) {
+    await say("⏳ יוצר את ההצעה…");
+    try {
+      quote = await createQuoteRpc(d, chatId);
+    } catch (err) {
+      console.error("[telegram-webhook] " + err.message);
+      await releaseDraftClaim(row.id);
+      await showDraft(row, chatId, "❗ שגיאה ביצירת ההצעה. נסו ✅ שוב.");
+      return;
+    }
+    d.quote_number = quote.number;
+    row.quote_id = quote.id;
+    try {
+      await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), { quote_id: quote.id, draft: d });
+    } catch (err) {
+      // The quote exists; keep going. (A retry would only be blocked by quote_id, so log it.)
+      console.error("[telegram-webhook] draft quote_id patch failed: " + err.message);
+    }
+  } else {
+    try { quote = await loadQuote(row.quote_id); } catch (err) { quote = null; }
+    if (!quote) {
+      await releaseDraftClaim(row.id);
+      await say("❗ לא מצאתי את ההצעה השמורה. אפשר לחפש אותה ב-🔍 או בלוח הבקרה.");
+      return;
+    }
+  }
+
+  await say("⏳ מפיק PDF להצעה מס׳ " + pad3(quote.number) + "…");
+  var result = await deliverQuotePdf(chatId, quote, false);
+  if (result.ok) {
+    await say("✅ הצעה מס׳ " + pad3(quote.number) + " נשלחה");
+    await supabaseDelete("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id)) // transcript gone with it
+      .catch(function (err) { console.error("[telegram-webhook] draft delete failed: " + err.message); });
+    return;
+  }
+  await releaseDraftClaim(row.id);
+  if (result.tooLong) {
+    await say("ההצעה נשמרה (מס׳ " + pad3(quote.number) + ") אבל התיאור ארוך מדי לעמוד אחד (" + result.lines + " שורות, עד " + result.maxLines + ").",
+      { inline_keyboard: [[{ text: "✂️ לקצר ולהפיק מחדש", callback_data: "q:short:" + row.id }], [{ text: "🔄 לנסות שוב", callback_data: "q:retry:" + row.id }]] });
+    return;
+  }
+  await say("ההצעה נשמרה (מס׳ " + pad3(quote.number) + ") אבל ה-PDF נכשל.",
+    { inline_keyboard: [[{ text: "🔄 לנסות שוב", callback_data: "q:retry:" + row.id }]] });
+}
+
+// --- 📜 recent / 🔍 search ---
+
+var QUOTE_LIST_COLUMNS = "id,number,client_name,total,quote_date,source";
+
+async function sendQuoteList(chatId, title, rows) {
+  var lines = rows.map(function (q) {
+    return "מס׳ " + pad3(q.number) + " · " + (q.client_name || "—") + " · " + fmtShekel(q.total) + " · " + (q.quote_date || "") +
+      " · " + (q.source === "telegram" ? "📱 טלגרם" : "💻 פאנל");
+  });
+  await tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: title + "\n\n" + lines.join("\n"),
+    reply_markup: { inline_keyboard: rows.map(function (q) { return [{ text: "📄 שלח PDF מס׳ " + pad3(q.number), callback_data: "q:pdf:" + q.id }]; }) }
+  });
+}
+
+async function sendRecentQuotes(chatId) {
+  var rows;
+  try {
+    var res = await fetch(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&order=number.desc&limit=5", { headers: supabaseHeaders() });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    rows = await res.json();
+  } catch (err) {
+    console.error("[telegram-webhook] recent quotes query failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית בטעינת ההצעות. נסו שוב בעוד רגע." });
+    return;
+  }
+  if (!rows.length) { await tgCallSafe("sendMessage", { chat_id: chatId, text: "עדיין אין הצעות מחיר.", reply_markup: MAIN_KEYBOARD }); return; }
+  await sendQuoteList(chatId, "📜 ההצעות האחרונות:", rows);
+}
+
+async function askSearch(chatId) {
+  try { await setChatState(chatId, "awaiting_search", {}); } catch (err) { console.error("[telegram-webhook] " + err.message); }
+  await tgCallSafe("sendMessage", { chat_id: chatId, text: "🔍 שלחו את שם הלקוח (או חלק ממנו).", reply_markup: MAIN_KEYBOARD });
+}
+
+// ilike pattern from user text: PostgREST's * wildcard is removed from the input, and LIKE's own
+// wildcards/escape (% _ \) are escaped, so the name is matched literally.
+function ilikeContains(term) {
+  return "*" + term.replace(/\*/g, "").replace(/[\\%_]/g, function (c) { return "\\" + c; }) + "*";
+}
+
+async function searchQuotes(chatId, text) {
+  var term = String(text || "").replace(/\*/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (term.length < 2) {
+    try { await setChatState(chatId, "awaiting_search", {}); } catch (e) { /* best-effort */ }
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שלחו לפחות 2 אותיות משם הלקוח." });
+    return;
+  }
+  var rows;
+  try {
+    var res = await fetch(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&client_name=ilike." +
+      encodeURIComponent(ilikeContains(term)) + "&order=number.desc&limit=5", { headers: supabaseHeaders() });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    rows = await res.json();
+  } catch (err) {
+    console.error("[telegram-webhook] quote search failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית בחיפוש. נסו שוב בעוד רגע." });
+    return;
+  }
+  if (!rows.length) { await tgCallSafe("sendMessage", { chat_id: chatId, text: "לא נמצאו הצעות 🙂", reply_markup: MAIN_KEYBOARD }); return; }
+  await sendQuoteList(chatId, "🔍 תוצאות החיפוש:", rows);
+}
+
+// 📄 from a list: the stored PDF when there is one, otherwise render → send.
+async function resendQuotePdf(chatId, quoteId) {
+  var quote;
+  try { quote = await loadQuote(quoteId); } catch (err) {
+    console.error("[telegram-webhook] quote lookup failed: " + err.message);
+    await cbNotice(chatId, "שגיאה זמנית. נסו שוב.");
+    return;
+  }
+  if (!quote) { await cbNotice(chatId, "ההצעה לא נמצאה."); return; }
+  var r = await deliverQuotePdf(chatId, quote, true);
+  if (r.ok) return;
+  if (r.tooLong) { await cbNotice(chatId, "לא ניתן להפיק PDF להצעה מס׳ " + pad3(quote.number) + ": התיאור ארוך מדי לעמוד אחד. אפשר לקצר אותו בלוח הבקרה."); return; }
+  await cbNotice(chatId, "שליחת ה-PDF של הצעה מס׳ " + pad3(quote.number) + " נכשלה. נסו שוב בעוד רגע.");
+}
+
 // callback_data "q:<action>:<draft uuid>" (≤ 64 bytes: "q:client:" + 36).
 async function processQuoteCallback(query, chatId) {
   var parts = String(query.data || "").split(":");
   var action = parts[1];
   var id = parts[2] || "";
   var tappedMessageId = query.message && query.message.message_id;
+
+  if (action === "pdf") { await resendQuotePdf(chatId, id); return; }
 
   var row;
   try { row = id ? await loadDraftRow(id) : null; } catch (err) {
@@ -1377,7 +1627,14 @@ async function processQuoteCallback(query, chatId) {
   if (action === "cancel") {
     await supabaseDelete("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id)); // the transcript goes with it
     await clearChatState(chatId);
-    await tgCallSafe("editMessageText", { chat_id: chatId, message_id: tappedMessageId || row.message_id, text: "🧾 טיוטת הצעת המחיר בוטלה." });
+    await tgCallSafe("editMessageText", { chat_id: chatId, message_id: tappedMessageId || row.message_id,
+      text: row.quote_id ? "ההצעה מס׳ " + pad3(d.quote_number) + " נשמרה. אפשר לשלוח את ה-PDF מ-📜 הצעות אחרונות." : "🧾 טיוטת הצעת המחיר בוטלה." });
+    return;
+  }
+
+  // Once the quote exists (number taken), only 🔄 retry / ✂️ shorten / ❌ make sense for this draft.
+  if (row.quote_id && action !== "retry" && action !== "short" && action !== "ok") {
+    await cbNotice(chatId, "ההצעה כבר נשמרה (מס׳ " + pad3(d.quote_number) + "). אפשר ✂️ לקצר או 🔄 לנסות שוב, ולשנות פרטים בלוח הבקרה.");
     return;
   }
 
@@ -1400,6 +1657,35 @@ async function processQuoteCallback(query, chatId) {
     return;
   }
 
+  if (action === "short" && row.quote_id) {
+    var lockedShort;
+    try { lockedShort = await claimDraftRow(row.id); } catch (err) { console.error("[telegram-webhook] " + err.message); await cbNotice(chatId, "שגיאה זמנית. נסו שוב."); return; }
+    if (!lockedShort) return;
+    await tgCallSafe("sendChatAction", { chat_id: chatId, action: "typing" });
+    try {
+      await QX.shortenDescription(d, {});
+    } catch (err) {
+      await releaseDraftClaim(row.id);
+      await cbNotice(chatId, AI_ERROR_TEXT[err && err.code] || AI_ERROR_TEXT.ai_failed);
+      return;
+    }
+    recomputeDraft(d);
+    try {
+      // The printed description lives on the quote; updating it clears pdf_path (trigger) until re-rendered.
+      await supabasePatch("quotes", "id=eq." + encodeURIComponent(row.quote_id), { description: d.description });
+      await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), { draft: d });
+    } catch (err) {
+      console.error("[telegram-webhook] shorten update failed: " + err.message);
+      await releaseDraftClaim(row.id);
+      await cbNotice(chatId, "שגיאה בעדכון. נסו שוב.");
+      return;
+    }
+    var target = Object.assign(lockedShort, { draft: d });
+    if (tappedMessageId) target.message_id = tappedMessageId;
+    await finishApprovedQuote(target, chatId);
+    return;
+  }
+
   if (action === "short") {
     if (d.fit && d.fit.fits) { await cbNotice(chatId, "התיאור כבר נכנס בעמוד אחד 🙂"); return; }
     await tgCallSafe("sendChatAction", { chat_id: chatId, action: "typing" });
@@ -1415,8 +1701,8 @@ async function processQuoteCallback(query, chatId) {
     return;
   }
 
-  if (action === "ok") {
-    if (!draftReady(d)) {
+  if (action === "ok" || action === "retry") {
+    if (!row.quote_id && !draftReady(d)) {
       await cbNotice(chatId, d.total == null ? "חסר מחיר סופי. לחצו ✏️ סכום." : !d.client_name ? "חסר שם לקוח. לחצו ✏️ לקוח." : "התיאור ארוך מדי לעמוד אחד.");
       return;
     }
@@ -1427,8 +1713,8 @@ async function processQuoteCallback(query, chatId) {
       return;
     }
     if (!claimed) return; // a concurrent tap is already handling it
-    // Phase 5d: create_quote + PDF. Until then nothing is created.
-    await cbNotice(chatId, "✅ ההפקה תתווסף בשלב הבא.");
+    if (tappedMessageId) claimed.message_id = tappedMessageId; // the message the user is looking at
+    await finishApprovedQuote(claimed, chatId);
     return;
   }
 }
@@ -1482,6 +1768,7 @@ var HELP_TEXT =
   "ואחרי שתלחצו ✅ היא נשמרת בהוצאות העסק.\n\n" +
   "🧾 הצעת מחיר: לוחצים על 🧾 ושולחים הקלטה קולית או הודעה כתובה עם שם הלקוח, הכתובת, העבודה והמחיר הסופי. " +
   "אני מכין טיוטה, ואפשר לתקן אותה בכפתורים לפני האישור.\n\n" +
+  "📜 הצעות אחרונות / 🔍 חיפוש הצעה: רואים הצעות קודמות ושולחים שוב את ה-PDF.\n\n" +
   "💰 סיכום החודש: כמה הוצאנו החודש, לפי קטגוריה.\n\n" +
   "בכל רגע אפשר ללחוץ על כפתור בתפריט למטה כדי להתחיל מחדש.";
 
@@ -1497,15 +1784,6 @@ async function sendHelp(chatId, intro) {
   await tgCallSafe("sendMessage", {
     chat_id: chatId,
     text: (intro ? intro + "\n\n" : "") + HELP_TEXT + (await quotaLine()),
-    reply_markup: MAIN_KEYBOARD
-  });
-}
-
-// 📜 / 🔍 placeholder until they're built.
-function sendQuoteStub(chatId) {
-  return tgCallSafe("sendMessage", {
-    chat_id: chatId,
-    text: "האפשרות הזו תגיע בקרוב 🙂\nבינתיים אפשר לראות את ההצעות בלוח הבקרה.",
     reply_markup: MAIN_KEYBOARD
   });
 }
@@ -1563,7 +1841,8 @@ async function handleMenu(action, chatId) {
   if (action === "start") return sendHelp(chatId, "שלום! אני הבוט של מיסטר פוליש 🙂");
   if (action === "help") return sendHelp(chatId, null);
   if (action === "quote") return startQuote(chatId, null);
-  if (action === "recent" || action === "search") return sendQuoteStub(chatId);
+  if (action === "recent") return sendRecentQuotes(chatId);
+  if (action === "search") return askSearch(chatId);
   if (action === "summary") return sendMonthSummary(chatId);
   if (action === "receipt") {
     return tgCallSafe("sendMessage", {
@@ -1627,6 +1906,12 @@ async function routeMessage(msg, chatId) {
 
     // After "🧾" / "/quote" / a bare trigger, the next text or voice is the quote's details.
     var state = await getChatState(chatId);
+    if (state && state.state === "awaiting_search" && text) {
+      if (!(await withinFlowLimit("menu", chatId))) return;
+      await clearChatState(chatId);
+      await searchQuotes(chatId, text);
+      return;
+    }
     if (state && state.state === "collecting_quote") {
       if (!(await withinFlowLimit("quote", chatId))) return;
       await clearChatState(chatId);

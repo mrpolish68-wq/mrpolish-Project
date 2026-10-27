@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). **Next:** Phase 5d (✅ → `create_quote` + PDF).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). **Next:** owner live test on the test bot, then Phase 6 (panel sync).
 
 ---
 
@@ -147,7 +147,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); test webhook registered (5a-2) |
 | 5b | Bot reliability (dedupe, ACK + `waitUntil`, sweeps), routing, menu, receipt quota, known bug fixes | ✅ done (see "Phase 5b notes"); `awaiting_since` column applied 2026-10-27 |
 | 5c | Quote draft flow in the bot (start, extract, draft message, ✏️ edits, 🎤 corrections, ✂️, ❌; ✅ = claim only) | ✅ done (see "Phase 5c notes") |
-| 5d | ✅ approve → `create_quote` + PDF (`api/render-quote-pdf.js`) + send it in the chat | ⏳ next |
+| 5d | ✅ approve → `create_quote` + PDF (`api/render-quote-pdf.js`) + send it in the chat; 📜 recent, 🔍 search, 📄 resend; `tools/cleanup-test-quotes.js` | ✅ done (see "Phase 5d notes") |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -405,6 +405,35 @@ All in `api/telegram-webhook.js` ("Quote drafts" section), using `api/_quote-ext
   - 5c mocked harness: 64/64 (every path above, plus: no `public.quotes` / `create_quote` calls, audio never in the DB or Storage, PII-free logs, receipt regression).
   - LIVE Gemini text (fake data, 3 calls): 4/4. Full quote → total 4500 + ✅; no price → awaiting total; "3,800" → 3800 in code; 🎤 text correction → 50 m², 5200, 1/3.
   - 5b harness updated (quote paths now reach the flow instead of the stub): 58/58. 5a-2: 27/27. 4b offline: 64/64.
+
+### Phase 5d notes
+
+- **✅ approve** (`finishApprovedQuote`):
+  1. Claim the draft (2-min lease).
+  2. **Only if `quote_id` is empty:** `create_quote` RPC with the service key: client, address, description = lines joined with `\n`, total, `quote_date`, `vat_mode 'exempt'`, `source 'telegram'`, `telegram_chat_id`.
+  3. Store `quote_id` (+ `draft.quote_number`) on the draft.
+  4. Render the PDF, then `sendDocument` (multipart; filename `הצעת-מחיר-<NNN>.pdf`; caption `הצעת מחיר מס׳ NNN · <client> · ₪total`).
+  5. Draft message → `✅ הצעה מס׳ NNN נשלחה`; draft row deleted.
+  - The status shows `⏳ יוצר את ההצעה…` / `⏳ מפיק PDF…` along the way. A concurrent double tap loses the claim, so one quote only.
+- **Rendering = HTTP to `api/render-quote-pdf.js`**, not a module import:
+  - Chromium stays out of the webhook bundle, rendering gets its own 60 s budget, and the render function already stores `quotes-pdf/<id>.pdf` and sets `pdf_path` trigger-safely.
+  - `X-Internal-Secret` = `INTERNAL_API_SECRET`. `x-vercel-protection-bypass` = `VERCEL_AUTOMATION_BYPASS_SECRET` when present (Vercel exposes it as a system env var once "Protection Bypass for Automation" is on).
+  - Host: `VERCEL_URL` on previews; in **production** `VERCEL_PROJECT_PRODUCTION_URL` (the site domain), because the per-deployment `VERCEL_URL` can sit behind Vercel Authentication.
+  - `redirect: "manual"`, 55 s timeout.
+  - `vercel.json`: webhook `maxDuration` 30 → **60** (create + render + send run inside its `waitUntil`).
+- **Failures:**
+  - `create_quote` fails → the claim is released, the draft is shown again with "❗ שגיאה ביצירת ההצעה", and nothing is created.
+  - Quote created but render/send fails → the quote is kept: "ההצעה נשמרה (מס׳ NNN) אבל ה-PDF נכשל." + `🔄 לנסות שוב` (`q:retry`: re-claim, `quote_id` already set → **no second `create_quote`**, re-render by `quote_id`).
+  - **422 too_long** → "…התיאור ארוך מדי לעמוד אחד (X שורות, עד Y)" + `✂️ לקצר ולהפיק מחדש` (one forced `shortenDescription` call, since the estimate said it fits; updates **`quotes.description`**, the trigger clears `pdf_path`; then re-render + send) + 🔄.
+  - Once a draft has a `quote_id`, ✏️ / 🎤 are refused ("כבר נשמרה… לשנות פרטים בלוח הבקרה"); ❌ deletes only the draft (the quote stays; the message points to 📜).
+- **📜 recent:** the last 5 quotes by number (`מס׳ NNN · client · ₪total · date · 📱 טלגרם / 💻 פאנל`); list columns only (no address/description). One `📄 שלח PDF מס׳ NNN` button each (`q:pdf:<quote id>`).
+- **📄 resend:** stored `quotes-pdf/<pdf_path>` if set (download with the service key); otherwise, or if the download fails, render → send. 422 → a message (shorten in the panel). Unknown id → "ההצעה לא נמצאה."
+- **🔍 search:** chat state `awaiting_search` → the next text = a name (≥ 2 chars) → `client_name=ilike.*<term>*`, with `*` removed and `\ % _` escaped (literal match), up to 5 newest, same list + buttons; otherwise "לא נמצאו הצעות". A menu tap cancels it.
+- **`tools/cleanup-test-quotes.js`** (dry run by default; `--apply`):
+  - Finds only `source='telegram' AND telegram_chat_id IN (TELEGRAM_TEST_ALLOWED_CHATS from .env)` and lists number + date.
+  - `--apply` deletes `quotes-pdf/<id>.pdf`, then the rows (re-filtered by source + chat), then sets `quote_counter.floor_next = greatest(max(number)+1, 14)` and prints the next number.
+  - A dry run never writes. Ran the dry run 2026-10-27: 0 test quotes. `TELEGRAM_TEST_ALLOWED_CHATS=1230764171` added to `.env` (a chat id, not a secret).
+- **Tests (all mocked; no live quotes):** 5d harness 45/45 (happy path payload/headers/filename/caption/order, concurrent double tap, render failure + retry, send failure + retry, 422 + ✂️ + re-render, `create_quote` failure, ❌ after save, missing secret, 📜, 📄 stored/render/fallback/422/unknown, 🔍 incl. escaping + literal match + short input + menu cancel, production host + prod token, PII-free logs). 5c updated 62/62 (its placeholder ✅ checks moved to 5d), 5b 58/58, 5a-2 27/27, 4b 64/64.
 
 ### Phase 2b notes (owner decisions)
 

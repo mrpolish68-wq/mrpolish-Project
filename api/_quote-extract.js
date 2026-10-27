@@ -444,15 +444,22 @@ async function ensureFits(draft, opts) {
   var est = T.estimateDescriptionFits(draft.description);
   draft.fit = { lines: est.lines, maxLines: est.maxLines, fits: est.fits, shortened: false };
   if (est.fits) return draft;
-  var raw = await callGemini("shorten", [{ text: shortenPrompt(draft.description_lines) }], SHORTEN_SCHEMA, opts);
+  await shortenDescription(draft, opts);
+  est = T.estimateDescriptionFits(draft.description);
+  draft.fit = { lines: est.lines, maxLines: est.maxLines, fits: est.fits, shortened: true };
+  if (!est.fits) draft.warnings.push({ code: "too_long", lines: est.lines, maxLines: est.maxLines });
+  return draft;
+}
+
+// Exactly one shorten call, unconditionally (the estimate can say "fits" while the real
+// rendered layout refuses it: the bot uses this after a 422 from the PDF renderer).
+async function shortenDescription(draft, opts) {
+  var raw = await callGemini("shorten", [{ text: shortenPrompt(draft.description_lines || []) }], SHORTEN_SCHEMA, opts);
   var lines = normalizeLines(raw && raw.description_lines);
   if (lines.length) {
     draft.description_lines = lines;
     draft.description = lines.join("\n");
   }
-  est = T.estimateDescriptionFits(draft.description);
-  draft.fit = { lines: est.lines, maxLines: est.maxLines, fits: est.fits, shortened: true };
-  if (!est.fits) draft.warnings.push({ code: "too_long", lines: est.lines, maxLines: est.maxLines });
   return draft;
 }
 
@@ -525,6 +532,7 @@ module.exports = {
   parseAmount: parseAmount,
   stripPhones: stripPhones,
   shortenIfTooLong: ensureFits,
+  shortenDescription: shortenDescription,
   GEMINI_MODEL: GEMINI_MODEL,
   // exported for tests
   _internal: { stripPhones: stripPhones, parseAmount: parseAmount, verifyStatedTotal: verifyStatedTotal, buildDraft: buildDraft }
