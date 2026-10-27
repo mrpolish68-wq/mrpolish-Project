@@ -760,6 +760,10 @@ function cbNotice(chatId, text) {
   return tgCallSafe("sendMessage", { chat_id: chatId, text: text });
 }
 
+// Every id that rides in callback_data is one of our row uuids; anything else is ignored before
+// it can reach a query (defense in depth on top of encodeURIComponent).
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function processCallbackQuery(query, chatId) {
   var data = query.data || "";
   if (data.indexOf("q:") === 0) return processQuoteCallback(query, chatId);
@@ -775,6 +779,7 @@ async function processCallbackQuery(query, chatId) {
     await startQuote(chatId, null);
     return;
   }
+  if (!UUID_RE.test(pendingId)) return;
 
   var pending;
   try {
@@ -992,12 +997,28 @@ function clearChatState(chatId) {
 
 // --- drafts ---
 
+// Drafts (incl. their transcripts) live at most 24 h (privacy.html). Older rows are never used,
+// even before a sweep has deleted them, and one that is looked up is deleted on the spot.
+var DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function draftExpired(row) {
+  return !!row && Date.now() - new Date(row.created_at).getTime() > DRAFT_TTL_MS;
+}
+
+function dropExpiredDraft(row) {
+  return supabaseDelete("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id))
+    .catch(function (err) { console.error("[telegram-webhook] expired draft delete failed: " + err.message); });
+}
+
 async function findActiveDraft(chatId) {
-  return supabaseSelectOne("telegram_pending_quotes", "chat_id=eq." + chatId + "&order=created_at.desc&limit=1");
+  var cutoff = new Date(Date.now() - DRAFT_TTL_MS).toISOString();
+  return supabaseSelectOne("telegram_pending_quotes", "chat_id=eq." + chatId + "&created_at=gt." + encodeURIComponent(cutoff) + "&order=created_at.desc&limit=1");
 }
 
 async function loadDraftRow(id) {
-  return supabaseSelectOne("telegram_pending_quotes", "id=eq." + encodeURIComponent(id));
+  var row = await supabaseSelectOne("telegram_pending_quotes", "id=eq." + encodeURIComponent(id));
+  if (draftExpired(row)) { await dropExpiredDraft(row); return null; }
+  return row;
 }
 
 function fmtShekel(n) {
@@ -1639,6 +1660,7 @@ async function processQuoteCallback(query, chatId) {
   var action = parts[1];
   var id = parts[2] || "";
   var tappedMessageId = query.message && query.message.message_id;
+  if (parts.length !== 3 || !UUID_RE.test(id)) return; // not one of our buttons
 
   if (action === "pdf") { await resendQuotePdf(chatId, id); return; }
 
@@ -1928,7 +1950,7 @@ async function handleMenu(action, chatId) {
 // Separate per-chat budgets per flow, so a burst in one flow doesn't lock the others.
 var FLOW_LIMITS = {
   receipt: { max: 10, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לשלוח קבלה נוספת בעוד כמה דקות." },
-  quote: { max: 10, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לנסות שוב בעוד כמה דקות." },
+  quote: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לנסות שוב בעוד כמה דקות." },
   menu: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 נסו שוב בעוד רגע." }
 };
 

@@ -1,4 +1,4 @@
-// Production quote PDF renderer (Telegram quotes, Phase 4a). Replaces api/spike-quote-pdf.js.
+// Production quote PDF renderer (Telegram quotes, Phase 4a). It replaced the Phase 1 spike (deleted in Phase 7a).
 //
 // POST { quote_id } -> renders the stored quote through shared/quote-template.js (the same
 // module admin.html uses) as ONE vector A4 page with headless Chromium (puppeteer-core +

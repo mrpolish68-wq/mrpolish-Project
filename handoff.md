@@ -1181,7 +1181,7 @@ Plus a live Playwright pass of `admin.html`: category filtering, every modal's o
 ### Status
 ✅ All fixes live on `main` (commit `d741969`). Nothing currently queued as a known follow-up for this feature.
 
-## 32. Telegram Price Quotes via the bot — IN PROGRESS (2026-10-25/26)
+## 32. Telegram Price Quotes via the bot — READY TO MERGE (2026-10-25 → 2026-10-27)
 
 ### Feature summary
 Price quotes (הצעות מחיר) are created through the existing Telegram bot (`api/telegram-webhook.js`, @mrpolish_expenses_bot), mostly by Miri (Ori's assistant) on her phone: Hebrew **voice**, **free text** or a **menu button** → the bot builds a **draft** → it's reviewed and edited in-chat → **approve** → a race-safe number is allocated, the quote is saved to `public.quotes`, a **server-side PDF** is rendered with the **same template as the admin panel**, stored in a private bucket and sent back to the chat → the quote syncs live to `admin.html` (installed as a PWA on 3 phones).
@@ -1192,7 +1192,7 @@ Price quotes (הצעות מחיר) are created through the existing Telegram bot
 - **`shared/quote-template.js`**: the one quote-PDF template used by both the panel and the server.
 
 ### Branch & commits
-Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea44`**, so production is untouched.
+Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea44`**, so production is untouched until the owner merges (Phase 7b).
 
 | Commit | Phase | Summary |
 |---|---|---|
@@ -1204,22 +1204,30 @@ Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea
 | `95d2777` | 2b | Ruled line under every description line + 13px font floor, both PDF paths; refusal when too long. |
 | `0f54700` | 3a | DB migration file written + tested locally (not applied). |
 | `1ca3358` | 3b | Robust bot detection in `create_quote`; migration applied live (by the owner) + live verification. |
+| `94f9886` | 4a | `api/render-quote-pdf.js`: production PDF function (secret or session auth, storage upsert, `pdf_path`). |
+| `86fa5f8` | 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js`. |
+| `c07d4f5` | 5a | Test-bot tooling (`tools/set-test-webhook.js`), quotas back to 15 / 20 / 3 (paid Tier 1). |
+| `b59c3d2` | 5a-2 | Preview uses the `TELEGRAM_TEST_*` vars (`telegramConfig()`), never the production bot. |
+| `116fe74` | 5b | Dedupe, ACK + `waitUntil`, sweeps, routing, menu, receipt quota, the known bugs fixed. |
+| `aab4ed3` | 5b | `awaiting_since` column applied (SQL Editor). |
+| `9366d71` | 5c | Quote draft flow (extract, draft message, ✏️ edits, 🎤 corrections, ✂️, ❌). |
+| `0792abe` | 5d | ✅ approve → `create_quote` → PDF → sendDocument; 📜 recent, 🔍 search, 📄 resend; `tools/cleanup-test-quotes.js`. |
+| `796597b` | 6 | Panel: Realtime + wake-up refetch, `📱 טלגרם` badge, create_quote before the PDF, server PDF for bot quotes. |
+| `695aff4` | 6b | Open-draft amount / follow-up prompt, address "<street> <number>, <city>", money "4,200 ₪". |
+| (the 7a commit) | 7a | Hardening, privacy text, spike deleted, retention cron file, readiness checklist. |
 
 ### Phase status
 
 | # | Phase | Status |
 |---|---|---|
-| 0 | Read-only recon | ✅ |
-| 1 | Chromium PDF spike | ✅ owner approved the output |
-| 1b | Supabase live check + plan file | ✅ |
-| 2 | Shared template module (panel output identical except the VAT line) + VAT line | ✅ |
-| 2b | Aligned ruled lines + 13px floor, both PDF paths | ✅ |
-| 3a | DB migration file (written + tested locally) | ✅ |
-| 3b | Migration applied + verified live | ✅ applied 2026-10-25 by the owner **via the Supabase SQL Editor, NOT via `apply_migration`**, so it is **NOT in the migration history** |
-| 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ⏳ **NEXT** |
-| 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
-| 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download; panel moves to `create_quote` (insert before rendering) and retires the per-phone localStorage counter | ⏳ |
-| 7 | Security/privacy audit, test harness, `privacy.html`, this handoff, delete the spike (ask the owner first), merge | ⏳ |
+| 0–3b | Recon, PDF spike, plan, shared template, ruled lines, DB migration (applied live via the SQL Editor, **not in the migration history**) | ✅ |
+| 4a / 4b | Production PDF function; Gemini extraction + quota helpers | ✅ |
+| 5a / 5a-2 | Test bot on the branch preview (`TELEGRAM_TEST_*` vars) | ✅ |
+| 5b | Reliability, routing, menu, receipt quota, known bugs fixed (+ `awaiting_since` column applied) | ✅ |
+| 5c / 5d | Quote drafts; approve → number → PDF → send; 📜 / 🔍 / 📄 | ✅ live-tested by the owner |
+| 6 / 6b | Panel live sync + RPC numbering; bot UX fixes from the live test | ✅ live-tested by the owner |
+| 7a | Hardening, `privacy.html`, spike deleted, audit, readiness checklist | ✅ |
+| **7b** | **Merge to `main` + production checks**, run by the owner (checklist below) | ⏳ |
 
 ### Key approved decisions (full list in the plan)
 - **PDF:** vector `page.pdf()` via puppeteer-core + @sparticuz/chromium, **always one A4 page**, no zoom ever. Layout steps: tighten line spacing at 16px first, then shrink the font to a **13px floor**. Target **≤ 12 lines** at full size; max 15 at the floor. **Too long → refuse** (`fits:false`) and ask for a shorter text. The panel shows "התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור".
@@ -1229,10 +1237,10 @@ Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea
 - **The AI never invents a price.** Ori/Miri state the final total, and the bot asks if it's missing. A bot quote can't be approved without a total (enforced in code + DB). All arithmetic happens in code.
 - **Intent:** keyword/exact-label matching only, **no Gemini classification**. When unclear, show the menu with "🧾 להכין הצעת מחיר?".
 - **Menu:** `/start`, `/quote`, `/help` + reply keyboard: 🧾 הצעת מחיר חדשה · 📷 סריקת קבלה · 📜 הצעות אחרונות · 🔍 חיפוש הצעה · 💰 סיכום הוצאות החודש · ❓ עזרה.
-- **Quotas:** 15 quotes / 20 receipt scans per day, **global** across chats, reset at midnight Israel time (DB), plus 3 voice corrections per quote. Lower them if the Gemini free-tier limit is lower.
-- **Gemini stays on the FREE tier, with privacy minimization:**
+- **Quotas:** 15 quotes / 20 receipt scans per day, **global** across chats, reset at midnight Israel time (DB), plus 3 voice corrections per quote. (Gemini is on a **paid Tier 1** project with a monthly spend cap; these limits protect the cap.)
+- **Gemini (paid Tier 1, spend cap; `gemini-3.5-flash`) with privacy minimization:**
   - audio is never persisted;
-  - the transcript lives only in the draft, deleted on approve/cancel, and abandoned drafts are swept after 24h;
+  - the transcript lives only in the draft, deleted on approve/cancel; drafts older than 24 h are never used and are deleted (webhook sweep + the hourly `pg_cron` job in `supabase-telegram-retention-cron.sql`, once applied);
   - Gemini sees only the current message;
   - logs are PII-free.
 - **Numbering:** the `create_quote(jsonb)` RPC (advisory lock, `greatest(max+1, floor)`), counter floor **14** (the last issued quote is 13). The DB is the only numbering source.
@@ -1251,13 +1259,10 @@ Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea
 ### Test-data rule (live project)
 Any live test that calls `create_quote` or `consume_daily_quota` **must run in a single transaction that is rolled back**, so no number is consumed and the counter stays at 14. **Pre-launch checklist (Phase 7):** delete any test rows, then set `quote_counter.floor_next = greatest(max(number)+1, 14)` and verify it.
 
-### Preview / spike
-- `api/spike-quote-pdf.js` is **preview-only**: it returns 404 unless `VERCEL_ENV === "preview"`. It **must be deleted before merge** (ask the owner first), replaced by the Phase 4 production function. `vercel.json` has its `includeFiles` (chromium bin + `shared/fonts/**`).
-- Test URLs on a branch preview (open while logged in to Vercel):
-  - `/api/spike-quote-pdf?mid=1`: 12-line realistic job, full ruled page at 16px;
-  - `/api/spike-quote-pdf`: 6 lines;
-  - `/api/spike-quote-pdf?long=1`: 20 lines, an HTTP 422 Hebrew refusal page instead of a PDF.
-- Latest preview: `https://mrpolish-project-gqq4cm9pe-polish1.vercel.app` (commit `95d2777`). Later commits get new preview URLs.
+### Preview / test bot
+- The Phase 1 spike (`api/spike-quote-pdf.js`) is **deleted** (7a, owner-approved), along with its `vercel.json` entry.
+- **Test bot** `@Mrpolish_test_quotes_bot`: its webhook points at the stable branch alias `https://mrpolish-project-git-feature-telegram-quotes-polish1.vercel.app/api/telegram-webhook` (+ bypass param), set by `tools/set-test-webhook.js`. Preview-only Vercel vars: `TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS` (owner chat 1230764171). Production ignores them.
+- Test quotes from the test chat: `node tools/cleanup-test-quotes.js` (dry run) → `--apply` (deletes their PDFs + rows, resets `quote_counter` to `greatest(max+1, 14)`). Last run 2026-10-27: back to 8 quotes (6–13), counter 14, no PDFs.
 
 ### Environment & tooling lessons (read before Phase 4)
 - **Supabase MCP:**
@@ -1276,12 +1281,12 @@ Any live test that calls `create_quote` or `consume_daily_quota` **must run in a
 - **Shell gotcha:** writing JS through a bash heredoc turned `"\\n"` inside template literals into real newlines (syntax errors). Use the Write/Edit tools for JS with string escapes.
 - Verification artifacts go in `.playwright-mcp/` (gitignored). LF→CRLF warnings from git are harmless. Never use global kill commands; only kill PIDs you started.
 
-### Known existing bugs to fix during the feature
-- `findAwaitingEdit` (telegram webhook) measures edit freshness from `created_at` instead of the edit tap (`awaiting_since`).
-- `supabaseInsert` (telegram webhook) logs PostgREST response bodies, which contain PII.
-- One shared 10-per-10-minutes rate limit covers all bot flows; split it per flow.
-- The panel renders the PDF **before** inserting the quote (number race); fix by moving to `create_quote` and inserting first (Phase 6).
-- `saveQuoteToDb` (`admin.html`) has no `.catch`.
+### Known bugs (from Phase 0): all fixed
+- `findAwaitingEdit` freshness → measured from the edit tap (`awaiting_since`, 5b).
+- `supabaseInsert` logged PostgREST bodies → status + error code only (5b).
+- One shared bot rate limit → per flow (receipt 10, quote 30, menu 30 per 10 min; callbacks 20/min).
+- The panel rendered before inserting → `create_quote` first, render with the returned number (6).
+- `saveQuoteToDb` had no `.catch` → always calls back; button restored + Hebrew error (6).
 
 ### Working method
 - The owner works with a separate Claude assistant that writes **one English command per phase**. Claude Code executes **one phase**, reports, and **STOPS**.
@@ -1289,13 +1294,14 @@ Any live test that calls `create_quote` or `consume_daily_quota` **must run in a
 - DB changes happen only after explicit approval, applied by the owner in the Supabase SQL Editor (see the `apply_migration` lesson above).
 - Long pasted prompts can get truncated in the Antigravity chat. **If a prompt looks cut off, say so instead of guessing.**
 
-### Next step: Phase 4 (start here)
-Production server PDF function replacing the spike, the Gemini quote-extraction module and quota tracking. Carry over from earlier phases:
-- inject `shared/quote-template.js` with `page.addScriptTag`, then call `MrpQuoteTemplate.fitToOnePage(document)` before `page.pdf()`; refuse on `fits:false`;
-- embed Heebo from `shared/fonts/`;
-- store at `quotes-pdf/<quote id>.pdf` with upsert, and set `pdf_path` in the same update;
-- call `consume_daily_quota` / `get_daily_quota_remaining` with the service-role key;
-- the AI never sets the price;
-- check the Gemini free-tier daily limit for the chosen model and lower the quotas below it if needed.
+### Next step: Phase 7b, the merge (owner-run)
+Full checklist (env vars, merge steps, post-deploy checks, rollback, optional cleanup): **`telegram-quotes-plan.md` → "Production readiness checklist"**. In short:
+1. Run `supabase-telegram-retention-cron.sql` in the SQL Editor (+ its verify query). The privacy promise "drafts deleted within 24 h" depends on it.
+2. Confirm **`INTERNAL_API_SECRET`** is set for **Production** (new in this feature; the others already exist: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_CHATS`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_AI_API_KEY`).
+3. PR `feature/telegram-quotes` → `main`, merge, wait for the production deploy.
+4. `node tools/set-bot-commands.js production`.
+5. Post-deploy checks: production webhook info clean; /start, receipt, quote (a real number!), panel live update + PDF download.
+6. Rollback: Vercel **Instant Rollback**. DB changes are additive, so the old code still works. Webhook URL unchanged (`https://mr-polishes.com/api/telegram-webhook`).
+7. Optional afterwards: remove the test bot's webhook + `TELEGRAM_TEST_*` vars.
 
-One phase per command; report and stop after each.
+Open notes: `npm audit` shows 6 high zod findings (not exploitable here, no safe fix yet; see the plan's Phase 7a notes). The `supabase` MCP server needs its OAuth login (`/mcp`) before Claude can run SQL; until then the owner runs SQL in the editor.

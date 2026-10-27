@@ -1983,7 +1983,8 @@
       });
 
       function fmtQuoteAmount(n) {
-        return "₪" + Number(n || 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        // "3,000 ₪": number, space, ₪ — the same as the PDF and the Telegram bot.
+        return Number(n || 0).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + " ₪";
       }
 
       function renderQuoteHistory() {

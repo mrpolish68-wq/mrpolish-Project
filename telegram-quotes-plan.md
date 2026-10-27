@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering). **Next:** owner live test on the preview, then Phase 7 (audit, privacy.html, handoff, spike removal, merge).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering), 6b ✅, 7a ✅ (hardening, privacy, spike removed). **Status: READY TO MERGE** (see "Production readiness checklist"); the merge itself is owner-run (7b).
 
 ---
 
@@ -120,6 +120,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 
 ## 3. Existing bugs to fix along the way
 
+**All five are fixed** (5b: the first three; 6: the panel ones). See "Phase 5b notes" and "Phase 6 notes".
+
 | Bug | Location / fix |
 |---|---|
 | `findAwaitingEdit` measures freshness from `created_at` instead of the edit tap | telegram webhook |
@@ -151,7 +153,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ✅ done (see "Phase 6 notes") |
 | 6b | Bot UX fixes from the live test: open-draft amount / follow-up prompt, address format, money format | ✅ done (see "Phase 6b notes") |
-| 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
+| 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | 7a ✅ (see "Phase 7a notes"); **merge = 7b, owner-run** |
 
 **Phase 7 pre-launch checklist (must do before merge):**
 - [ ] Delete any test quotes/rows (quotes, `telegram_*` tables), then set `quote_counter.floor_next = greatest(max(number)+1, 14)` and verify it.
@@ -487,6 +489,89 @@ Only `admin.html` changed: the quote tab (its CSS, the number field, the Tab 3 s
   - (c): every amount the bot sent during the run checked for the "<number> ₪" order, receipts included.
   - The earlier suites, updated for the new formats/behavior: 5d 45/45, 5b 58/58, 5a-2 27/27, 4b 64/64, panel Playwright 34/34.
   - Note: the harness hit the bot's real per-chat quote rate limit (10 / 10 min) on one chat, which is correct behavior, so the later checks run on a fresh chat.
+
+### Phase 7a notes (hardening, privacy, cleanup; no merge)
+
+**Changes**
+- Quote-flow rate limit **30 / 10 min per chat** (receipts 10, menu 30, callbacks 20/min unchanged).
+- Panel quote history amounts: `3,000 ₪` (quotes tab only).
+- `vercel.json` CSP (report-only): `connect-src` + `wss://mmognkxkglkotzkuxzly.supabase.co` (Realtime). Nothing else.
+- `privacy.html`: new section "שימוש בשירותי בינה מלאכותית" (after "מסירת מידע לצדדים שלישיים"; section 13 untouched); "עודכן לאחרונה" → אוקטובר 2026.
+- **Spike deleted** (`api/spike-quote-pdf.js` + its `vercel.json` entry; owner-approved). No references left (only a historical comment in `render-quote-pdf.js`).
+- **Callback ids validated:** every id in `callback_data` must be a UUID (receipt and quote buttons); anything else is ignored before any query.
+- **24 h draft expiry in code:** `findActiveDraft` ignores drafts older than 24 h; `loadDraftRow` deletes an expired draft on sight and treats it as gone.
+- **`supabase-telegram-retention-cron.sql` (NOT applied, owner runs it):** an hourly `pg_cron` job (`telegram-retention-hourly`) deleting drafts and chat state older than 23 h (+ processed updates 7 d, usage 30 d). This makes "drafts deleted within 24 h" true even when nobody messages the bot (the webhook sweep only runs on traffic). Idempotent, with verify + rollback queries.
+
+**Audit: what was checked** (the `supabase` MCP server wasn't available, so DB checks are read-only REST probes, mostly AS `anon`; RPC probes use invalid input so nothing could be written even if a grant were wrong)
+- **Auth & secrets:**
+  - Webhook: Telegram secret via `crypto.timingSafeEqual`; prod vs TEST config strictly separated (`telegramConfig`, no fallback).
+  - `render-quote-pdf`: `X-Internal-Secret` (constant-time, ≥ 32 chars, no fallthrough to Bearer once the header is sent) OR a Supabase session verified via `/auth/v1/user`. **Sign-ups are disabled** (`/auth/v1/settings`: `disable_signup: true`), so "any session" = the existing admin accounts only.
+  - `test_data` / `dry_run` rejected in production. The panel uses the session's Bearer token.
+- **Chat allowlist:** checked before dedupe/any work; fails closed (preview requires the TEST allowlist up front); strangers get silence.
+- **`callback_data`:** prefix/action whitelist + UUID check (new) + `encodeURIComponent`; ≤ 64 bytes.
+- **Input validation:** voice ≤ 3 min / 15 MB (checked before quota and download), MIME allowlist; text ≤ 4000 chars; field caps; totals 0 < n < 1,000,000; real dates only; search term ≥ 2 chars, `*` stripped, `\ % _` escaped.
+- **Prompt injection / AI output:**
+  - Gemini output is only used as schema-typed JSON. Every string is capped and phone-stripped; numbers are type-checked.
+  - The total is accepted only with verbatim evidence that encodes the same number. Item math is in code.
+  - The bot never sends `parse_mode` (plain text, no HTML injection into Telegram).
+  - The PDF template escapes `& < >` for every field (all in text nodes; no attribute sinks).
+- **Rate limits:** per chat and flow (receipt / quote / menu / callbacks), per IP on `render-quote-pdf` (30 / 5 min). In-memory per instance (documented in `_rate-limit.js`); daily quotas are atomic in the DB.
+- **Dedupe:** `update_id` insert-first (409 = duplicate); fails open on DB errors (documented). Approve claims a lease; `quote_id` on the draft prevents a second quote.
+- **RLS / grants / storage (live, anon probes):**
+  - `quote_counter` and all 4 new bot tables → `42501 permission denied` for select and insert; `create_quote`, `consume_daily_quota`, `get_daily_quota_remaining` → `42501`;
+  - `quotes` / `business_expenses` / `telegram_pending_receipts` → 0 rows (RLS);
+  - `quotes-pdf`: private, 5 MB, PDF only, no public URL (400); `receipts`: private, 15 MB, 4 types;
+  - anon storage list → 0 objects.
+  - Policy definitions themselves were verified in Phase 3b (SQL Editor + MCP); not re-read here (no MCP).
+- **PII in logs:** every new `console.*` line reviewed. Status codes, PostgREST error codes, op/timing/outcome only; no names, addresses, descriptions, transcripts, tokens or response bodies (also asserted in the harnesses). Remaining `err.message`s carry our own status texts or Google/Telegram error descriptions (no client data).
+- **Error messages to users:** generic Hebrew texts; no stack traces or internals; the render API returns `{ error: code }` only.
+- **Tools:** `set-test-webhook` / `set-bot-commands` refuse the production token for "test"; secrets are never printed; webhook URLs are shown redacted; `cleanup-test-quotes` touches only `source='telegram'` + test chat ids, re-filters on delete, and its dry run never writes.
+- **Admin quote tab:** `esc()` on all row fields; static badge markup; same-origin render call with Bearer; signed URLs 60 s; Realtime channel removed on logout / `SIGNED_OUT`.
+- **`npm audit --omit=dev`:** 6 high, all **zod < 4.6.6** (memory exhaustion validating oversized collections, GHSA-mrhx-c7xc-m3w5), via `@vercel/functions → @vercel/oidc → @vercel/cli-config (zod 4.1.11, pinned even in the latest 3.10.4)` and `puppeteer-core → chromium-bidi (zod 3)`. **Not exploitable here:** no untrusted input is validated with zod (cli-config parses local CLI config; chromium-bidi parses protocol messages from our own Chromium). The suggested `audit fix --force` downgrades `@vercel/functions`, so it was **not applied**. Re-check when `@vercel/cli-config` or puppeteer ship zod ≥ 4.6.6.
+- **Not changed (by design / documented):** `telegram_pending_receipts` keeps anon table grants from before this feature (RLS with zero policies blocks them: 0 rows); `create_quote` executable by `authenticated` (the panel uses it; callers can't set source/chat).
+
+**Tests (all suites, 343 checks):** 5c 101/101 (+ 8 new 7a: forged callbacks ×5, > 24 h draft not open + deleted on tap, rate limit 30), 5d 45/45, 5b 58/58, 5a-2 27/27, 4b 64/64, panel Playwright 35/35 (+ `3,000 ₪`), render-quote-pdf (4a, local Chrome + one read-only dry run) 13/13. Harness mocks updated: UUID-shaped ids, `gt`/`lte` filters.
+
+### Production readiness checklist (merge = Phase 7b)
+
+**Production env vars** (Vercel → Settings → Environment Variables → Production; names only):
+
+| Name | Needed in Production? | Notes |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | ✅ yes (exists) | Miri's production bot |
+| `TELEGRAM_WEBHOOK_SECRET` | ✅ yes (exists) | must match the registered production webhook |
+| `TELEGRAM_ALLOWED_CHATS` | ✅ yes (exists) | add any chat that should create quotes (comma-separated) |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ yes (exists) | |
+| `GOOGLE_AI_API_KEY` | ✅ yes (exists) | paid Tier 1 project, spend cap |
+| **`INTERNAL_API_SECRET`** | ✅ **yes, NEW: verify it is set for Production** | webhook → `render-quote-pdf`; without it every ✅ ends in "ה-PDF נכשל" |
+| `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL` | ✅ system vars (automatic) | requires "Automatically expose System Environment Variables" (on) |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | ⛔ not needed | production uses the public domain; harmless if present |
+| `TELEGRAM_TEST_BOT_TOKEN` / `_WEBHOOK_SECRET` / `_ALLOWED_CHATS` | ⛔ not used | ignored when `VERCEL_ENV=production` |
+
+**Production webhook URL (unchanged):** `https://mr-polishes.com/api/telegram-webhook`. Already registered; no re-registration needed (`allowed_updates` = message, callback_query).
+
+**Merge steps**
+1. (Recommended first) Run `supabase-telegram-retention-cron.sql` in the SQL Editor and its verify query (the privacy promise depends on it).
+2. Confirm `INTERNAL_API_SECRET` is set for Production (same value as in `.env` is fine).
+3. Open a PR `feature/telegram-quotes` → `main`, review, merge. Vercel deploys production.
+4. Wait until the production deployment is Ready.
+5. `node tools/set-bot-commands.js production` (sets /start, /quote, /help on Miri's bot).
+
+**Post-deploy checks**
+- `node tools/set-telegram-webhook.js info`: no `last_error_message` after the deploy, `pending_update_count` 0.
+- From an allowlisted chat on the production bot: `/start` → menu + "📊 נותרו היום: 15"; a receipt photo → summary → ❌.
+- A quote: 🧾 → details → draft → ✅ → PDF in the chat. **This takes a real number** (the next is 014). Cancel at the draft step instead if no real quote is wanted yet.
+- Panel (`/admin.html`, logged in): the quote appears live with 📱; "📄 צפה / הורדה" downloads it; a panel quote still saves and numbers correctly (create_quote).
+- `/api/render-quote-pdf` without auth → 401. Vercel logs: no errors, no PII.
+
+**Rollback plan**
+- Vercel → Deployments → the previous production deployment → **Instant Rollback**.
+- All DB changes are **additive** (new columns with defaults, new tables, new functions, buckets), so the old code keeps working (old panel inserts get `source='panel'`, `vat_mode='exempt'`). The webhook URL is the same, so the old bot (receipts only) answers again.
+- After a rollback the bot menu still lists /quote: harmless (the old bot replies with its help text). Optionally re-run setMyCommands with the old commands.
+
+**After a successful launch (optional cleanup)**
+- `node tools/set-test-webhook.js delete`; remove the Preview-only `TELEGRAM_TEST_*` vars; optionally delete the test bot in @BotFather; remove `TELEGRAM_TEST_*` lines from `.env`.
+- Delete test quotes from the test chat first if any exist: `node tools/cleanup-test-quotes.js` (dry run) → `--apply`.
 
 ### Phase 2b notes (owner decisions)
 
