@@ -17,6 +17,8 @@
 //      unset, nothing is processed at all. This stops a stranger who finds/messages the
 //      bot from using it, even though they'd pass check #1 (Telegram legitimately relays
 //      their messages too — check #1 only proves the message is real, not that it's Ori).
+//   Which bot: production uses the three vars above; previews/local use their TELEGRAM_TEST_*
+//   counterparts (a separate test bot) and never fall back — see telegramConfig().
 //   Every Supabase write here uses the service_role key (bypasses RLS), same posture as
 //   the cron-triggered writes in publish-scheduled-content.js / analytics-agent.js.
 //
@@ -208,11 +210,39 @@ async function findAwaitingEdit(chatId) {
 }
 
 // ---------------------------------------------------------------------------
+// Which bot this deployment serves
+// ---------------------------------------------------------------------------
+
+// Production serves Miri's bot from TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET /
+// TELEGRAM_ALLOWED_CHATS and ignores the TEST_ vars entirely. Every other environment
+// (branch previews, local runs) serves the separate TEST bot from TELEGRAM_TEST_BOT_TOKEN /
+// TELEGRAM_TEST_WEBHOOK_SECRET / TELEGRAM_TEST_ALLOWED_CHATS (Preview-only vars, see
+// tools/set-test-webhook.js) and NEVER falls back to the production values: a preview with a
+// missing TEST_ var processes nothing (see the handler). Values are never logged.
+function telegramConfig() {
+  var env = process.env;
+  if (env.VERCEL_ENV === "production") {
+    return {
+      test: false,
+      botToken: env.TELEGRAM_BOT_TOKEN || "",
+      webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || "",
+      allowedChats: env.TELEGRAM_ALLOWED_CHATS || ""
+    };
+  }
+  return {
+    test: true,
+    botToken: env.TELEGRAM_TEST_BOT_TOKEN || "",
+    webhookSecret: env.TELEGRAM_TEST_WEBHOOK_SECRET || "",
+    allowedChats: env.TELEGRAM_TEST_ALLOWED_CHATS || ""
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Telegram Bot API helpers
 // ---------------------------------------------------------------------------
 
 async function tgCall(method, payload) {
-  var token = process.env.TELEGRAM_BOT_TOKEN;
+  var token = telegramConfig().botToken;
   var res = await fetch(TELEGRAM_API_ROOT + token + "/" + method, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -232,7 +262,7 @@ function tgCallSafe(method, payload) {
 }
 
 async function tgDownloadFile(filePath) {
-  var token = process.env.TELEGRAM_BOT_TOKEN;
+  var token = telegramConfig().botToken;
   var res = await fetch(TELEGRAM_FILE_ROOT + token + "/" + filePath);
   if (!res.ok) throw new Error("Telegram file download failed: " + res.status);
   var arrayBuffer = await res.arrayBuffer();
@@ -710,7 +740,7 @@ async function processCallbackQuery(query, chatId) {
 // ---------------------------------------------------------------------------
 
 function isAllowedChat(chatId) {
-  var allowedRaw = process.env.TELEGRAM_ALLOWED_CHATS || "";
+  var allowedRaw = telegramConfig().allowedChats;
   var allowed = allowedRaw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   if (!allowed.length) return false; // fail closed — see the file header
   return allowed.indexOf(String(chatId)) !== -1;
@@ -726,10 +756,16 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  var botToken = process.env.TELEGRAM_BOT_TOKEN;
-  var webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!botToken || !webhookSecret || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.GOOGLE_AI_API_KEY) {
-    console.error("[telegram-webhook] missing TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / SUPABASE_SERVICE_ROLE_KEY / GOOGLE_AI_API_KEY configuration");
+  var tgConfig = telegramConfig();
+  var botToken = tgConfig.botToken;
+  var webhookSecret = tgConfig.webhookSecret;
+  // Previews also require the test allowlist up front (fail closed before any Telegram call).
+  // In production an empty allowlist keeps its existing behavior: isAllowedChat() fails closed.
+  if (!botToken || !webhookSecret || (tgConfig.test && !tgConfig.allowedChats) ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.GOOGLE_AI_API_KEY) {
+    console.error("[telegram-webhook] missing " +
+      (tgConfig.test ? "TELEGRAM_TEST_BOT_TOKEN / TELEGRAM_TEST_WEBHOOK_SECRET / TELEGRAM_TEST_ALLOWED_CHATS" : "TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET") +
+      " / SUPABASE_SERVICE_ROLE_KEY / GOOGLE_AI_API_KEY configuration");
     // Still 200 — Telegram would otherwise retry indefinitely, and there's no useful
     // reply we can send without a working bot token in the first place.
     res.status(200).json({ ok: true });
