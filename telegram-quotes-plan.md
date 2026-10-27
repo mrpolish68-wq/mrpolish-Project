@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), **next:** owner applies `supabase-telegram-receipts-awaiting-since.sql`, then Phase 5c (the quote flow itself).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). **Next:** Phase 5c (the quote flow itself).
 
 ---
 
@@ -145,7 +145,7 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 4a | `api/render-quote-pdf.js`: production quote PDF function (auth, storage upsert, `pdf_path`) | ✅ done (see "Phase 4a notes") |
 | 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes") |
 | 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); test webhook registered (5a-2) |
-| 5b | Bot reliability (dedupe, ACK + `waitUntil`, sweeps), routing, menu, receipt quota, known bug fixes | ✅ done (see "Phase 5b notes"); migration file **not applied yet** |
+| 5b | Bot reliability (dedupe, ACK + `waitUntil`, sweeps), routing, menu, receipt quota, known bug fixes | ✅ done (see "Phase 5b notes"); `awaiting_since` column applied 2026-10-27 |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -355,7 +355,7 @@ Migration adjustments from the live state:
   - Callbacks are answered immediately (`⏳`). A callback can only be answered once, so the former toasts were dropped (the edited summary shows the outcome) and the former alerts are sent as short chat messages (`cbNotice`).
   - Opportunistic retention sweep (`sweepRetention`, at most once per 10 min per warm instance, inside `waitUntil`): pending receipts 48h, pending quotes 24h, chat state 24h, processed updates 7 days, daily usage 30 days.
 - **Known bugs fixed:**
-  - Edit freshness from the edit TAP: `awaiting_since` on `telegram_pending_receipts` (migration file **`supabase-telegram-receipts-awaiting-since.sql`, not applied**; owner runs it in the SQL Editor). Until then the code detects the missing column (PGRST204/42703) and falls back to `created_at`; a warm instance that saw the error keeps the fallback until it's recycled.
+  - Edit freshness from the edit TAP: `awaiting_since` on `telegram_pending_receipts` (`supabase-telegram-receipts-awaiting-since.sql`). **Applied 2026-10-27 by the owner in the Supabase SQL Editor** (the file's two statements; the `supabase` MCP server was unavailable in that session, its OAuth login not done). The verify query returned one row, `awaiting_since` / `timestamp with time zone`. Like Phase 3b, it is **NOT in the migration history**. The code's missing-column fallback (PGRST204/42703 → `created_at`) stays as a safety net; a warm instance that hit the error before the column existed keeps the fallback until it's recycled.
   - No PostgREST bodies in logs: `supabaseInsert` logs status + error code only; the storage upload logs the status only.
   - Rate limits split per chat and flow: receipt 10/10 min, quote 10/10 min, menu 30/10 min (callbacks stay 20/min).
 - **Routing** (`routeMessage`): menu label or command (`/start`, `/help`, `/quote`, also `/cmd@botname`) → pending edit (receipt or quote draft, newest `awaiting_since` wins; a quote waiting for a voice correction takes voice only) → photo/document = receipt (unchanged) → voice, or text matching `הצעת מחיר|הצעה|מטר|מ"ר` = quote (**stub: "בקרוב"** until 5c) → otherwise "לא בטוח שהבנתי" + inline `🧾 להכין הצעת מחיר?` (stub). A menu tap clears pending edit state (receipts + quote drafts) and the chat state.
