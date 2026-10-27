@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5a ✅, **next:** owner sets the preview-only Vercel vars for the TEST bot, then `register` + a receipt sanity test on the preview, then Phase 5 (bot flow).
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), **next:** owner applies `supabase-telegram-receipts-awaiting-since.sql`, then Phase 5c (the quote flow itself).
 
 ---
 
@@ -144,7 +144,8 @@ Ori and Miri create price quotes (הצעות מחיר) through the existing Tele
 | 4 | Production server PDF function (replaces the spike) + Gemini quote-extraction module + quota tracking | ✅ (4a + 4b) |
 | 4a | `api/render-quote-pdf.js`: production quote PDF function (auth, storage upsert, `pdf_path`) | ✅ done (see "Phase 4a notes") |
 | 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js` (daily quota helpers) | ✅ done (see "Phase 4b notes") |
-| 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); webhook **not registered yet** |
+| 5a | Test-bot tooling (`tools/set-test-webhook.js`) + quotas restored to 15 / 20 / 3 | ✅ done (see "Phase 5a notes"); test webhook registered (5a-2) |
+| 5b | Bot reliability (dedupe, ACK + `waitUntil`, sweeps), routing, menu, receipt quota, known bug fixes | ✅ done (see "Phase 5b notes"); migration file **not applied yet** |
 | 5 | Bot flow: routing, menu, drafts, edits, voice corrections, approve → PDF | ⏳ |
 | 6 | Panel sync: Realtime + `visibilitychange` refetch, `📱 טלגרם` badge, stored-PDF download | ⏳ |
 | 7 | Security/privacy audit, test harness, `privacy.html`, `handoff.md` update, delete the spike (ask the owner first), merge | ⏳ |
@@ -346,6 +347,23 @@ Migration adjustments from the live state:
   - No other runtime code reads the bot token (`tools/set-telegram-webhook.js` is the production CLI, `tools/set-test-webhook.js` the test one).
   - Tests (all outbound calls mocked, fake values): 27/27. Resolver: production / preview / local / each TEST_ var missing (no fallback, 0 calls) / no values in logs. Receipt regression: photo → Gemini + upload + pending + summary; category cycle; cancel (row + file deleted); confirm (one insert); double confirm (no 2nd insert); missing amount refused; wrong secret 401. The original 5 receipt harnesses from §31 are no longer on disk (they lived in an old session scratchpad and wrote to live Supabase), so the regression was rebuilt fully mocked.
 - **Next:** after the preview vars are set and the preview redeployed → `register`, then the receipt sanity test (photo → existing receipt flow end to end on the preview).
+
+### Phase 5b notes
+
+- **Reliability** (`api/telegram-webhook.js`):
+  - Order: secret → allowlist → **dedupe** (`claimUpdate`: insert `update_id` into `telegram_processed_updates` first; 409 = duplicate → 200, nothing done; any other DB error fails OPEN) → **ACK 200** → the work in `waitUntil` (`@vercel/functions` **3.10.1**, pinned exact).
+  - Callbacks are answered immediately (`⏳`). A callback can only be answered once, so the former toasts were dropped (the edited summary shows the outcome) and the former alerts are sent as short chat messages (`cbNotice`).
+  - Opportunistic retention sweep (`sweepRetention`, at most once per 10 min per warm instance, inside `waitUntil`): pending receipts 48h, pending quotes 24h, chat state 24h, processed updates 7 days, daily usage 30 days.
+- **Known bugs fixed:**
+  - Edit freshness from the edit TAP: `awaiting_since` on `telegram_pending_receipts` (migration file **`supabase-telegram-receipts-awaiting-since.sql`, not applied**; owner runs it in the SQL Editor). Until then the code detects the missing column (PGRST204/42703) and falls back to `created_at`; a warm instance that saw the error keeps the fallback until it's recycled.
+  - No PostgREST bodies in logs: `supabaseInsert` logs status + error code only; the storage upload logs the status only.
+  - Rate limits split per chat and flow: receipt 10/10 min, quote 10/10 min, menu 30/10 min (callbacks stay 20/min).
+- **Routing** (`routeMessage`): menu label or command (`/start`, `/help`, `/quote`, also `/cmd@botname`) → pending edit (receipt or quote draft, newest `awaiting_since` wins; a quote waiting for a voice correction takes voice only) → photo/document = receipt (unchanged) → voice, or text matching `הצעת מחיר|הצעה|מטר|מ"ר` = quote (**stub: "בקרוב"** until 5c) → otherwise "לא בטוח שהבנתי" + inline `🧾 להכין הצעת מחיר?` (stub). A menu tap clears pending edit state (receipts + quote drafts) and the chat state.
+- **Menu:** persistent reply keyboard with the 6 approved buttons; `/start` (welcome + help), `/help` / `❓ עזרה` (help), both with `📊 נותרו היום: N הצעות מחיר` (omitted if the lookup fails). `📷 סריקת קבלה` → photo instructions. `💰 סיכום הוצאות החודש` → **implemented** (this Israel calendar month from `business_expenses`, total + per category, math in code). `🧾`, `📜`, `🔍` → stub "בקרוב".
+- **Receipt quota:** `consumeQuota("receipt")` before the file download and Gemini. At the limit: a friendly message (try tomorrow or add it in the panel). Quota unavailable → fails closed ("שגיאה זמנית").
+- **`tools/set-bot-commands.js`** (`test` | `production` [`show`]): ran for the TEST bot only (`/start`, `/quote`, `/help`). Same production-token guard as `set-test-webhook.js`.
+- **Tests (all mocked, fake values):** 5b harness 58/58 (menu, routing, dedupe incl. fail-open, ACK before work, callback answered once and first, receipt quota before Gemini / at limit / unavailable, edit freshness from the tap + > 30 min + no-column fallback, menu clears edit state, newest edit wins, per-flow limits, no PII/bodies/tokens in logs, sweep targets + throttle, receipt regression); 5a-2 resolver harness 27/27 (updated for `waitUntil`, and "חסר סכום" is now a message); 4b offline 64/64.
+- `npm audit`: 6 high findings, all **zod** (memory exhaustion on oversized validated collections) pulled in by `@vercel/oidc` (via `@vercel/functions`) and, already before 5b, by puppeteer's `chromium-bidi`. Neither validates untrusted input with zod here; not force-fixed (the suggested fix downgrades `@vercel/functions`). Re-check at Phase 7.
 
 ### Phase 2b notes (owner decisions)
 

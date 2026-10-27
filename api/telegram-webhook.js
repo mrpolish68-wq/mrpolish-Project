@@ -44,6 +44,13 @@
 // button tap) can still edit the ONE summary message in place instead of spamming a new
 // message into the chat for every correction.
 //
+// Reliability + routing (Telegram quotes, Phase 5b): every update is deduped by update_id
+// (telegram_processed_updates, insert-first), ACKed with 200 right away, and processed in
+// waitUntil; callbacks are answered immediately. A message is routed: menu label/command ->
+// pending edit (receipt or quote draft, newest wins) -> photo/document = receipt -> voice or
+// text with a quote keyword = quote -> otherwise "unclear" + a "🧾 להכין הצעת מחיר?" button.
+// Separate per-chat rate limits per flow (receipt / quote / menu). See routeMessage().
+//
 // Data flow (deliberately mirrors admin.html's "AI suggests, human confirms" scanner):
 //   photo/PDF in -> download from Telegram -> Gemini extraction -> upload original to the
 //   private "receipts" Storage bucket (Phase 1's bucket) -> pending row + summary message
@@ -55,7 +62,9 @@
 "use strict";
 
 const crypto = require("crypto");
+const { waitUntil } = require("@vercel/functions");
 const { rateLimit } = require("./_rate-limit.js");
+const { consumeQuota, getRemaining, LIMITS } = require("./_quota.js");
 const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES, CATEGORIES } = require("./parse-receipt.js");
 
 // Constant-time comparison for the webhook secret — a plain !== short-circuits on the
@@ -75,7 +84,7 @@ const TELEGRAM_API_ROOT = "https://api.telegram.org/bot";
 const TELEGRAM_FILE_ROOT = "https://api.telegram.org/file/bot";
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // same guard as the dashboard's client-side check
-const PENDING_TTL_HOURS = 48; // opportunistic sweep, see cleanupStalePending()
+const PENDING_TTL_HOURS = 48; // opportunistic sweep, see sweepRetention()
 const AWAITING_EDIT_TTL_MS = 30 * 60 * 1000; // see findAwaitingEdit()
 
 // ---------------------------------------------------------------------------
@@ -95,8 +104,9 @@ async function supabaseInsert(table, row) {
     headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
     body: JSON.stringify(row)
   });
-  var data = await res.json();
-  if (!res.ok) throw new Error("Supabase insert into " + table + " failed: " + res.status + " " + JSON.stringify(data));
+  var data = await res.json().catch(function () { return null; });
+  // Status + PostgREST error code only: the body can echo row values ("Failing row contains …").
+  if (!res.ok) throw new Error("Supabase insert into " + table + " failed: " + res.status + (data && data.code ? " " + data.code : ""));
   return data[0];
 }
 
@@ -131,10 +141,7 @@ async function uploadReceiptToStorage(path, buffer, mimeType) {
     headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": mimeType, "x-upsert": "false" },
     body: buffer
   });
-  if (!res.ok) {
-    var text = await res.text();
-    throw new Error("Storage upload failed: " + res.status + " " + text);
-  }
+  if (!res.ok) throw new Error("Storage upload failed: " + res.status); // status only, never the body
 }
 
 // Best-effort cleanup (e.g. after Ori taps "בטל") — never lets a Storage failure break
@@ -152,13 +159,82 @@ async function deleteReceiptFromStorage(path) {
   }
 }
 
-async function cleanupStalePending() {
-  var cutoff = new Date(Date.now() - PENDING_TTL_HOURS * 60 * 60 * 1000).toISOString();
-  try {
-    await supabaseDelete("telegram_pending_receipts", "created_at=lt." + encodeURIComponent(cutoff));
-  } catch (err) {
-    console.error("[telegram-webhook] stale-pending cleanup failed: " + err.message);
+// Opportunistic retention sweeps (no DB jobs; supabase-quotes-telegram.sql §8). At most once
+// per SWEEP_INTERVAL_MS per warm instance, inside waitUntil, so they never delay a reply.
+var SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+var RETENTION = [
+  // [table, timestamp column, max age ms]
+  ["telegram_pending_receipts", "created_at", PENDING_TTL_HOURS * 60 * 60 * 1000],
+  ["telegram_pending_quotes", "created_at", 24 * 60 * 60 * 1000],      // drafts + transcripts
+  ["telegram_chat_state", "state_since", 24 * 60 * 60 * 1000],
+  ["telegram_processed_updates", "created_at", 7 * 24 * 60 * 60 * 1000],
+  ["telegram_daily_usage", "day", 30 * 24 * 60 * 60 * 1000]
+];
+var lastSweepAt = 0;
+
+async function sweepRetention() {
+  if (Date.now() - lastSweepAt < SWEEP_INTERVAL_MS) return;
+  lastSweepAt = Date.now();
+  for (var i = 0; i < RETENTION.length; i++) {
+    var table = RETENTION[i][0], column = RETENTION[i][1];
+    var cutoff = new Date(Date.now() - RETENTION[i][2]).toISOString();
+    if (column === "day") cutoff = cutoff.slice(0, 10);
+    try {
+      await supabaseDelete(table, column + "=lt." + encodeURIComponent(cutoff));
+    } catch (err) {
+      console.error("[telegram-webhook] retention sweep failed for " + table + ": " + err.message);
+    }
   }
+}
+
+// Dedupe: insert the update_id FIRST. A redelivery (Telegram retries when our reply was
+// slow or failed) hits the primary key -> 409 -> "duplicate". Any other failure fails OPEN
+// (process the update), so a DB hiccup never drops a real message.
+async function claimUpdate(updateId) {
+  if (typeof updateId !== "number") return true;
+  try {
+    var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_processed_updates", {
+      method: "POST",
+      headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
+      body: JSON.stringify({ update_id: updateId })
+    });
+    if (res.status === 409) return false;
+    if (!res.ok) console.error("[telegram-webhook] dedupe insert HTTP " + res.status + " (failing open)");
+    return true;
+  } catch (err) {
+    console.error("[telegram-webhook] dedupe insert failed (failing open)");
+    return true;
+  }
+}
+
+// Edit freshness is measured from the edit TAP (awaiting_since), not from when the receipt
+// arrived (created_at, the old bug): a receipt sent 25 minutes ago whose edit button was
+// tapped just now must still take the reply. awaiting_since is added by
+// supabase-telegram-receipts-awaiting-since.sql; until that file is applied, PostgREST
+// rejects the unknown column (PGRST204 / 42703) and the code falls back to the old
+// created_at behavior instead of breaking the receipt edit flow.
+var receiptsHaveAwaitingSince = true;
+
+function isMissingColumnError(status, body) {
+  return status === 400 && body && (body.code === "PGRST204" || body.code === "42703");
+}
+
+// Sets (or clears, with field=null) the receipt edit state. Returns nothing; throws on failure.
+async function setReceiptAwaitingEdit(pendingId, field) {
+  var patch = { awaiting_edit_field: field };
+  if (receiptsHaveAwaitingSince) patch.awaiting_since = field ? new Date().toISOString() : null;
+  var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_pending_receipts?id=eq." + encodeURIComponent(pendingId), {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
+    body: JSON.stringify(patch)
+  });
+  if (res.ok) return;
+  var body = await res.json().catch(function () { return null; });
+  if (receiptsHaveAwaitingSince && isMissingColumnError(res.status, body)) {
+    receiptsHaveAwaitingSince = false;
+    return setReceiptAwaitingEdit(pendingId, field);
+  }
+  throw new Error("Supabase patch on telegram_pending_receipts failed: " + res.status);
 }
 
 // The most recent pending receipt for this chat that's mid-edit (awaiting_edit_field
@@ -166,6 +242,76 @@ async function cleanupStalePending() {
 // Ori tapped an edit button, got distracted, and messages the bot again an hour later
 // about something unrelated, that later text should NOT be silently swallowed as an
 // edit reply for a receipt he's long since forgotten about.
+async function findAwaitingEdit(chatId) {
+  var cutoff = encodeURIComponent(new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString());
+  var col = receiptsHaveAwaitingSince ? "awaiting_since" : "created_at";
+  try {
+    var res = await fetch(
+      SUPABASE_URL + "/rest/v1/telegram_pending_receipts?chat_id=eq." + chatId +
+      "&awaiting_edit_field=not.is.null&" + col + "=gte." + cutoff +
+      "&order=" + col + ".desc&limit=1&select=*",
+      { headers: supabaseHeaders() }
+    );
+    if (!res.ok) {
+      var body = await res.json().catch(function () { return null; });
+      if (receiptsHaveAwaitingSince && isMissingColumnError(res.status, body)) {
+        receiptsHaveAwaitingSince = false;
+        return findAwaitingEdit(chatId);
+      }
+      return null;
+    }
+    var rows = await res.json();
+    if (!rows[0]) return null;
+    rows[0].edit_since = rows[0][col];
+    return rows[0];
+  } catch (err) {
+    console.error("[telegram-webhook] findAwaitingEdit failed: " + err.message);
+    return null;
+  }
+}
+
+// Same for quote drafts (telegram_pending_quotes has awaiting_since from the start).
+async function findAwaitingQuoteEdit(chatId) {
+  var cutoff = encodeURIComponent(new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString());
+  try {
+    var res = await fetch(
+      SUPABASE_URL + "/rest/v1/telegram_pending_quotes?chat_id=eq." + chatId +
+      "&awaiting_edit_field=not.is.null&awaiting_since=gte." + cutoff +
+      "&order=awaiting_since.desc&limit=1&select=id,awaiting_edit_field,awaiting_since",
+      { headers: supabaseHeaders() }
+    );
+    if (!res.ok) return null;
+    var rows = await res.json();
+    if (!rows[0]) return null;
+    rows[0].edit_since = rows[0].awaiting_since;
+    return rows[0];
+  } catch (err) {
+    console.error("[telegram-webhook] findAwaitingQuoteEdit failed: " + err.message);
+    return null;
+  }
+}
+
+// A menu tap starts over: clears any pending edit state (receipts + quote drafts) and the
+// chat's menu state. Best-effort; drafts themselves are kept.
+async function clearEditState(chatId) {
+  var receiptPatch = { awaiting_edit_field: null };
+  if (receiptsHaveAwaitingSince) receiptPatch.awaiting_since = null;
+  var ops = [
+    supabasePatch("telegram_pending_receipts", "chat_id=eq." + chatId + "&awaiting_edit_field=not.is.null", receiptPatch),
+    supabasePatch("telegram_pending_quotes", "chat_id=eq." + chatId + "&awaiting_edit_field=not.is.null", { awaiting_edit_field: null, awaiting_since: null }),
+    supabaseDelete("telegram_chat_state", "chat_id=eq." + chatId)
+  ];
+  var results = await Promise.allSettled(ops);
+  if (results[0].status === "rejected" && receiptsHaveAwaitingSince) {
+    // Most likely the awaiting_since column isn't there yet: retry without it.
+    await supabasePatch("telegram_pending_receipts", "chat_id=eq." + chatId + "&awaiting_edit_field=not.is.null", { awaiting_edit_field: null })
+      .catch(function () {});
+  }
+  results.forEach(function (r) {
+    if (r.status === "rejected") console.error("[telegram-webhook] clearEditState: " + r.reason.message);
+  });
+}
+
 // Claims a pending row atomically before the one operation that genuinely can't be
 // double-run safely: inserting into business_expenses. A fat-finger double-tap on
 // "✅ אשר", or Telegram redelivering the same callback_query when our response was
@@ -189,24 +335,6 @@ async function claimPendingRow(id) {
   if (!res.ok) throw new Error("Supabase claim failed: " + res.status);
   var rows = await res.json();
   return rows[0] || null;
-}
-
-async function findAwaitingEdit(chatId) {
-  var cutoff = new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString();
-  try {
-    var res = await fetch(
-      SUPABASE_URL + "/rest/v1/telegram_pending_receipts?chat_id=eq." + chatId +
-      "&awaiting_edit_field=not.is.null&created_at=gte." + encodeURIComponent(cutoff) +
-      "&order=created_at.desc&limit=1&select=*",
-      { headers: supabaseHeaders() }
-    );
-    if (!res.ok) return null;
-    var rows = await res.json();
-    return rows[0] || null;
-  } catch (err) {
-    console.error("[telegram-webhook] findAwaitingEdit failed: " + err.message);
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,6 +609,24 @@ async function processReceiptMessage(message, chatId) {
     return;
   }
 
+  // Daily receipt quota (global, resets at midnight Israel time), used up BEFORE Gemini.
+  // Fails closed: if the quota can't be checked, no AI call is made.
+  var quota;
+  try {
+    quota = await consumeQuota("receipt");
+  } catch (err) {
+    console.error("[telegram-webhook] receipt quota check failed: " + err.code);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית. נסו לשלוח שוב בעוד רגע." });
+    return;
+  }
+  if (!quota.ok) {
+    await tgCallSafe("sendMessage", {
+      chat_id: chatId,
+      text: "הגענו למכסת סריקת הקבלות להיום (" + LIMITS.receipt + ") 🙂\nאפשר לשלוח שוב מחר, או להזין את ההוצאה ידנית בלוח הבקרה."
+    });
+    return;
+  }
+
   await tgCallSafe("sendChatAction", { chat_id: chatId, action: "typing" });
 
   var fileInfo, fileBuffer;
@@ -603,7 +749,13 @@ async function processEditReply(pending, text, chatId) {
 // Callback query handling — Ori tapped one of the inline-keyboard buttons
 // ---------------------------------------------------------------------------
 
-var KNOWN_ACTIONS = ["confirm", "cancel", "editdate", "editamount", "cyclecat"];
+var KNOWN_ACTIONS = ["confirm", "cancel", "editdate", "editamount", "cyclecat", "newquote"];
+
+// Every callback is answered immediately in the handler (stops the button's spinner), and a
+// callback can be answered only once, so anything the user must read is sent as a message.
+function cbNotice(chatId, text) {
+  return tgCallSafe("sendMessage", { chat_id: chatId, text: text });
+}
 
 async function processCallbackQuery(query, chatId) {
   var data = query.data || "";
@@ -613,7 +765,10 @@ async function processCallbackQuery(query, chatId) {
   var messageId = query.message && query.message.message_id;
 
   if (KNOWN_ACTIONS.indexOf(action) === -1) {
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id });
+    return;
+  }
+  if (action === "newquote") {
+    await sendQuoteStub(chatId);
     return;
   }
 
@@ -622,14 +777,14 @@ async function processCallbackQuery(query, chatId) {
     pending = await supabaseSelectOne("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
   } catch (err) {
     console.error("[telegram-webhook] pending lookup failed: " + err.message);
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה זמנית. נסו שוב.", show_alert: true });
+    await cbNotice(chatId, "שגיאה זמנית. נסו שוב.");
     return;
   }
 
   // Missing row (already handled, expired, or tampered id) / chat mismatch — same
   // response either way, no need to distinguish for the user.
   if (!pending || String(pending.chat_id) !== String(chatId)) {
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "הבקשה כבר טופלה או שפג תוקפה.", show_alert: true });
+    await cbNotice(chatId, "הבקשה כבר טופלה או שפג תוקפה.");
     if (messageId) await tgCallSafe("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
     return;
   }
@@ -637,7 +792,6 @@ async function processCallbackQuery(query, chatId) {
   if (action === "cancel") {
     await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
     await deleteReceiptFromStorage(pending.receipt_path);
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "בוטל" });
     if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(pending.extracted) + "\n\n❌ בוטל — לא נשמר." });
     return;
   }
@@ -648,11 +802,10 @@ async function processCallbackQuery(query, chatId) {
       await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { extracted: afterCycle });
     } catch (err) {
       console.error("[telegram-webhook] category cycle patch failed: " + err.message);
-      await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה. נסו שוב.", show_alert: true });
+      await cbNotice(chatId, "שגיאה. נסו שוב.");
       return;
     }
     var cyclePayload = await buildSummaryPayload(afterCycle, pendingId);
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "קטגוריה: " + afterCycle.category });
     if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: cyclePayload.text, reply_markup: cyclePayload.keyboard });
     return;
   }
@@ -660,13 +813,12 @@ async function processCallbackQuery(query, chatId) {
   if (action === "editdate" || action === "editamount") {
     var field = action === "editdate" ? "date" : "amount";
     try {
-      await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { awaiting_edit_field: field });
+      await setReceiptAwaitingEdit(pendingId, field);
     } catch (err) {
       console.error("[telegram-webhook] awaiting_edit_field patch failed: " + err.message);
-      await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה. נסו שוב.", show_alert: true });
+      await cbNotice(chatId, "שגיאה. נסו שוב.");
       return;
     }
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id });
     var promptNote = field === "date"
       ? "✏️ שלחו כעת את התאריך החדש (למשל 15/08/2026 או 2026-08-15)."
       : "✏️ שלחו כעת את הסכום החדש (מספר בלבד, למשל 245.50).";
@@ -688,11 +840,10 @@ async function processCallbackQuery(query, chatId) {
     claimed = await claimPendingRow(pendingId);
   } catch (err) {
     console.error("[telegram-webhook] claim failed: " + err.message);
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה זמנית. נסו שוב.", show_alert: true });
+    await cbNotice(chatId, "שגיאה זמנית. נסו שוב.");
     return;
   }
   if (!claimed) {
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "כבר בטיפול…" });
     return;
   }
 
@@ -702,7 +853,7 @@ async function processCallbackQuery(query, chatId) {
   if (claimed.extracted.total_amount == null) {
     await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
     await deleteReceiptFromStorage(claimed.receipt_path);
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "לא ניתן לשמור — חסר סכום.", show_alert: true });
+    await cbNotice(chatId, "לא ניתן לשמור — חסר סכום.");
     if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(claimed.extracted) + "\n\n❌ לא נשמר — יש להוסיף ידנית בלוח הבקרה." });
     return;
   }
@@ -726,13 +877,227 @@ async function processCallbackQuery(query, chatId) {
     // the row (and its Storage file) are still intact, an instant retry can pick it
     // back up. Best-effort: if this itself fails, the lease still self-heals in 2 min.
     await supabasePatch("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId), { claimed_at: null }).catch(function () {});
-    await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "שגיאה בשמירה. נסו שוב.", show_alert: true });
+    await cbNotice(chatId, "שגיאה בשמירה. נסו שוב.");
     return;
   }
 
   await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
-  await tgCallSafe("answerCallbackQuery", { callback_query_id: query.id, text: "✅ נשמר!" });
   if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(claimed.extracted) + "\n\n✅ נשמר בהוצאות העסק." });
+}
+
+// ---------------------------------------------------------------------------
+// Menu: persistent reply keyboard, /start /help /quote, help text
+// ---------------------------------------------------------------------------
+
+var MENU = {
+  NEW_QUOTE: "🧾 הצעת מחיר חדשה",
+  RECEIPT: "📷 סריקת קבלה",
+  RECENT: "📜 הצעות אחרונות",
+  SEARCH: "🔍 חיפוש הצעה",
+  SUMMARY: "💰 סיכום הוצאות החודש",
+  HELP: "❓ עזרה"
+};
+
+var MAIN_KEYBOARD = {
+  keyboard: [
+    [{ text: MENU.NEW_QUOTE }, { text: MENU.RECEIPT }],
+    [{ text: MENU.RECENT }, { text: MENU.SEARCH }],
+    [{ text: MENU.SUMMARY }, { text: MENU.HELP }]
+  ],
+  resize_keyboard: true,
+  is_persistent: true
+};
+
+// Exact menu labels and commands only (no AI). "/start@botname" counts as "/start".
+var LABEL_ACTIONS = {};
+LABEL_ACTIONS[MENU.NEW_QUOTE] = "quote";
+LABEL_ACTIONS[MENU.RECEIPT] = "receipt";
+LABEL_ACTIONS[MENU.RECENT] = "recent";
+LABEL_ACTIONS[MENU.SEARCH] = "search";
+LABEL_ACTIONS[MENU.SUMMARY] = "summary";
+LABEL_ACTIONS[MENU.HELP] = "help";
+var COMMAND_ACTIONS = { "/start": "start", "/help": "help", "/quote": "quote" };
+
+function menuAction(text) {
+  if (!text) return null;
+  if (LABEL_ACTIONS[text]) return LABEL_ACTIONS[text];
+  if (text[0] === "/") return COMMAND_ACTIONS[text.split(/\s/)[0].split("@")[0].toLowerCase()] || null;
+  return null;
+}
+
+// Keyword intent for a quote (plan: keyword / exact-label matching only, no AI classification).
+var QUOTE_INTENT_RE = /הצעת מחיר|הצעה|מטר|מ["״'׳]ר/;
+
+var HELP_TEXT =
+  "מה אפשר לעשות כאן:\n\n" +
+  "📷 קבלה: שולחים תמונה של קבלה או חשבונית (או קובץ PDF). אני קורא אותה, מראה לכם את הפרטים, " +
+  "ואחרי שתלחצו ✅ היא נשמרת בהוצאות העסק.\n\n" +
+  "🧾 הצעת מחיר: בקרוב. יהיה אפשר להקליט הודעה קולית או לכתוב את פרטי העבודה, ואני אכין הצעה.\n\n" +
+  "💰 סיכום החודש: כמה הוצאנו החודש, לפי קטגוריה.\n\n" +
+  "בכל רגע אפשר ללחוץ על כפתור בתפריט למטה כדי להתחיל מחדש.";
+
+async function quotaLine() {
+  try {
+    return "\n\n📊 נותרו היום: " + (await getRemaining("quote")) + " הצעות מחיר";
+  } catch (err) {
+    return ""; // the line is informative only; never block the menu on it
+  }
+}
+
+async function sendHelp(chatId, intro) {
+  await tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: (intro ? intro + "\n\n" : "") + HELP_TEXT + (await quotaLine()),
+    reply_markup: MAIN_KEYBOARD
+  });
+}
+
+// Quote flow placeholder until Phase 5c.
+function sendQuoteStub(chatId) {
+  return tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: "🧾 הכנת הצעות מחיר דרך הבוט תגיע בקרוב.\nבינתיים אפשר להכין הצעה בלוח הבקרה.",
+    reply_markup: MAIN_KEYBOARD
+  });
+}
+
+// Unclear message: offer the quote flow (plan: "🧾 להכין הצעת מחיר?").
+function sendUnclear(chatId) {
+  return tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: "לא בטוח שהבנתי 🙂\nאפשר לשלוח תמונה של קבלה, או לבחור פעולה מהתפריט למטה.",
+    reply_markup: { inline_keyboard: [[{ text: "🧾 להכין הצעת מחיר?", callback_data: "newquote" }]] }
+  });
+}
+
+var HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+
+// 💰 This calendar month (Israel time), from the DB only: total + per category.
+async function sendMonthSummary(chatId) {
+  var parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+  var y = +parts.find(function (p) { return p.type === "year"; }).value;
+  var m = +parts.find(function (p) { return p.type === "month"; }).value;
+  var from = y + "-" + pad2(m) + "-01";
+  var to = (m === 12 ? (y + 1) + "-01" : y + "-" + pad2(m + 1)) + "-01";
+  var rows;
+  try {
+    var res = await fetch(SUPABASE_URL + "/rest/v1/business_expenses?select=amount,category&date=gte." + from + "&date=lt." + to, { headers: supabaseHeaders() });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    rows = await res.json();
+  } catch (err) {
+    console.error("[telegram-webhook] month summary query failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית בטעינת הסיכום. נסו שוב בעוד רגע." });
+    return;
+  }
+  var title = "💰 הוצאות " + HE_MONTHS[m - 1] + " " + y;
+  if (!rows.length) {
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: title + "\n\nאין עדיין הוצאות רשומות החודש.", reply_markup: MAIN_KEYBOARD });
+    return;
+  }
+  var byCat = {};
+  var total = 0;
+  rows.forEach(function (r) {
+    var a = Number(r.amount) || 0;
+    total += a;
+    byCat[r.category] = (byCat[r.category] || 0) + a;
+  });
+  var lines = Object.keys(byCat).sort(function (a, b) { return byCat[b] - byCat[a]; })
+    .map(function (c) { return "• " + c + ": " + fmtMoney(byCat[c]); });
+  await tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: title + "\n\nסה״כ: " + fmtMoney(total) + " (" + rows.length + " הוצאות)\n\n" + lines.join("\n"),
+    reply_markup: MAIN_KEYBOARD
+  });
+}
+
+async function handleMenu(action, chatId) {
+  if (action === "start") return sendHelp(chatId, "שלום! אני הבוט של מיסטר פוליש 🙂");
+  if (action === "help") return sendHelp(chatId, null);
+  if (action === "quote" || action === "recent" || action === "search") return sendQuoteStub(chatId);
+  if (action === "summary") return sendMonthSummary(chatId);
+  if (action === "receipt") {
+    return tgCallSafe("sendMessage", {
+      chat_id: chatId,
+      text: "📷 שלחו עכשיו תמונה של הקבלה (מהמצלמה או מהגלריה), או קובץ PDF.",
+      reply_markup: MAIN_KEYBOARD
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Routing (one message): menu label/command -> pending edit (newest wins) -> photo/document =
+// receipt -> voice/text with quote intent = quote -> otherwise "unclear" + the quote offer.
+// ---------------------------------------------------------------------------
+
+// Separate per-chat budgets per flow, so a burst in one flow doesn't lock the others.
+var FLOW_LIMITS = {
+  receipt: { max: 10, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לשלוח קבלה נוספת בעוד כמה דקות." },
+  quote: { max: 10, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לנסות שוב בעוד כמה דקות." },
+  menu: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 נסו שוב בעוד רגע." }
+};
+
+async function withinFlowLimit(flow, chatId) {
+  var l = FLOW_LIMITS[flow];
+  if (rateLimit("telegram-" + flow + ":" + chatId, l.max, l.windowMs).ok) return true;
+  await tgCallSafe("sendMessage", { chat_id: chatId, text: l.text });
+  return false;
+}
+
+async function routeMessage(msg, chatId) {
+  var text = typeof msg.text === "string" ? msg.text.trim() : "";
+  var isVoice = !!(msg.voice || msg.audio);
+
+  var action = menuAction(text);
+  if (action) {
+    if (!(await withinFlowLimit("menu", chatId))) return;
+    await clearEditState(chatId); // a menu tap starts over
+    await handleMenu(action, chatId);
+    return;
+  }
+
+  if (text || isVoice) {
+    var found = await Promise.all([text ? findAwaitingEdit(chatId) : null, findAwaitingQuoteEdit(chatId)]);
+    var receiptEdit = found[0];
+    var quoteEdit = found[1];
+    // A voice message can only answer a quote's voice correction; text answers any other field.
+    if (quoteEdit && (quoteEdit.awaiting_edit_field === "voice") !== isVoice) quoteEdit = null;
+    if (receiptEdit && quoteEdit) {
+      if (new Date(quoteEdit.edit_since) > new Date(receiptEdit.edit_since)) receiptEdit = null; else quoteEdit = null;
+    }
+    if (receiptEdit) {
+      if (!(await withinFlowLimit("menu", chatId))) return;
+      await processEditReply(receiptEdit, text, chatId);
+      return;
+    }
+    if (quoteEdit) {
+      if (!(await withinFlowLimit("quote", chatId))) return;
+      await sendQuoteStub(chatId);
+      return;
+    }
+  }
+
+  if ((msg.photo && msg.photo.length) || msg.document) {
+    if (!(await withinFlowLimit("receipt", chatId))) return;
+    await processReceiptMessage(msg, chatId);
+    return;
+  }
+
+  if (isVoice || QUOTE_INTENT_RE.test(text)) {
+    if (!(await withinFlowLimit("quote", chatId))) return;
+    await sendQuoteStub(chatId);
+    return;
+  }
+
+  if (!(await withinFlowLimit("menu", chatId))) return;
+  await sendUnclear(chatId);
+}
+
+// Runs after the 200 ACK (waitUntil). Never throws.
+function runInBackground(label, fn) {
+  var p = Promise.resolve().then(fn).catch(function (err) {
+    console.error("[telegram-webhook] " + label + " failed: " + err.message);
+  }).then(sweepRetention).catch(function () {});
+  waitUntil(p);
 }
 
 // ---------------------------------------------------------------------------
@@ -782,6 +1147,10 @@ module.exports = async function handler(req, res) {
 
   var update = req.body || {};
 
+  // Order: allowlist (no DB work for strangers) -> dedupe by update_id -> ACK 200 fast -> the
+  // real work in waitUntil (Telegram retries anything slower than its timeout, and a retry is
+  // dropped by the dedupe). Always 200 to Telegram, even on our own bugs: a 5xx only replays a
+  // partially processed update.
   try {
     if (update.callback_query) {
       var q = update.callback_query;
@@ -791,12 +1160,18 @@ module.exports = async function handler(req, res) {
         res.status(200).json({ ok: true });
         return;
       }
+      if (!(await claimUpdate(update.update_id))) {
+        res.status(200).json({ ok: true }); // duplicate delivery
+        return;
+      }
       if (!rateLimit("telegram-callback:" + cbChatId, 20, 60 * 1000).ok) {
         await tgCallSafe("answerCallbackQuery", { callback_query_id: q.id, text: "לאט לאט 🙂" });
         res.status(200).json({ ok: true });
         return;
       }
-      await processCallbackQuery(q, cbChatId);
+      // Answer right away (stops the button spinner); the result arrives as a message edit.
+      await tgCallSafe("answerCallbackQuery", { callback_query_id: q.id, text: "⏳" });
+      runInBackground("callback", function () { return processCallbackQuery(q, cbChatId); });
       res.status(200).json({ ok: true });
       return;
     }
@@ -804,36 +1179,17 @@ module.exports = async function handler(req, res) {
     if (update.message) {
       var msg = update.message;
       var chatId = msg.chat && msg.chat.id;
-      if (chatId == null) {
-        res.status(200).json({ ok: true });
-        return;
-      }
-      if (!isAllowedChat(chatId)) {
+      if (chatId == null || !isAllowedChat(chatId)) {
         // Silent — a stranger who finds/messages the bot gets no reply at all, so the
         // allowlist doubles as "does this bot even do anything for you" concealment.
         res.status(200).json({ ok: true });
         return;
       }
-      if (!rateLimit("telegram-message:" + chatId, 10, 10 * 60 * 1000).ok) {
-        await tgCallSafe("sendMessage", { chat_id: chatId, text: "לאט לאט 🙂 אפשר לשלוח קבלה נוספת בעוד כמה דקות." });
-        res.status(200).json({ ok: true });
+      if (!(await claimUpdate(update.update_id))) {
+        res.status(200).json({ ok: true }); // duplicate delivery
         return;
       }
-      await cleanupStalePending();
-
-      // A plain-text message (not a photo/document) might be a reply to an in-progress
-      // "✏️ שנה תאריך"/"✏️ שנה סכום" prompt rather than a new receipt attempt — check
-      // BEFORE falling through to the normal photo/document/help-text routing.
-      if (msg.text && !msg.photo && !msg.document) {
-        var awaitingEdit = await findAwaitingEdit(chatId);
-        if (awaitingEdit) {
-          await processEditReply(awaitingEdit, msg.text, chatId);
-          res.status(200).json({ ok: true });
-          return;
-        }
-      }
-
-      await processReceiptMessage(msg, chatId);
+      runInBackground("message", function () { return routeMessage(msg, chatId); });
       res.status(200).json({ ok: true });
       return;
     }
@@ -842,9 +1198,6 @@ module.exports = async function handler(req, res) {
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error("[telegram-webhook] unhandled error: " + err.message);
-    // Always 200 to Telegram on our own bugs too — a 5xx here just triggers Telegram's
-    // retry queue, which would replay a partially-processed message/callback rather
-    // than help; the error is already logged server-side for us to fix.
     res.status(200).json({ ok: true });
   }
 };
