@@ -21,7 +21,7 @@ const STUB = `(() => {
   localStorage.setItem("sb-mmognkxkglkotzkuxzly-auth-token", "stub");
   const S = window.__sb = { calls: [], handler: null, cfg: { rpcMode: "ok", updateMode: "ok", signedMode: "ok" }, quotes: [] };
   for (let n = 6; n <= 13; n++) S.quotes.push({ id: "q" + n, number: n, quote_date: n + ".10.2026", client_name: "לקוח " + n, address: "רחוב " + n, description: "תיאור " + n, total: 1000 * n, source: "panel", pdf_path: null });
-  S.quotes.push({ id: "q14", number: 14, quote_date: "27.10.2026", client_name: "דני לוי", address: "הרצל 12", description: "ליטוש", total: 4500, source: "telegram", pdf_path: "q14.pdf" });
+  S.quotes.push({ id: "q14", number: 14, quote_date: "27.10.2026", client_name: "דני לוי", address: "הרצל 12", description: "ליטוש", total: 4500, source: "telegram", pdf_path: "aaaaaaaa-0000-4000-8000-000000000014.pdf" });
   S.quotes.push({ id: "q15", number: 15, quote_date: "27.10.2026", client_name: "רינה", address: "ויצמן 5", description: "הברקה", total: 3800, source: "telegram", pdf_path: null });
   const rec = (c) => { S.calls.push(c); try { window.__record && window.__record(JSON.stringify(c)); } catch (e) {} };
   const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -156,13 +156,15 @@ const STUB = `(() => {
   check("badge styled as a pill like the panel's badges", /999px 700 inline-block/.test(badgeStyle), badgeStyle);
   const amounts = await page.$$eval("#qhBody td.col-amount", tds => tds.map(td => td.innerText.trim()));
   check("7a amounts shown as '<number> ₪' (like the PDF and the bot)", amounts.length > 5 && amounts.every(a => /^[\d,.]+ ₪$/.test(a)) && amounts.includes("4,500 ₪"), amounts.slice(0, 3).join(" | "));
+  const expectToday = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date()).replace(/\//g, ".");
+  check("L6 a NEW quote's default date is DD.MM.YYYY (zero-padded), Israel time", (await page.inputValue("#ofDate")) === expectToday, await page.inputValue("#ofDate"));
   check("number field shows the estimate (max+1 = 016) + hint 'המספר הסופי ייקבע בשמירה'", (await page.inputValue("#ofNum")) === "016" &&
     (await page.isVisible("#ofNumHint")) && (await page.textContent("#ofNumHint")) === "המספר הסופי ייקבע בשמירה");
 
   // ===== 3. realtime events -> one debounced refetch =====
   let before = selects();
   await page.evaluate(() => {
-    window.__sb.quotes.push({ id: "q16", number: 16, quote_date: "27.10.2026", client_name: "מהבוט", address: "—", description: "x", total: 1200, source: "telegram", pdf_path: "q16.pdf" });
+    window.__sb.quotes.push({ id: "q16", number: 16, quote_date: "27.10.2026", client_name: "מהבוט", address: "—", description: "x", total: 1200, source: "telegram", pdf_path: "aaaaaaaa-0000-4000-8000-000000000016.pdf" });
     window.__sb.emit({ eventType: "INSERT" }); window.__sb.emit({ eventType: "UPDATE" }); window.__sb.emit({ eventType: "INSERT" });
   });
   await wait(250);
@@ -311,8 +313,8 @@ const STUB = `(() => {
   await wait(300);
   seg2 = calls.slice(m2);
   const su = seg2.find(c => c.kind === "signedUrl"), dl = seg2.find(c => c.kind === "download");
-  check("telegram + pdf_path -> signed URL from quotes-pdf (60 s, download name) -> download", su && su.bucket === "quotes-pdf" && su.path === "q14.pdf" && su.exp === 60 && su.opts.download === "הצעת-מחיר-014.pdf" &&
-    dl && dl.href.startsWith("https://signed.example/q14.pdf") && dl.name === "הצעת-מחיר-014.pdf" && renderCalls.length === 0 && !seg2.some(c => c.kind === "html2canvas"));
+  check("telegram + pdf_path -> signed URL from quotes-pdf (60 s, download name) -> download", su && su.bucket === "quotes-pdf" && su.path === "aaaaaaaa-0000-4000-8000-000000000014.pdf" && su.exp === 60 && su.opts.download === "הצעת-מחיר-014.pdf" &&
+    dl && dl.href.startsWith("https://signed.example/aaaaaaaa-0000-4000-8000-000000000014.pdf") && dl.name === "הצעת-מחיר-014.pdf" && renderCalls.length === 0 && !seg2.some(c => c.kind === "html2canvas"));
   m2 = calls.length;
   await page.click('[data-qh-view="q15"]');
   await wait(500);
@@ -333,12 +335,20 @@ const STUB = `(() => {
   check("signed URL fails (file missing) -> falls back to the server render", renderCalls.length === rcBefore + 1 && renderCalls[renderCalls.length - 1].body.quote_id === "q14");
   await page.evaluate(() => { window.__sb.cfg.signedMode = "ok"; });
 
+  // L1: a tampered pdf_path is never used for a signed URL
+  await page.evaluate(() => { const q = window.__sb.quotes.find(x => x.id === "q14"); q.pdf_path = "../receipts/secret.jpg"; });
+  await page.evaluate(() => { window.__sb.emit({ eventType: "UPDATE" }); }); await wait(700);
+  m2 = calls.length; const rcL1 = renderCalls.length;
+  await page.click('[data-qh-view="q14"]'); await wait(500);
+  seg2 = calls.slice(m2);
+  check("L1 panel: pdf_path '../receipts/secret.jpg' -> NO signed URL; rendered fresh on the server instead", !seg2.some(c => c.kind === "signedUrl") && renderCalls.length === rcL1 + 1 && renderCalls[renderCalls.length - 1].body.quote_id === "q14");
+
   // panel quote keeps html2canvas
-  m2 = calls.length;
+  m2 = calls.length; const rcPanel = renderCalls.length;
   await page.click('[data-qh-view="q11"]');
   await page.waitForFunction(() => !document.querySelector('[data-qh-view="q11"]').disabled, null, { timeout: 30000 });
   seg2 = calls.slice(m2);
-  check("panel quote 'צפה / הורדה' -> html2canvas path (no signed URL, no server render)", seg2.some(c => c.kind === "html2canvas") && seg2.some(c => c.kind === "pdfSave" && c.name === "הצעת-מחיר-011.pdf") && !seg2.some(c => c.kind === "signedUrl") && renderCalls.length === rcBefore + 1);
+  check("panel quote 'צפה / הורדה' -> html2canvas path (no signed URL, no server render)", seg2.some(c => c.kind === "html2canvas") && seg2.some(c => c.kind === "pdfSave" && c.name === "הצעת-מחיר-011.pdf") && !seg2.some(c => c.kind === "signedUrl") && renderCalls.length === rcPanel);
 
   // ===== 8. console + network hygiene, then logout =====
   // Chrome itself logs "Failed to load resource … 422/500" for the two error responses this test

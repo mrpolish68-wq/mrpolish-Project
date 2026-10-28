@@ -100,8 +100,19 @@ function supabaseHeaders() {
   return { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json" };
 }
 
+// Every outbound call has a deadline (audit L2), so one hung dependency can't hold the function
+// until Vercel kills it with no reply to the user. A timeout rejects like a network error, which
+// every caller already turns into a friendly Hebrew message. An explicit signal wins.
+var FETCH_TIMEOUT_MS = 10000;
+var SLOW_FETCH_TIMEOUT_MS = 20000; // Telegram file download + sendDocument (bigger bodies)
+function fetchT(url, init, ms) {
+  init = init || {};
+  if (!init.signal) init = Object.assign({}, init, { signal: AbortSignal.timeout(ms || FETCH_TIMEOUT_MS) });
+  return fetch(url, init);
+}
+
 async function supabaseInsert(table, row) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/" + table, {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/" + table, {
     method: "POST",
     headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
     body: JSON.stringify(row)
@@ -113,14 +124,14 @@ async function supabaseInsert(table, row) {
 }
 
 async function supabaseSelectOne(table, filterQs) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs + "&select=*", { headers: supabaseHeaders() });
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs + "&select=*", { headers: supabaseHeaders() });
   if (!res.ok) throw new Error("Supabase query on " + table + " failed: " + res.status);
   var rows = await res.json();
   return rows[0] || null;
 }
 
 async function supabasePatch(table, filterQs, patch) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs, {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs, {
     method: "PATCH",
     headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
     body: JSON.stringify(patch)
@@ -129,7 +140,7 @@ async function supabasePatch(table, filterQs, patch) {
 }
 
 async function supabaseDelete(table, filterQs) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs, {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/" + table + "?" + filterQs, {
     method: "DELETE",
     headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders())
   });
@@ -138,7 +149,7 @@ async function supabaseDelete(table, filterQs) {
 
 async function uploadReceiptToStorage(path, buffer, mimeType) {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  var res = await fetch(SUPABASE_URL + "/storage/v1/object/receipts/" + path, {
+  var res = await fetchT(SUPABASE_URL + "/storage/v1/object/receipts/" + path, {
     method: "POST",
     headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": mimeType, "x-upsert": "false" },
     body: buffer
@@ -148,16 +159,28 @@ async function uploadReceiptToStorage(path, buffer, mimeType) {
 
 // Best-effort cleanup (e.g. after Ori taps "בטל") — never lets a Storage failure break
 // the user-facing flow, just logs it server-side.
+// Returns true when the file is gone (deleted now, or already missing: 404/400 "not found").
 async function deleteReceiptFromStorage(path) {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   try {
-    var res = await fetch(SUPABASE_URL + "/storage/v1/object/receipts/" + path, {
+    var res = await fetchT(SUPABASE_URL + "/storage/v1/object/receipts/" + path, {
       method: "DELETE",
       headers: { apikey: key, Authorization: "Bearer " + key }
     });
-    if (!res.ok) console.error("[telegram-webhook] storage cleanup non-OK for " + path + ": " + res.status);
+    if (res.ok || res.status === 404 || res.status === 400) return true;
+    console.error("[telegram-webhook] storage cleanup non-OK for " + path + ": " + res.status);
+    return false;
   } catch (err) {
     console.error("[telegram-webhook] storage cleanup failed for " + path + ": " + err.message);
+    return false;
+  }
+}
+
+// ❌ / missing amount: the file first, then the row. If the file can't be deleted now, the row is
+// kept so the 48 h sweep removes both later (no orphaned file).
+async function discardPendingReceipt(pendingId, receiptPath) {
+  if (await deleteReceiptFromStorage(receiptPath)) {
+    await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
   }
 }
 
@@ -174,6 +197,37 @@ var RETENTION = [
 ];
 var lastSweepAt = 0;
 
+// Expired pending receipts: their uploaded image/PDF is deleted FIRST, then the rows (audit M3;
+// deleting only the rows used to leave the files in the private bucket forever). A file that a
+// confirmed expense points to (business_expenses.receipt_url) is never deleted. If the Storage
+// delete fails, the rows stay and the next sweep retries, so no file is ever orphaned.
+async function sweepExpiredReceipts(cutoff) {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/telegram_pending_receipts?created_at=lt." + encodeURIComponent(cutoff) +
+    "&select=id,receipt_path&limit=200", { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("expired receipts query HTTP " + res.status);
+  var rows = await res.json();
+  if (!rows.length) return;
+  var paths = rows.map(function (r) { return r.receipt_path; }).filter(Boolean);
+  var confirmed = {};
+  if (paths.length) {
+    var used = await fetchT(SUPABASE_URL + "/rest/v1/business_expenses?select=receipt_url&receipt_url=in.(" +
+      paths.map(encodeURIComponent).join(",") + ")", { headers: supabaseHeaders() });
+    if (!used.ok) throw new Error("receipt_url check HTTP " + used.status); // unsure -> delete nothing
+    (await used.json()).forEach(function (e) { confirmed[e.receipt_url] = true; });
+  }
+  var toDelete = paths.filter(function (p) { return !confirmed[p]; });
+  if (toDelete.length) {
+    var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    var del = await fetchT(SUPABASE_URL + "/storage/v1/object/receipts", {
+      method: "DELETE",
+      headers: { apikey: key, Authorization: "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify({ prefixes: toDelete })
+    });
+    if (!del.ok) throw new Error("receipt files delete HTTP " + del.status); // keep the rows; retry next sweep
+  }
+  await supabaseDelete("telegram_pending_receipts", "id=in.(" + rows.map(function (r) { return encodeURIComponent(r.id); }).join(",") + ")");
+}
+
 async function sweepRetention() {
   if (Date.now() - lastSweepAt < SWEEP_INTERVAL_MS) return;
   lastSweepAt = Date.now();
@@ -182,6 +236,7 @@ async function sweepRetention() {
     var cutoff = new Date(Date.now() - RETENTION[i][2]).toISOString();
     if (column === "day") cutoff = cutoff.slice(0, 10);
     try {
+      if (table === "telegram_pending_receipts") { await sweepExpiredReceipts(cutoff); continue; }
       await supabaseDelete(table, column + "=lt." + encodeURIComponent(cutoff));
     } catch (err) {
       console.error("[telegram-webhook] retention sweep failed for " + table + ": " + err.message);
@@ -195,7 +250,7 @@ async function sweepRetention() {
 async function claimUpdate(updateId) {
   if (typeof updateId !== "number") return true;
   try {
-    var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_processed_updates", {
+    var res = await fetchT(SUPABASE_URL + "/rest/v1/telegram_processed_updates", {
       method: "POST",
       headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
       body: JSON.stringify({ update_id: updateId })
@@ -225,7 +280,7 @@ function isMissingColumnError(status, body) {
 async function setReceiptAwaitingEdit(pendingId, field) {
   var patch = { awaiting_edit_field: field };
   if (receiptsHaveAwaitingSince) patch.awaiting_since = field ? new Date().toISOString() : null;
-  var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_pending_receipts?id=eq." + encodeURIComponent(pendingId), {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/telegram_pending_receipts?id=eq." + encodeURIComponent(pendingId), {
     method: "PATCH",
     headers: Object.assign({ Prefer: "return=minimal" }, supabaseHeaders()),
     body: JSON.stringify(patch)
@@ -248,7 +303,7 @@ async function findAwaitingEdit(chatId) {
   var cutoff = encodeURIComponent(new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString());
   var col = receiptsHaveAwaitingSince ? "awaiting_since" : "created_at";
   try {
-    var res = await fetch(
+    var res = await fetchT(
       SUPABASE_URL + "/rest/v1/telegram_pending_receipts?chat_id=eq." + chatId +
       "&awaiting_edit_field=not.is.null&" + col + "=gte." + cutoff +
       "&order=" + col + ".desc&limit=1&select=*",
@@ -276,7 +331,7 @@ async function findAwaitingEdit(chatId) {
 async function findAwaitingQuoteEdit(chatId) {
   var cutoff = encodeURIComponent(new Date(Date.now() - AWAITING_EDIT_TTL_MS).toISOString());
   try {
-    var res = await fetch(
+    var res = await fetchT(
       SUPABASE_URL + "/rest/v1/telegram_pending_quotes?chat_id=eq." + chatId +
       "&awaiting_edit_field=not.is.null&awaiting_since=gte." + cutoff +
       "&order=awaiting_since.desc&limit=1&select=id,awaiting_edit_field,awaiting_since",
@@ -329,7 +384,7 @@ async function claimPendingRow(id) {
   var cutoffIso = new Date(Date.now() - CLAIM_LEASE_MS).toISOString();
   var url = SUPABASE_URL + "/rest/v1/telegram_pending_receipts?id=eq." + encodeURIComponent(id) +
     "&or=(claimed_at.is.null,claimed_at.lt." + encodeURIComponent(cutoffIso) + ")";
-  var res = await fetch(url, {
+  var res = await fetchT(url, {
     method: "PATCH",
     headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
     body: JSON.stringify({ claimed_at: new Date().toISOString() })
@@ -373,7 +428,7 @@ function telegramConfig() {
 
 async function tgCall(method, payload) {
   var token = telegramConfig().botToken;
-  var res = await fetch(TELEGRAM_API_ROOT + token + "/" + method, {
+  var res = await fetchT(TELEGRAM_API_ROOT + token + "/" + method, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -393,7 +448,7 @@ function tgCallSafe(method, payload) {
 
 async function tgDownloadFile(filePath) {
   var token = telegramConfig().botToken;
-  var res = await fetch(TELEGRAM_FILE_ROOT + token + "/" + filePath);
+  var res = await fetchT(TELEGRAM_FILE_ROOT + token + "/" + filePath, {}, SLOW_FETCH_TIMEOUT_MS);
   if (!res.ok) throw new Error("Telegram file download failed: " + res.status);
   var arrayBuffer = await res.arrayBuffer();
   return Buffer.from(arrayBuffer);
@@ -484,7 +539,7 @@ async function findDuplicateExpense(extracted) {
   try {
     var invoiceNum = normalizeInvoice(extracted.invoice_number);
     if (invoiceNum) {
-      var byInvoiceRes = await fetch(
+      var byInvoiceRes = await fetchT(
         SUPABASE_URL + "/rest/v1/business_expenses?invoice_number=eq." + encodeURIComponent(invoiceNum) + "&select=*&limit=1",
         { headers: supabaseHeaders() }
       );
@@ -494,7 +549,7 @@ async function findDuplicateExpense(extracted) {
       }
     }
     if (extracted.date && extracted.total_amount != null) {
-      var byDateAmountRes = await fetch(
+      var byDateAmountRes = await fetchT(
         SUPABASE_URL + "/rest/v1/business_expenses?date=eq." + encodeURIComponent(extracted.date) +
         "&amount=eq." + encodeURIComponent(extracted.total_amount) + "&select=*&limit=20",
         { headers: supabaseHeaders() }
@@ -515,9 +570,10 @@ async function findDuplicateExpense(extracted) {
   return null;
 }
 
+// ISO "2026-10-20" -> "20.10.2026": the same DD.MM.YYYY the quotes use (display only; the DB keeps ISO).
 function fmtDateIL(iso) {
   var parts = String(iso || "").split("-");
-  return parts.length === 3 ? (parts[2] + "/" + parts[1] + "/" + parts[0]) : "לא ידוע";
+  return parts.length === 3 ? (parts[2] + "." + parts[1] + "." + parts[0]) : "לא ידוע";
 }
 
 function formatDupWarning(match) {
@@ -536,7 +592,7 @@ function formatDupWarning(match) {
 function formatSummary(data) {
   var lines = ["🧾 קבלה נותחה בהצלחה", ""];
   lines.push("🏢 ספק / בית עסק: " + (data.vendor_name || "לא זוהה"));
-  lines.push("📅 תאריך: " + (data.date || "לא זוהה"));
+  lines.push("📅 תאריך: " + (data.date ? fmtDateIL(data.date) : "לא זוהה"));
   lines.push("💰 סכום כולל: " + (data.total_amount != null ? fmtMoney(data.total_amount) : "❌ לא זוהה"));
   if (data.amount_before_vat != null || data.vat_amount != null) {
     lines.push("   לפני מע\"מ: " + (data.amount_before_vat != null ? fmtMoney(data.amount_before_vat) : "—") +
@@ -799,8 +855,7 @@ async function processCallbackQuery(query, chatId) {
   }
 
   if (action === "cancel") {
-    await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
-    await deleteReceiptFromStorage(pending.receipt_path);
+    await discardPendingReceipt(pendingId, pending.receipt_path);
     if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(pending.extracted) + "\n\n❌ בוטל — לא נשמר." });
     return;
   }
@@ -860,8 +915,7 @@ async function processCallbackQuery(query, chatId) {
   // "✏️ שנה סכום" first or finish the entry manually in the dashboard; there's no
   // honest way to insert a financial record with a fabricated placeholder.
   if (claimed.extracted.total_amount == null) {
-    await supabaseDelete("telegram_pending_receipts", "id=eq." + encodeURIComponent(pendingId));
-    await deleteReceiptFromStorage(claimed.receipt_path);
+    await discardPendingReceipt(pendingId, claimed.receipt_path);
     await cbNotice(chatId, "לא ניתן לשמור — חסר סכום.");
     if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: formatSummary(claimed.extracted) + "\n\n❌ לא נשמר — יש להוסיף ידנית בלוח הבקרה." });
     return;
@@ -970,7 +1024,7 @@ async function messageForExtract(input) {
 // --- chat state (collecting_quote / quote_conflict), fresh for AWAITING_EDIT_TTL_MS ---
 
 async function setChatState(chatId, state, context) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_chat_state?on_conflict=chat_id", {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/telegram_chat_state?on_conflict=chat_id", {
     method: "POST",
     headers: Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, supabaseHeaders()),
     body: JSON.stringify({ chat_id: chatId, state: state, state_since: new Date().toISOString(), context: context || {} })
@@ -1068,6 +1122,8 @@ function renderDraft(row, footer) {
     "",
     d.total != null ? "💰 סה״כ לתשלום: " + fmtShekel(d.total) : "❗ חסר מחיר — מה המחיר הסופי?"
   ];
+  // The words the total was taken from, so a mis-heard voice total is easy to spot before ✅.
+  if (d.total != null && d.total_source === "stated" && d.total_evidence) lines.push("💰 נאמר: \"" + d.total_evidence + "\"");
   (d.warnings || []).forEach(function (w) {
     if (w.code === "sum_mismatch") lines.push("⚠️ סכום הפריטים (" + fmtShekel(w.items_sum) + ") שונה מהמחיר הסופי (" + fmtShekel(w.total) + "). יודפס המחיר הסופי.");
     if (w.code === "too_long") lines.push("⚠️ התיאור ארוך מדי לעמוד אחד (" + w.lines + " שורות, עד " + w.maxLines + "). אפשר ✂️ לקצר אוטומטית או ✏️ לערוך.");
@@ -1137,6 +1193,7 @@ async function updateDraftTotal(row, text, chatId) {
   var d = row.draft;
   d.total = n;
   d.total_source = "manual";
+  d.total_evidence = null; // typed by hand: no spoken words to show
   recomputeDraft(d);
   try {
     await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), Object.assign({ draft: d }, awaitingPatchFor(d)));
@@ -1176,20 +1233,7 @@ async function startQuote(chatId, input) {
     await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית. נסו שוב בעוד רגע." });
     return;
   }
-  if (existing) {
-    try { await setChatState(chatId, "quote_conflict", { input: input, draft_id: existing.id }); } catch (err) {
-      console.error("[telegram-webhook] " + err.message);
-    }
-    await tgCallSafe("sendMessage", {
-      chat_id: chatId,
-      text: "יש כבר טיוטת הצעת מחיר פתוחה" + (existing.draft && existing.draft.client_name ? " (" + existing.draft.client_name + ")" : "") + ".\nמה לעשות?",
-      reply_markup: { inline_keyboard: [[
-        { text: "↩️ להמשיך בטיוטה", callback_data: "q:cont:" + existing.id },
-        { text: "🆕 להתחיל הצעה חדשה", callback_data: "q:new:" + existing.id }
-      ]] }
-    });
-    return;
-  }
+  if (existing) { await askDraftConflict(chatId, existing, input); return; }
   if (!input) {
     try { await setChatState(chatId, "collecting_quote", {}); } catch (err) { console.error("[telegram-webhook] " + err.message); }
     await tgCallSafe("sendMessage", { chat_id: chatId, text: QUOTE_ASK_TEXT, reply_markup: MAIN_KEYBOARD });
@@ -1198,9 +1242,34 @@ async function startQuote(chatId, input) {
   await createDraftFrom(chatId, input);
 }
 
+// "There's already an open draft": continue it, or start the new one (the message is parked).
+async function askDraftConflict(chatId, existing, input) {
+  try { await setChatState(chatId, "quote_conflict", { input: input, draft_id: existing.id }); } catch (err) {
+    console.error("[telegram-webhook] " + err.message);
+  }
+  await tgCallSafe("sendMessage", {
+    chat_id: chatId,
+    text: "יש כבר טיוטת הצעת מחיר פתוחה" + (existing.draft && existing.draft.client_name ? " (" + existing.draft.client_name + ")" : "") + ".\nמה לעשות?",
+    reply_markup: { inline_keyboard: [[
+      { text: "↩️ להמשיך בטיוטה", callback_data: "q:cont:" + existing.id },
+      { text: "🆕 להתחיל הצעה חדשה", callback_data: "q:new:" + existing.id }
+    ]] }
+  });
+}
+
 async function createDraftFrom(chatId, input) {
   var limitErr = voiceLimitError(input);
   if (limitErr) { await tgCallSafe("sendMessage", { chat_id: chatId, text: limitErr }); return; }
+
+  // One draft per chat (audit L5): every path that ends here re-checks first (the "waiting for
+  // details" state, a parked message), before any quota or AI is spent.
+  var active = null;
+  try { active = await findActiveDraft(chatId); } catch (err) {
+    console.error("[telegram-webhook] active draft lookup failed: " + err.message);
+    await tgCallSafe("sendMessage", { chat_id: chatId, text: "שגיאה זמנית. נסו שוב בעוד רגע." });
+    return;
+  }
+  if (active) { await askDraftConflict(chatId, active, input); return; }
 
   // One unit of the daily quote quota per NEW quote (corrections and edits are free).
   var quota;
@@ -1297,6 +1366,7 @@ function applyFieldEdit(d, field, text) {
     if (n == null) return false;
     d.total = n;
     d.total_source = "manual";
+    d.total_evidence = null;
     return true;
   }
   if (field === "quote_date") {
@@ -1395,7 +1465,7 @@ var QUOTE_CLAIM_LEASE_MS = 2 * 60 * 1000;
 
 async function claimDraftRow(id) {
   var cutoffIso = new Date(Date.now() - QUOTE_CLAIM_LEASE_MS).toISOString();
-  var res = await fetch(SUPABASE_URL + "/rest/v1/telegram_pending_quotes?id=eq." + encodeURIComponent(id) +
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/telegram_pending_quotes?id=eq." + encodeURIComponent(id) +
     "&or=(claimed_at.is.null,claimed_at.lt." + encodeURIComponent(cutoffIso) + ")", {
     method: "PATCH",
     headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
@@ -1404,6 +1474,11 @@ async function claimDraftRow(id) {
   if (!res.ok) throw new Error("draft claim failed: " + res.status);
   var rows = await res.json();
   return rows[0] || null;
+}
+
+// True while an approval holds the draft's lease (claimed less than QUOTE_CLAIM_LEASE_MS ago).
+function draftBeingApproved(row) {
+  return !!(row && row.claimed_at && Date.now() - new Date(row.claimed_at).getTime() < QUOTE_CLAIM_LEASE_MS);
 }
 
 function releaseDraftClaim(id) {
@@ -1430,7 +1505,7 @@ function quoteCaption(q) {
 // the draft failed), the same row comes back instead of a second quote with a new number. The
 // function from before that file ignores the key, so this is safe before and after it's applied.
 async function createQuoteRpc(d, chatId, draftId) {
-  var res = await fetch(SUPABASE_URL + "/rest/v1/rpc/create_quote", {
+  var res = await fetchT(SUPABASE_URL + "/rest/v1/rpc/create_quote", {
     method: "POST",
     headers: supabaseHeaders(),
     body: JSON.stringify({ p: {
@@ -1457,6 +1532,10 @@ async function loadQuote(id) {
 }
 
 // -> { ok:true, pdf } | { ok:false, tooLong:true, lines, maxLines } | { ok:false, status }
+// Well under the webhook's 60 s maxDuration, so a slow render is reported (with 🔄) instead of the
+// function being killed mid-way (audit M2). A cold Chromium render takes ~2–8 s.
+var RENDER_TIMEOUT_MS = 35000;
+
 async function renderQuotePdf(quoteId) {
   var env = process.env;
   var host = env.VERCEL_ENV === "production" ? (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL) : env.VERCEL_URL;
@@ -1468,9 +1547,9 @@ async function renderQuotePdf(quoteId) {
   if (env.VERCEL_AUTOMATION_BYPASS_SECRET) headers["x-vercel-protection-bypass"] = env.VERCEL_AUTOMATION_BYPASS_SECRET;
   var res;
   try {
-    res = await fetch("https://" + host + "/api/render-quote-pdf", {
+    res = await fetchT("https://" + host + "/api/render-quote-pdf", {
       method: "POST", headers: headers, body: JSON.stringify({ quote_id: quoteId }), redirect: "manual",
-      signal: AbortSignal.timeout(55000)
+      signal: AbortSignal.timeout(RENDER_TIMEOUT_MS)
     });
   } catch (err) {
     console.error("[telegram-webhook] render request failed");
@@ -1485,9 +1564,11 @@ async function renderQuotePdf(quoteId) {
   return { ok: false, status: res.status };
 }
 
+var STORED_PDF_RE = /^[0-9a-f-]{36}\.pdf$/;
+
 async function downloadStoredPdf(objectPath) {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  var res = await fetch(SUPABASE_URL + "/storage/v1/object/quotes-pdf/" + objectPath, { headers: { apikey: key, Authorization: "Bearer " + key } });
+  var res = await fetchT(SUPABASE_URL + "/storage/v1/object/quotes-pdf/" + objectPath, { headers: { apikey: key, Authorization: "Bearer " + key } });
   if (!res.ok) throw new Error("stored PDF download failed: " + res.status);
   return Buffer.from(await res.arrayBuffer());
 }
@@ -1498,7 +1579,7 @@ async function tgSendDocument(chatId, pdf, filename, caption) {
   form.append("chat_id", String(chatId));
   form.append("caption", caption);
   form.append("document", new Blob([pdf], { type: "application/pdf" }), filename);
-  var res = await fetch(TELEGRAM_API_ROOT + telegramConfig().botToken + "/sendDocument", { method: "POST", body: form });
+  var res = await fetchT(TELEGRAM_API_ROOT + telegramConfig().botToken + "/sendDocument", { method: "POST", body: form }, SLOW_FETCH_TIMEOUT_MS);
   var data = await res.json().catch(function () { return {}; });
   if (!data.ok) throw new Error("Telegram API sendDocument failed: " + (data.description || res.status));
   return data.result;
@@ -1507,7 +1588,12 @@ async function tgSendDocument(chatId, pdf, filename, caption) {
 // Renders (or reuses the stored PDF when allowed) and sends it. -> same shape as renderQuotePdf.
 async function deliverQuotePdf(chatId, quote, useStored) {
   var pdf = null;
-  if (useStored && quote.pdf_path) {
+  // Only our own object name (<quote uuid>.pdf, written by render-quote-pdf.js). Anything else
+  // (e.g. a hand-edited "../receipts/x.jpg") is never fetched with the service key: re-render.
+  if (useStored && quote.pdf_path && !STORED_PDF_RE.test(quote.pdf_path)) {
+    console.error("[telegram-webhook] unexpected pdf_path format, re-rendering");
+  }
+  if (useStored && quote.pdf_path && STORED_PDF_RE.test(quote.pdf_path)) {
     try { pdf = await downloadStoredPdf(quote.pdf_path); } catch (err) { console.error("[telegram-webhook] " + err.message + " (re-rendering)"); }
   }
   if (!pdf) {
@@ -1534,9 +1620,13 @@ async function finishApprovedQuote(row, chatId) {
     if (keyboard) p.reply_markup = keyboard;
     return row.message_id ? tgCallSafe("editMessageText", p) : tgCallSafe("sendMessage", { chat_id: chatId, text: text, reply_markup: keyboard });
   };
+  // Every in-progress message carries 🔄, so a function killed mid-step (timeout) never leaves a
+  // message without buttons. 🔄 = q:retry: re-claims once the lease is free; quote_id / client_ref
+  // make it safe (no second quote).
+  var retryKb = { inline_keyboard: [[{ text: "🔄 לנסות שוב", callback_data: "q:retry:" + row.id }]] };
   var quote;
   if (!row.quote_id) {
-    await say("⏳ יוצר את ההצעה…");
+    await say("⏳ יוצר את ההצעה…", retryKb);
     try {
       quote = await createQuoteRpc(d, chatId, row.id);
     } catch (err) {
@@ -1563,7 +1653,7 @@ async function finishApprovedQuote(row, chatId) {
     }
   }
 
-  await say("⏳ מפיק PDF להצעה מס׳ " + pad3(quote.number) + "…");
+  await say("⏳ מפיק PDF להצעה מס׳ " + pad3(quote.number) + "…", retryKb);
   var result = await deliverQuotePdf(chatId, quote, false);
   if (result.ok) {
     await say("✅ הצעה מס׳ " + pad3(quote.number) + " נשלחה");
@@ -1577,8 +1667,7 @@ async function finishApprovedQuote(row, chatId) {
       { inline_keyboard: [[{ text: "✂️ לקצר ולהפיק מחדש", callback_data: "q:short:" + row.id }], [{ text: "🔄 לנסות שוב", callback_data: "q:retry:" + row.id }]] });
     return;
   }
-  await say("ההצעה נשמרה (מס׳ " + pad3(quote.number) + ") אבל ה-PDF נכשל.",
-    { inline_keyboard: [[{ text: "🔄 לנסות שוב", callback_data: "q:retry:" + row.id }]] });
+  await say("ההצעה נשמרה (מס׳ " + pad3(quote.number) + ") אבל ה-PDF נכשל" + (result.status === 0 ? " (זמן ההמתנה עבר)" : "") + ".", retryKb);
 }
 
 // --- 📜 recent / 🔍 search ---
@@ -1600,7 +1689,7 @@ async function sendQuoteList(chatId, title, rows) {
 async function sendRecentQuotes(chatId) {
   var rows;
   try {
-    var res = await fetch(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&order=number.desc&limit=5", { headers: supabaseHeaders() });
+    var res = await fetchT(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&order=number.desc&limit=5", { headers: supabaseHeaders() });
     if (!res.ok) throw new Error("HTTP " + res.status);
     rows = await res.json();
   } catch (err) {
@@ -1632,7 +1721,7 @@ async function searchQuotes(chatId, text) {
   }
   var rows;
   try {
-    var res = await fetch(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&client_name=ilike." +
+    var res = await fetchT(SUPABASE_URL + "/rest/v1/quotes?select=" + QUOTE_LIST_COLUMNS + "&client_name=ilike." +
       encodeURIComponent(ilikeContains(term)) + "&order=number.desc&limit=5", { headers: supabaseHeaders() });
     if (!res.ok) throw new Error("HTTP " + res.status);
     rows = await res.json();
@@ -1686,6 +1775,11 @@ async function processQuoteCallback(query, chatId) {
       await showDraft(row, chatId, null);
       return;
     }
+    if (row && String(row.chat_id) === String(chatId) && draftBeingApproved(row)) {
+      // Its approval is running right now (audit L5): don't pull the draft out from under it.
+      await cbNotice(chatId, "⏳ הטיוטה הקודמת נמצאת כרגע בהפקה. נסו שוב בעוד רגע.");
+      return;
+    }
     if (row && String(row.chat_id) === String(chatId)) {
       await supabaseDelete("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id)).catch(function (err) {
         console.error("[telegram-webhook] draft delete failed: " + err.message);
@@ -1706,6 +1800,10 @@ async function processQuoteCallback(query, chatId) {
   var d = row.draft;
 
   if (action === "cancel") {
+    if (draftBeingApproved(row)) { // audit L5: ❌ is ignored while ✅ is creating / sending the quote
+      await cbNotice(chatId, "⏳ ההצעה בהפקה כרגע, ולכן אי אפשר לבטל אותה. אם זה נתקע, נסו 🔄 בעוד כ-2 דקות.");
+      return;
+    }
     await supabaseDelete("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id)); // the transcript goes with it
     await clearChatState(chatId);
     await tgCallSafe("editMessageText", { chat_id: chatId, message_id: tappedMessageId || row.message_id,
@@ -1807,7 +1905,8 @@ async function processQuoteCallback(query, chatId) {
       await cbNotice(chatId, "שגיאה זמנית. נסו שוב.");
       return;
     }
-    if (!claimed) return; // a concurrent tap is already handling it
+    // A concurrent tap/approval holds the lease: say so instead of staying silent.
+    if (!claimed) { await cbNotice(chatId, "⏳ ההצעה עדיין בהפקה. אם זה נתקע, נסו 🔄 שוב בעוד כ-2 דקות."); return; }
     if (tappedMessageId) claimed.message_id = tappedMessageId; // the message the user is looking at
     await finishApprovedQuote(claimed, chatId);
     return;
@@ -1903,7 +2002,7 @@ async function sendMonthSummary(chatId) {
   var to = (m === 12 ? (y + 1) + "-01" : y + "-" + pad2(m + 1)) + "-01";
   var rows;
   try {
-    var res = await fetch(SUPABASE_URL + "/rest/v1/business_expenses?select=amount,category&date=gte." + from + "&date=lt." + to, { headers: supabaseHeaders() });
+    var res = await fetchT(SUPABASE_URL + "/rest/v1/business_expenses?select=amount,category&date=gte." + from + "&date=lt." + to, { headers: supabaseHeaders() });
     if (!res.ok) throw new Error("HTTP " + res.status);
     rows = await res.json();
   } catch (err) {

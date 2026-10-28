@@ -28,6 +28,10 @@ let quotaFail = false;
 let dedupeFail = false;
 let expensesInsertFail = false;
 let storageUploadFail = false;
+const storageFiles = new Set();     // receipts bucket objects that "exist"
+let storageDeleteFail = false;      // single-object DELETE fails (❌ path)
+let storageBulkDeleteFail = false;  // bulk DELETE fails (sweep path)
+const storageOps = [];              // order of storage deletes vs row deletes (M3)
 let geminiExtraction;
 let calls = [];
 let nextId = 1, nextMsgId = 900, nowShiftMs = 0;
@@ -52,6 +56,8 @@ function match(row, f) {
   const v = row[f.col], op = f.op;
   if (op === "not.is.null") return v != null;
   if (op === "is.null") return v == null;
+  const inm = op.match(/^in\.\((.*)\)$/);
+  if (inm) return inm[1].split(",").map(decodeURIComponent).includes(String(v));
   const m = op.match(/^(eq|gte|lt|gt|lte)\.(.*)$/);
   if (!m) return true;
   const a = String(v), b = m[2];
@@ -83,9 +89,19 @@ global.fetch = async function (url, init) {
     return res(200, { ok: true, result: true });
   }
   if (url.includes("generativelanguage.googleapis.com")) { calls.push({ kind: "gemini" }); return res(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(geminiExtraction) }] } }] }); }
+  if (/\/storage\/v1\/object\/receipts$/.test(url) && method === "DELETE") { // bulk delete (sweep)
+    const prefixes = body.prefixes || [];
+    calls.push({ kind: "storageBulk", prefixes });
+    if (storageBulkDeleteFail) return res(500, {});
+    prefixes.forEach(p => { storageOps.push("file:" + p); storageFiles.delete(p); });
+    return res(200, prefixes.map(name => ({ name })));
+  }
   if (url.includes("/storage/v1/object/receipts/")) {
-    calls.push({ kind: "storage", method });
+    const p = decodeURIComponent(url.split("/storage/v1/object/receipts/")[1]);
+    calls.push({ kind: "storage", method, path: p });
     if (method === "POST" && storageUploadFail) return res(400, { message: "pii-text-from-storage" });
+    if (method === "POST") storageFiles.add(p);
+    if (method === "DELETE") { if (storageDeleteFail) return res(500, {}); storageOps.push("file:" + p); storageFiles.delete(p); }
     return res(200, {});
   }
   if ((m = url.match(/\/rest\/v1\/rpc\/(\w+)$/))) {
@@ -115,7 +131,7 @@ global.fetch = async function (url, init) {
     }
     if (method === "GET") return res(200, rowsFor(table, filters));
     if (method === "PATCH") { const rows = rowsFor(table, filters); rows.forEach(r => Object.assign(r, body)); return res(200, rows); }
-    if (method === "DELETE") { const del = rowsFor(table, filters); db[table] = db[table].filter(r => !del.includes(r)); return res(204, null); }
+    if (method === "DELETE") { const del = rowsFor(table, filters); if (table === "telegram_pending_receipts") del.forEach(r => storageOps.push("row:" + r.id)); db[table] = db[table].filter(r => !del.includes(r)); return res(204, null); }
   }
   throw new Error("unmocked fetch " + url);
 };
@@ -296,13 +312,32 @@ freshReceiptExtraction();
   db.telegram_pending_quotes.push({ id: "qold", chat_id: 1, created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString() });
   db.telegram_chat_state.push({ chat_id: 1, state: "idle", state_since: new Date(Date.now() - 25 * 3600 * 1000).toISOString() });
   db.telegram_daily_usage.push({ day: "2020-01-01", kind: "quote", count: 1 }, { day: new Date().toISOString().slice(0, 10), kind: "quote", count: 1 });
-  db.telegram_pending_receipts.push({ id: "rold", chat_id: 1, created_at: new Date(Date.now() - 49 * 3600 * 1000).toISOString() });
+  const t49 = new Date(Date.now() - 49 * 3600 * 1000).toISOString();
+  db.telegram_pending_receipts.push({ id: "rold", chat_id: 1, receipt_path: "old-a.jpg", created_at: t49 });
+  db.telegram_pending_receipts.push({ id: "rold2", chat_id: 1, receipt_path: "old-b.jpg", created_at: t49 }); // its expense WAS confirmed (row lingered)
+  db.telegram_pending_receipts.push({ id: "rnew", chat_id: 1, receipt_path: "new-c.jpg", created_at: new Date().toISOString() });
+  db.business_expenses.push({ receipt_url: "old-b.jpg", amount: 1, category: "שונות", date: "2026-01-01" });
+  ["old-a.jpg", "old-b.jpg", "new-c.jpg"].forEach(p => storageFiles.add(p));
+  storageOps.length = 0;
   const postFresh = (u) => new Promise(resolve => { const rr = { status() { return rr; }, json() { resolve(); return rr; }, setHeader() {} }; fresh({ method: "POST", headers: { "x-telegram-bot-api-secret-token": SECRET }, body: Object.assign({ update_id: ++updateId }, u) }, rr); });
   resetCalls(); await postFresh(text(614, "/help")); await Promise.all(bg.splice(0));
   const sweeps = calls.filter(x => x.method === "DELETE" && x.kind === "rest").map(x => x.table + "?" + decodeURIComponent(x.qs).split("=")[0]);
-  check("sweep: all 5 tables, by the right column", ["telegram_pending_receipts?created_at", "telegram_pending_quotes?created_at", "telegram_chat_state?state_since", "telegram_processed_updates?created_at", "telegram_daily_usage?day"].every(s => sweeps.includes(s)), sweeps.join(", "));
+  check("sweep: all 5 tables, by the right column (receipts: read by created_at, rows deleted by id)", ["telegram_pending_quotes?created_at", "telegram_chat_state?state_since", "telegram_processed_updates?created_at", "telegram_daily_usage?day", "telegram_pending_receipts?id"].every(s => sweeps.includes(s)) &&
+    calls.some(x => x.kind === "rest" && x.table === "telegram_pending_receipts" && x.method === "GET" && /created_at=lt\./.test(x.qs)), sweeps.join(", "));
+  check("M3 sweep: the expired receipt's FILE is deleted first, then its row", storageOps.indexOf("file:old-a.jpg") !== -1 && storageOps.indexOf("file:old-a.jpg") < storageOps.indexOf("row:rold") && !storageFiles.has("old-a.jpg"), storageOps.join(" "));
+  check("M3 sweep: a file a CONFIRMED expense points to is never deleted (its stale row is)", storageFiles.has("old-b.jpg") && !storageOps.includes("file:old-b.jpg") && !db.telegram_pending_receipts.some(x => x.id === "rold2"));
+  check("M3 sweep: a recent pending receipt (< 48 h) is untouched, file and row", storageFiles.has("new-c.jpg") && db.telegram_pending_receipts.some(x => x.id === "rnew"));
   check("sweep: old rows gone, recent kept", !db.telegram_processed_updates.some(x => x.update_id === 1) && !db.telegram_pending_quotes.some(x => x.id === "qold") &&
     !db.telegram_chat_state.some(x => x.chat_id === 1) && db.telegram_daily_usage.length === 1 && !db.telegram_pending_receipts.some(x => x.id === "rold"));
+  // storage failing -> the rows stay (retried on the next sweep), so no file is ever orphaned
+  delete require.cache[require.resolve(REPO + "/api/telegram-webhook.js")];
+  const fresh2 = require(REPO + "/api/telegram-webhook.js");
+  db.telegram_pending_receipts.push({ id: "rold3", chat_id: 1, receipt_path: "old-d.jpg", created_at: t49 });
+  storageFiles.add("old-d.jpg"); storageBulkDeleteFail = true;
+  const postFresh2 = (u) => new Promise(resolve => { const rr = { status() { return rr; }, json() { resolve(); return rr; }, setHeader() {} }; fresh2({ method: "POST", headers: { "x-telegram-bot-api-secret-token": SECRET }, body: Object.assign({ update_id: ++updateId }, u) }, rr); });
+  resetCalls(); await postFresh2(text(615, "/help")); await Promise.all(bg.splice(0)); storageBulkDeleteFail = false;
+  check("M3 sweep: Storage delete fails -> the rows are KEPT (file still referenced, retried next sweep)", db.telegram_pending_receipts.some(x => x.id === "rold3") && storageFiles.has("old-d.jpg"));
+  db.telegram_pending_receipts = db.telegram_pending_receipts.filter(x => x.id !== "rold3" && x.id !== "rnew");
   resetCalls(); await postFresh(text(614, "/help")); await Promise.all(bg.splice(0));
   check("sweep throttled (not again within 10 min)", !calls.some(x => x.method === "DELETE" && x.table === "telegram_processed_updates"));
 
@@ -310,11 +345,18 @@ freshReceiptExtraction();
   resetCalls(); await post(photo(620));
   let s = calls.find(x => x.method === "sendMessage" && x.body.reply_markup && JSON.stringify(x.body.reply_markup).includes("confirm:"));
   let p20 = db.telegram_pending_receipts.find(x => x.chat_id === 620);
+  check("L6 receipt summary date shown as DD.MM.YYYY ('20.10.2026'), stored ISO unchanged", calls.some(x => x.method === "sendMessage" && /📅 תאריך: 20\.10\.2026/.test(x.body.text || "")) &&
+    db.telegram_pending_receipts.some(x => x.chat_id === 620 && x.extracted.date === "2026-10-20"));
   check("regression: photo -> Gemini, upload, pending row, summary with buttons", !!s && !!p20 && calls.some(x => x.kind === "storage" && x.method === "POST") && p20.message_id === nextMsgId);
   const cat0 = p20.extracted.category; await post(tap(620, "cyclecat:" + p20.id, p20.message_id));
   check("regression: category cycle", p20.extracted.category !== cat0);
   resetCalls(); await post(tap(620, "cancel:" + p20.id, p20.message_id));
   check("regression: cancel -> row + file deleted, 'בוטל'", !db.telegram_pending_receipts.includes(p20) && calls.some(x => x.kind === "storage" && x.method === "DELETE") && has(lastSent(), /בוטל/));
+  check("M3 ❌: the file is deleted BEFORE the row", storageOps.lastIndexOf("file:" + p20.receipt_path) < storageOps.lastIndexOf("row:" + p20.id) && storageOps.lastIndexOf("file:" + p20.receipt_path) !== -1);
+  await post(photo(625)); const p25 = db.telegram_pending_receipts.find(x => x.chat_id === 625);
+  storageDeleteFail = true; resetCalls(); await post(tap(625, "cancel:" + p25.id, p25.message_id)); storageDeleteFail = false;
+  check("M3 ❌: if the file can't be deleted, the row is kept (the sweep removes both later), user still sees 'בוטל'", db.telegram_pending_receipts.includes(p25) && has(lastSent(), /בוטל/));
+  db.telegram_pending_receipts = db.telegram_pending_receipts.filter(x => x !== p25);
   const before = db.business_expenses.length;
   await post(photo(621)); let p21 = db.telegram_pending_receipts.find(x => x.chat_id === 621);
   resetCalls(); await post(tap(621, "confirm:" + p21.id, p21.message_id));

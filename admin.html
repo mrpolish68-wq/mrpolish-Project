@@ -1710,6 +1710,13 @@
       var QUOTE_COLUMNS = "id, number, quote_date, client_name, address, description, total, source, pdf_path";
 
       function pad3(n) { return String(n).padStart(3, "0"); }
+      // Today in Israel as DD.MM.YYYY (zero-padded), the same as the PDF and the Telegram bot.
+      // he-IL alone gives "5.3.2026". Saved quotes keep whatever date they were stored with.
+      function todayQuoteDate() {
+        var p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", day: "2-digit", month: "2-digit", year: "numeric" }).formatToParts(new Date());
+        function get(t) { return p.filter(function (x) { return x.type === t; })[0].value; }
+        return get("day") + "." + get("month") + "." + get("year");
+      }
       function computeNextNumber() {
         var dbMax = allQuotes.reduce(function (m, r) { return Math.max(m, Number(r.number) || 0); }, 0);
         return dbMax + 1;
@@ -1721,7 +1728,7 @@
 
       // Prefill the number estimate + today's date (renumbered once quote history loads)
       showNumberEstimate();
-      $("ofDate").value = new Date().toLocaleDateString("he-IL");
+      $("ofDate").value = todayQuoteDate();
 
       /* ---------- Helper calculator (price × m²) ---------- */
       function calcRecalc() {
@@ -1930,7 +1937,8 @@
 
       function downloadServerPdf(row, done) {
         var filename = "הצעת-מחיר-" + pad3(row.number) + ".pdf";
-        if (!row.pdf_path) { renderServerPdf(row, filename, done); return; }
+        // Only our own object name (<quote uuid>.pdf); anything else is rendered fresh instead.
+        if (!row.pdf_path || !/^[0-9a-f-]{36}\.pdf$/.test(row.pdf_path)) { renderServerPdf(row, filename, done); return; }
         sb.storage.from("quotes-pdf").createSignedUrl(row.pdf_path, 60, { download: filename }).then(function (res) {
           if (res.error || !res.data || !res.data.signedUrl) throw new Error("signed url");
           triggerDownload(res.data.signedUrl, filename);
@@ -2067,7 +2075,7 @@
         $("ofDesc").value = "";
         $("ofTotal").value = "";
         showNumberEstimate();
-        $("ofDate").value = new Date().toLocaleDateString("he-IL");
+        $("ofDate").value = todayQuoteDate();
       });
 
       $("qhSearch").addEventListener("input", renderQuoteHistory);
@@ -2126,7 +2134,7 @@
         var data = {
           // Edit: the row's own number. New: a placeholder until create_quote returns the real one.
           num: wasEditing ? $("ofNum").value.trim() : pad3(computeNextNumber()),
-          date: $("ofDate").value.trim() || new Date().toLocaleDateString("he-IL"),
+          date: $("ofDate").value.trim() || todayQuoteDate(),
           client: clientName,
           address: $("ofAddress").value.trim() || "—",
           desc: $("ofDesc").value.trim() || "—",
@@ -2153,7 +2161,7 @@
               $("ofTotal").value = "";
               renderQuoteHistory();
               showNumberEstimate();
-              $("ofDate").value = new Date().toLocaleDateString("he-IL");
+              $("ofDate").value = todayQuoteDate();
             });
           });
           return;
@@ -2187,7 +2195,7 @@
             renderQuotePdf(data, function () {
               btn.disabled = false;
               showNumberEstimate();
-              $("ofDate").value = new Date().toLocaleDateString("he-IL");
+              $("ofDate").value = todayQuoteDate();
             }, { errorText: "ההצעה נשמרה (מס׳ " + data.num + "), אבל הפקת ה-PDF נכשלה. אפשר להוריד אותה מהיסטוריית ההצעות." });
           });
         }, { checkOnly: true });
