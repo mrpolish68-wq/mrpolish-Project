@@ -1181,7 +1181,7 @@ Plus a live Playwright pass of `admin.html`: category filtering, every modal's o
 ### Status
 ✅ All fixes live on `main` (commit `d741969`). Nothing currently queued as a known follow-up for this feature.
 
-## 32. Telegram Price Quotes via the bot — LIVE (merged 2026-10-28, `0e3827c`)
+## 32. Telegram Price Quotes via the bot — LIVE (merged 2026-10-28, `0e3827c`; audit batch A `f8d62c1`)
 
 ### Feature summary
 Price quotes (הצעות מחיר) are created through the existing Telegram bot (`api/telegram-webhook.js`, @mrpolish_expenses_bot), mostly by Miri (Ori's assistant) on her phone: Hebrew **voice**, **free text** or a **menu button** → the bot builds a **draft** → it's reviewed and edited in-chat → **approve** → a race-safe number is allocated, the quote is saved to `public.quotes`, a **server-side PDF** is rendered with the **same template as the admin panel**, stored in a private bucket and sent back to the chat → the quote syncs live to `admin.html` (installed as a PWA on 3 phones).
@@ -1302,6 +1302,15 @@ Any live test that calls `create_quote` or `consume_daily_quota` **must run in a
 - **Not done by Claude (on purpose):** no live quote was created. The first real quote (via the bot or the panel) gets **מס׳ 014**.
 
 **Rollback** (if anything goes wrong): Vercel → Deployments → the previous production deployment (built from `47dea44`) → **Instant Rollback**. DB changes are additive, so the old code keeps working; the webhook URL is unchanged.
+
+### Audit fix batch A: DONE (merged 2026-10-28, `f8d62c1`)
+From the 2026-10-28 full code review + security audit (no Critical/High findings). Branch `fix/audit-batch-a` (`fd2b38c`, `ef17dc9`), merged with `--no-ff` as **`f8d62c1`**; production Ready.
+- **M1 / L10, idempotent quote creation:** `supabase-quotes-idempotency.sql` adds `quotes.client_ref` + the unique partial index `quotes_client_ref_key`. `create_quote` returns the existing row for a repeated `p->>'client_ref'` (checked under the advisory lock: no new number, no counter change); otherwise unchanged. The bot sends the draft id; the panel sends one `crypto.randomUUID()` per new-quote form (reused on retries, reset after a save or a new form) and builds the PDF from the SAVED row (it warns if that differs from the form).
+- **L7:** `revoke all on public.telegram_pending_receipts from anon, authenticated` (only the webhook uses it, via service_role).
+- **SQL applied 2026-10-28 by Claude via the `supabase` MCP `execute_sql`** (the file's sections 1–3, verbatim), **NOT via `apply_migration`, so it is NOT in the migration history** (same as Phase 3b and the `awaiting_since` column). Verified live: (a) column + index present; (b) the file's DO block raised `RESULT same_id=t same_number=t counter_moved_on_retry=0 second_ref_new_number=t` and rolled back; (c) 0 anon/authenticated grants left on `telegram_pending_receipts`; (d) `create_quote` still SECURITY DEFINER, `search_path=""`, EXECUTE = authenticated + service_role (+ owner). After the test: 8 quotes, max 13, `floor_next` 14, no `client_ref` rows.
+- **Public file exposure fixed:** `.vercelignore` now has `*.md`, `*.sql`, `tools/` (and `tests/`). Before this, production served `/handoff.md`, `/CLAUDE.md`, `/memory.md`, the plans, every `supabase-*.sql` and `tools/*.js`; no secrets, but internal details. Nothing at runtime needs them (`api/*` reads only `shared/quote-template.js` + `shared/fonts/*`); `package.json` / `package-lock.json` still deploy. Verified on the preview and on production: those paths → 404; `/`, `/admin.html`, `/privacy.html` → 200; both APIs → 401 without a secret; the production bot webhook has no error and no backlog.
+- **Tests are in the repo:** `tests/` + `npm test` (offline; dev deps `playwright-core@1.64.0`, `@electric-sql/pglite@0.3.15`): 368 checks in 7 suites, including the new M1 cases (bot + panel) and the SQL suite (the file executed in PGlite).
+- **Still open from the audit** (later batches): M2 (render timeout vs. the 60 s limit; a 🔄 on the '⏳ מפיק PDF' message), M3 (the sweep leaves receipt images behind), L1 (validate `pdf_path`), L2 (fetch timeouts), L3–L6, L8–L9, I1–I7.
 
 **Remaining optional items**
 - Delete the test bot's Preview-only vars in Vercel (`TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS`); `node tools/set-test-webhook.js delete`; optionally delete the test bot in @BotFather and the `TELEGRAM_TEST_*` lines in `.env`. Before that, clean any test quotes with `node tools/cleanup-test-quotes.js` (dry run → `--apply`).

@@ -2,7 +2,7 @@
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
 Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering), 6b ✅, 7a ✅ (hardening, privacy, spike removed). 7b ✅: **LIVE in production since 2026-10-28** (merge commit `0e3827c`). See "Phase 7b notes".
+Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering), 6b ✅, 7a ✅ (hardening, privacy, spike removed). 7b ✅: **LIVE in production since 2026-10-28** (merge commit `0e3827c`). See "Phase 7b notes". Audit fix batch A ✅ (`f8d62c1`).
 
 ---
 
@@ -547,9 +547,9 @@ Only `admin.html` changed: the quote tab (its CSS, the number field, the Tab 3 s
 - Optionally delete the merged branch `feature/telegram-quotes` (kept for now).
 - `supabase` MCP: finish its OAuth login (`/mcp`) so future sessions can run read-only SQL checks.
 
-### Audit fix batch A (branch `fix/audit-batch-a`): idempotent quote creation (M1, L10, L7)
+### Audit fix batch A: idempotent quote creation (M1, L10, L7): DONE, merged 2026-10-28 (`f8d62c1`)
 
-- **`supabase-quotes-idempotency.sql`** (**not applied yet**; the owner runs it in the SQL Editor):
+- **`supabase-quotes-idempotency.sql`**: **applied 2026-10-28 via the `supabase` MCP `execute_sql`** (sections 1–3 verbatim; **not in the migration history**). Verify a–d passed live; the DO block raised the expected `RESULT … =t =t =0 =t` and rolled back; afterwards 8 quotes / max 13 / `floor_next` 14:
   - `quotes.client_ref text` + the unique partial index `quotes_client_ref_key`;
   - `create_quote` returns the existing row when `p->>'client_ref'` already exists (checked under the advisory lock: no new number, no counter change). Otherwise it is identical to before (diffed: only the `v_ref` variable, a ≤ 100-char guard, the lookup and the insert column were added);
   - L7: `revoke all on telegram_pending_receipts from anon, authenticated` (only the webhook uses it, via service_role).
@@ -559,7 +559,8 @@ Only `admin.html` changed: the quote tab (its CSS, the number field, the Tab 3 s
   - panel: one `crypto.randomUUID()` per new-quote form, reused on retries of the same save, reset after a successful save or a new/edited form.
   - The panel now builds the PDF from the row `create_quote` returns. If that differs from the form (an earlier "failed" attempt had saved), it warns and points to ✏️.
 - **Tests are now in the repo** (`tests/`, `npm test`, all offline; `tests/` is in `.vercelignore`; dev deps `playwright-core@1.64.0`, `@electric-sql/pglite@0.3.15`): 368 checks in 7 suites. The new M1 cases (bot: `quote_id` patch fails → 🔄 gets the same quote; response lost → ✅ again gets the same quote; the old function still works; panel: lost response → retry with the same key → same quote, PDF from the saved row, keys rotate correctly, edit sends no key) plus the SQL suite.
-- **Merge after the owner applies the SQL** (the code is safe either way; the duplicate-quote window only closes once the SQL is live).
+- **Public file exposure fixed** in the same batch: `.vercelignore` + `*.md`, `*.sql`, `tools/` (internal docs, SQL and tools were served at e.g. `/handoff.md`, `/CLAUDE.md`, `/supabase-*.sql`, `/tools/*.js`). Verified 404 on the preview and on production; `/`, `/admin.html`, `/privacy.html` 200; APIs 401 without a secret.
+- **Merged** `fix/audit-batch-a` → `main` (`f8d62c1`, `--no-ff`) after the SQL was applied; production Ready, the production bot webhook clean. Still open from the audit: M2, M3, L1–L6, L8–L9, I1–I7 (see the audit report / handoff §32).
 
 ### Production readiness checklist (used for the 7b merge)
 
