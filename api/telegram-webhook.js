@@ -1425,7 +1425,11 @@ function quoteCaption(q) {
 }
 
 // create_quote(jsonb) with the service key: numbering, source='telegram', chat id (bot-only keys).
-async function createQuoteRpc(d, chatId) {
+// client_ref = the draft id makes it idempotent (supabase-quotes-idempotency.sql): if an earlier
+// attempt for this draft already created the quote (its response was lost, or saving quote_id on
+// the draft failed), the same row comes back instead of a second quote with a new number. The
+// function from before that file ignores the key, so this is safe before and after it's applied.
+async function createQuoteRpc(d, chatId, draftId) {
   var res = await fetch(SUPABASE_URL + "/rest/v1/rpc/create_quote", {
     method: "POST",
     headers: supabaseHeaders(),
@@ -1437,7 +1441,8 @@ async function createQuoteRpc(d, chatId) {
       quote_date: d.quote_date || QX.todayIL(),
       vat_mode: "exempt",
       source: "telegram",
-      telegram_chat_id: chatId
+      telegram_chat_id: chatId,
+      client_ref: draftId
     } })
   });
   var data = await res.json().catch(function () { return null; });
@@ -1533,7 +1538,7 @@ async function finishApprovedQuote(row, chatId) {
   if (!row.quote_id) {
     await say("⏳ יוצר את ההצעה…");
     try {
-      quote = await createQuoteRpc(d, chatId);
+      quote = await createQuoteRpc(d, chatId, row.id);
     } catch (err) {
       console.error("[telegram-webhook] " + err.message);
       await releaseDraftClaim(row.id);
@@ -1545,7 +1550,8 @@ async function finishApprovedQuote(row, chatId) {
     try {
       await supabasePatch("telegram_pending_quotes", "id=eq." + encodeURIComponent(row.id), { quote_id: quote.id, draft: d });
     } catch (err) {
-      // The quote exists; keep going. (A retry would only be blocked by quote_id, so log it.)
+      // The quote exists; keep going. A later 🔄/✅ finds no quote_id and calls create_quote again,
+      // but with the same client_ref (the draft id), so it gets this same quote back, not a new one.
       console.error("[telegram-webhook] draft quote_id patch failed: " + err.message);
     }
   } else {

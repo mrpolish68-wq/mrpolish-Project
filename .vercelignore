@@ -26,3 +26,14 @@ npm-debug.log*
 
 # Fake Hebrew voice clips for local quote-extraction tests (Phase 4b)
 test-audio/
+
+# Test suites (local only; never deployed)
+tests/
+
+# Internal docs, DB migration files and local CLI scripts: never served by the site (they were
+# publicly readable at /handoff.md, /CLAUDE.md, /supabase-*.sql, /tools/*.js before this).
+# Nothing at runtime needs them: api/* only reads shared/quote-template.js + shared/fonts/*.
+# (package.json / package-lock.json are NOT ignored: Vercel needs them to install.)
+*.md
+*.sql
+tools/
