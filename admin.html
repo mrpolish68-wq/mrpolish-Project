@@ -1847,6 +1847,21 @@
         });
       }
 
+      // One idempotency key (client_ref) per new-quote form (supabase-quotes-idempotency.sql). A retry
+      // of the same save reuses it, so if an earlier attempt did create the quote but its response was
+      // lost, create_quote returns THAT quote instead of a second one with a new number. A successful
+      // save or a new/edited form gets a fresh key. (Before that SQL is applied, the key is ignored.)
+      var newQuoteRef = null;
+      function makeClientRef() {
+        if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+        var b = crypto.getRandomValues(new Uint8Array(16));
+        b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+        var h = Array.prototype.map.call(b, function (x) { return (x + 256).toString(16).slice(1); }).join("");
+        return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+      }
+      function currentNewQuoteRef() { if (!newQuoteRef) newQuoteRef = makeClientRef(); return newQuoteRef; }
+      function resetNewQuoteRef() { newQuoteRef = null; }
+
       // Persists a quote. New: the create_quote RPC (the DB allocates the number; the same RPC the
       // Telegram bot uses). Edit: a plain update of the existing row, keeping its number.
       // cb(ok, savedRow) is always called, also when the request itself fails.
@@ -1860,7 +1875,7 @@
         };
         var query = editingId
           ? sb.from("quotes").update(Object.assign({ number: parseInt(data.num, 10) }, fields)).eq("id", editingId).select(QUOTE_COLUMNS)
-          : sb.rpc("create_quote", { p: fields });
+          : sb.rpc("create_quote", { p: Object.assign({}, fields, { client_ref: currentNewQuoteRef() }) });
         query.then(function (res) {
           var row = res && res.data ? (Array.isArray(res.data) ? res.data[0] : res.data) : null;
           if (res.error || !row || !row.id) { cb(false); return; }
@@ -2024,6 +2039,7 @@
 
       function enterEditMode(row) {
         editingQuoteId = row.id;
+        resetNewQuoteRef(); // leaving the new-quote form
         $("ofNum").value = pad3(row.number);
         $("ofDate").value = row.quote_date || "";
         $("ofClient").value = row.client_name || "";
@@ -2045,6 +2061,7 @@
 
       $("ofEditingCancel").addEventListener("click", function () {
         exitEditMode();
+        resetNewQuoteRef(); // a fresh new-quote form
         $("ofClient").value = "";
         $("ofAddress").value = "";
         $("ofDesc").value = "";
@@ -2152,10 +2169,21 @@
               alert("שמירת ההצעה נכשלה, וה-PDF לא הופק. בדקו את החיבור ונסו שוב.");
               return;
             }
+            resetNewQuoteRef(); // saved: the next new quote gets a new key
             upsertQuoteRow(savedRow);
             renderQuoteHistory();
-            data.num = pad3(savedRow.number);
+            // The PDF always shows what is SAVED. If an earlier attempt that looked failed had in fact
+            // created this quote, the stored fields may differ from the form: say so.
+            var sameAsForm = savedRow.client_name === data.client && Number(savedRow.total) === (parseFloat(data.total) || 0) &&
+              (savedRow.description || "") === data.desc && (savedRow.address || "") === data.address && savedRow.quote_date === data.date;
+            data = {
+              num: pad3(savedRow.number), date: savedRow.quote_date, client: savedRow.client_name,
+              address: savedRow.address || "—", desc: savedRow.description || "—", total: savedRow.total
+            };
             $("ofNum").value = data.num;
+            if (!sameAsForm) {
+              alert("ההצעה כבר נשמרה קודם (מס׳ " + data.num + ") עם הפרטים מהניסיון הקודם. ה-PDF יופק לפי מה שנשמר; אפשר לעדכן אותה עם ✏️ ערוך בהיסטוריה.");
+            }
             renderQuotePdf(data, function () {
               btn.disabled = false;
               showNumberEstimate();

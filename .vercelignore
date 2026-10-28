@@ -26,3 +26,6 @@ npm-debug.log*
 
 # Fake Hebrew voice clips for local quote-extraction tests (Phase 4b)
 test-audio/
+
+# Test suites (local only; never deployed)
+tests/
