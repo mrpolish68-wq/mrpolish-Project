@@ -2,6 +2,7 @@
 // 🔍 search, 📄 resend. EVERYTHING is mocked (no live quotes, no real network). Fake values only.
 "use strict";
 const path = require("path");
+const fs = require("fs");
 const REPO = path.resolve(__dirname, "..");
 
 let bg = [];
@@ -77,8 +78,11 @@ function rowsFor(table, filters) {
 const R = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => JSON.parse(JSON.stringify(body)), text: async () => JSON.stringify(body), arrayBuffer: async () => new Uint8Array(Buffer.from(String(body))).buffer });
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+const unsignaled = []; // L2: every outbound request must carry an AbortSignal
+let createQuoteTimeoutOnce = false;
 global.fetch = async function (url, init) {
   init = init || {}; url = String(url);
+  if (!init.signal) unsignaled.push(url.replace(/^https:\/\/([^/]+).*/, "$1") + " " + (init.method || "GET"));
   const method = init.method || "GET";
   let m;
   if ((m = url.match(/^https:\/\/api\.telegram\.org\/bot([^/]+)\/sendDocument$/))) {
@@ -98,6 +102,7 @@ global.fetch = async function (url, init) {
   if ((m = url.match(/^https:\/\/([^/]+)\/api\/render-quote-pdf$/))) {
     calls.push({ kind: "render", host: m[1], headers: init.headers, body, redirect: init.redirect });
     if (renderMode === "500") return R(500, { error: "render_failed" });
+    if (renderMode === "timeout") throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
     if (renderMode === "422") return R(422, { error: "too_long", lines: 18, maxLines: 15 });
     const q = db.quotes.find(x => x.id === body.quote_id);
     if (q) q.pdf_path = q.id + ".pdf";
@@ -117,6 +122,7 @@ global.fetch = async function (url, init) {
     calls.push({ kind: "rpc", name: m[1], body });
     if (m[1] === "create_quote") {
       if (createQuoteFail) return R(500, { code: "XX000", message: "Failing row contains (secret-pii)" });
+      if (createQuoteTimeoutOnce) { createQuoteTimeoutOnce = false; throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }
       const p = body.p;
       if (createQuoteMode === "idempotent" && p.client_ref) {
         const existing = db.quotes.find(q => q.client_ref === p.client_ref);
@@ -360,6 +366,53 @@ for (let n = 6; n <= 13; n++) db.quotes.push({ id: uuid(), number: n, quote_date
   await post(tap(823, "q:ok:" + d.id, d.message_id));
   check("M1(c) old function + lost response -> a 2nd quote (the known bug; fixed once the SQL is applied)", db.quotes.filter(q => q.telegram_chat_id === 823).length === 2);
   createQuoteMode = "idempotent";
+
+  // ===== Audit batch B =====
+  quotaRemaining.quote = 15; // this suite creates many drafts; start the batch with a fresh daily quota
+  // M2: both in-progress messages carry 🔄; a render timeout -> the error with 🔄 (never a stuck message)
+  d = await makeDraft(830);
+  reset(); await post(tap(830, "q:ok:" + d.id, d.message_id));
+  const progress = calls.filter(x => x.method === "editMessageText" && /^⏳/.test(txt(x)));
+  check("M2 '⏳ יוצר את ההצעה…' and '⏳ מפיק PDF…' both carry a 🔄 (q:retry) button", progress.length >= 2 &&
+    progress.every(x => btns(x).some(b => b.callback_data === "q:retry:" + d.id)), progress.map(x => txt(x).slice(0, 14)).join(" | "));
+  check("M2 the render request uses a 35 s timeout (under the 60 s function limit)", /var RENDER_TIMEOUT_MS = 35000;/.test(fs.readFileSync(REPO + "/api/telegram-webhook.js", "utf8")) &&
+    /AbortSignal\.timeout\(RENDER_TIMEOUT_MS\)/.test(fs.readFileSync(REPO + "/api/telegram-webhook.js", "utf8")));
+  d = await makeDraft(831);
+  renderMode = "timeout"; reset(); await post(tap(831, "q:ok:" + d.id, d.message_id)); renderMode = "ok";
+  c = last();
+  check("M2 render times out -> the message becomes 'ה-PDF נכשל (זמן ההמתנה עבר)' WITH 🔄, quote kept", /אבל ה-PDF נכשל \(זמן ההמתנה עבר\)/.test(txt(c)) && btn(c, "q:retry:") === "q:retry:" + d.id &&
+    db.quotes.filter(q => q.telegram_chat_id === 831).length === 1 && draftOf(831).claimed_at === null);
+  reset(); await post(tap(831, "q:retry:" + d.id, d.message_id));
+  check("M2 🔄 after the timeout -> re-rendered by quote_id and sent, no 2nd quote", docs().length === 1 && db.quotes.filter(q => q.telegram_chat_id === 831).length === 1 && !draftOf(831));
+  d = await makeDraft(832);
+  draftOf(832).claimed_at = new Date().toISOString(); // an approval is running
+  reset(); await post(tap(832, "q:retry:" + d.id, d.message_id));
+  check("M2 🔄/✅ while an approval holds the lease -> a 'still in progress' note (not silence), nothing created", /עדיין בהפקה/.test(txt(last())) && count(x => x.name === "create_quote") === 0);
+
+  // L5: ❌ and 🆕 are ignored while the draft is being approved
+  reset(); await post(tap(832, "q:cancel:" + d.id, d.message_id));
+  check("L5 ❌ on a draft being approved -> ignored with a note, the draft stays", !!draftOf(832) && /אי אפשר לבטל/.test(txt(last())));
+  reset(); await post(tap(832, "q:new:" + d.id, d.message_id));
+  check("L5 🆕 on a draft being approved -> not deleted, a note", !!draftOf(832) && /נמצאת כרגע בהפקה/.test(txt(last())));
+  draftOf(832).claimed_at = new Date(Date.now() - 3 * 60 * 1000).toISOString(); // the lease expired (a killed run)
+  reset(); await post(tap(832, "q:cancel:" + d.id, d.message_id));
+  check("L5 after the lease expires, ❌ works again", !draftOf(832) && /בוטלה/.test(txt(last())));
+
+  // L1: a stored PDF is used only if pdf_path is <uuid>.pdf
+  const qBad = db.quotes.find(q => q.number === 12);
+  qBad.pdf_path = "../receipts/secret.jpg";
+  reset(); await post(tap(810, "q:pdf:" + qBad.id));
+  check("L1 pdf_path '../receipts/secret.jpg' -> NOT downloaded with the service key; re-rendered + sent", count(x => x.kind === "storage") === 0 && count(x => x.kind === "render") === 1 && docs().length === 1);
+  check("L1 …logged without the path", logs.some(l => /unexpected pdf_path format/.test(l)) && !logs.some(l => /secret\.jpg/.test(l)));
+  const qGood = db.quotes.find(q => q.pdf_path && /^[0-9a-f-]{36}\.pdf$/.test(q.pdf_path));
+  reset(); await post(tap(810, "q:pdf:" + qGood.id));
+  check("L1 a proper <uuid>.pdf is still served from storage (no render)", count(x => x.kind === "storage") === 1 && count(x => x.kind === "render") === 0);
+
+  // L2: a timed-out request -> the friendly Hebrew error; and every request carries a timeout
+  d = await makeDraft(833);
+  createQuoteTimeoutOnce = true; reset(); await post(tap(833, "q:ok:" + d.id, d.message_id));
+  check("L2 create_quote times out -> 'שגיאה ביצירת ההצעה. נסו ✅ שוב.', claim released", /שגיאה ביצירת ההצעה/.test(txt(last())) && draftOf(833).claimed_at === null);
+  check("L2 every outbound request in this whole run carried a timeout signal (Supabase, Storage, Telegram, render)", unsignaled.length === 0, unsignaled.slice(0, 3).join(" | "));
 
   // ===== production base URL =====
   Object.assign(process.env, { VERCEL_ENV: "production", VERCEL_PROJECT_PRODUCTION_URL: "mr-polishes.com", TELEGRAM_BOT_TOKEN: "111:PRODFAKE", TELEGRAM_WEBHOOK_SECRET: "prod-secret-fake", TELEGRAM_ALLOWED_CHATS: "500" });

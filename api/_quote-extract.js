@@ -438,7 +438,12 @@ function buildDraft(raw, source, transcript, todayIL, fallback) {
   var v = verifyStatedTotal(raw.stated_total, raw.stated_total_evidence, source, items);
   var total = v.total;
   var totalSource = total != null ? "stated" : null;
-  if (total == null && fallback && fallback.total != null) { total = fallback.total; totalSource = fallback.total_source || "stated"; }
+  // The exact words the total was accepted from, shown on the draft (audit L4): for a voice note the
+  // evidence is checked against Gemini's own transcript, so the human check is seeing those words.
+  var totalEvidence = total != null ? cleanStr(raw.stated_total_evidence, 120) : null;
+  if (total == null && fallback && fallback.total != null) {
+    total = fallback.total; totalSource = fallback.total_source || "stated"; totalEvidence = fallback.total_evidence || null;
+  }
   if (total == null && v.reason !== "none" && v.reason !== "no_evidence") warnings.push({ code: "total_rejected", reason: v.reason });
 
   var priced = items.filter(function (it) { return it.line_total != null; });
@@ -464,6 +469,7 @@ function buildDraft(raw, source, transcript, todayIL, fallback) {
     items_sum: itemsSum,
     total: total,
     total_source: totalSource,
+    total_evidence: totalEvidence,
     quote_date: quoteDate,
     quote_date_stated: dateStated,
     description_lines: lines,
@@ -557,7 +563,8 @@ async function applyCorrection(draft, input, opts) {
   var transcript = inp.kind === "audio" ? cleanTranscript(raw && raw.transcript) : inp.text;
   // The total may change only with evidence in THIS correction; otherwise the previous total stays.
   var updated = buildDraft(raw, transcript, transcript, draft.quote_date || todayIL(), {
-    total: draft.total, total_source: draft.total_source, quote_date: draft.quote_date, quote_date_stated: draft.quote_date_stated
+    total: draft.total, total_source: draft.total_source, total_evidence: draft.total_evidence,
+    quote_date: draft.quote_date, quote_date_stated: draft.quote_date_stated
   });
   return ensureFits(updated, opts);
 }

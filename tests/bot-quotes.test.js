@@ -33,6 +33,7 @@ let nextId = 1, nextMsgId = 5000;
 let geminiQueue = [];     // responses for quote extraction / correction / shorten (in order)
 let geminiStatus = null;  // e.g. 429
 let failEditFor = new Set();
+let draftLookupTimeoutOnce = false;
 let lastGeminiBody = null;
 const realFetch = global.fetch;
 
@@ -113,6 +114,8 @@ global.fetch = async function (url, init) {
       const row = Object.assign({ id: "00000000-0000-4000-8000-" + String(nextId++).padStart(12, "0"), created_at: new Date(Date.now() + nextId).toISOString(), claimed_at: null, voice_corrections: 0 }, clone(body));
       db[table].push(row); return R(201, [row]);
     }
+    // findActiveDraft's lookup (created_at=gt.) times out once
+    if (method === "GET" && table === "telegram_pending_quotes" && draftLookupTimeoutOnce && /created_at=gt\./.test(decodeURIComponent(qs))) { draftLookupTimeoutOnce = false; throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); }
     if (method === "GET") return R(200, rowsFor(table, f));
     if (method === "PATCH") {
       const rows = rowsFor(table, f);
@@ -401,6 +404,39 @@ async function liveSuite() {
   draftOf(722).claimed_at = null; draftOf(722).quote_id = "11111111-1111-4111-8111-111111111111";
   reset(); await post(text(722, "5000"));
   check("6b(a) draft that already has a quote is not 'open' -> '5000' isn't applied (and not throttled)", draftOf(722).draft.total === 4600 && !calls.some(x => /הסכום עודכן|יש טיוטה פתוחה|לאט לאט/.test(txt(x))));
+
+  // ===== Audit batch B =====
+  quotaRemaining.quote = 15;
+  // L4: the stated-total words on the draft
+  geminiQueue.push(gq({ client_name: "עדי", address: "הגפן 3, חולון", items: [], stated_total: 4500, stated_total_evidence: "סה\"כ 4,500", description_lines: ["ליטוש"] }));
+  reset(); await post(text(730, "הצעת מחיר לעדי הגפן 3 חולון ליטוש סה\"כ 4,500"));
+  check("L4 draft shows the words the total came from: 💰 נאמר: \"סה\"כ 4,500\"", txt(last()).includes("💰 נאמר: \"סה\"כ 4,500\"") && draftOf(730).draft.total_evidence === "סה\"כ 4,500");
+  reset(); await post(text(730, "4800"));
+  c = calls.filter(x => x.method === "editMessageText").slice(-1)[0];
+  check("L4 a total typed by hand -> no 'נאמר' line (no spoken words), evidence cleared", draftOf(730).draft.total === 4800 && draftOf(730).draft.total_evidence === null && !txt(c).includes("💰 נאמר"));
+  geminiQueue.push(gq({ client_name: "גל", address: "—", items: [], stated_total: 3000, stated_total_evidence: "המחיר הסופי 3000", description_lines: ["ליטוש"] }));
+  await post(text(731, "הצעת מחיר לגל ליטוש המחיר הסופי 3000"));
+  const d731 = draftOf(731);
+  geminiQueue.push(gq({ client_name: "גל כהן", address: "—", items: [], stated_total: null, description_lines: ["ליטוש"] }));
+  reset(); await post(tap(731, "q:voice:" + d731.id)); await post(text(731, "השם הוא גל כהן"));
+  check("L4 a correction without a new total keeps the total AND its words", draftOf(731).draft.total === 3000 && draftOf(731).draft.total_evidence === "המחיר הסופי 3000" && txt(last()).includes("💰 נאמר: \"המחיר הסופי 3000\""));
+
+  // L6: a date Gemini reads as "5.3.2026" is stored and shown padded
+  geminiQueue.push(gq({ client_name: "נועה", address: "—", items: [], stated_total: 900, stated_total_evidence: "900", quote_date: "5.3.2026", description_lines: ["ליטוש"] }));
+  reset(); await post(text(733, "הצעת מחיר לנועה ליטוש 900 לתאריך 5.3.2026"));
+  check("L6 a stated date '5.3.2026' -> '05.03.2026' (DD.MM.YYYY)", draftOf(733).draft.quote_date === "05.03.2026" && txt(last()).includes("📅 תאריך: 05.03.2026"));
+
+  // L5: the "waiting for details" path re-checks for an open draft before creating one
+  db.telegram_chat_state.push({ chat_id: 730, state: "collecting_quote", state_since: new Date().toISOString(), context: {} }); // a stale state next to a draft
+  const quotaBeforeL5 = quotaRemaining.quote;
+  reset(); await post(text(730, "דני לוי הרצל 12 רעננה ליטוש סה\"כ 4,500"));
+  check("L5 details while 'waiting' but a draft already exists -> the continue/new choice; no AI, no quota, still ONE draft", /יש כבר טיוטת/.test(txt(last())) &&
+    !calls.some(x => x.kind === "gemini") && quotaRemaining.quote === quotaBeforeL5 && db.telegram_pending_quotes.filter(r => r.chat_id === 730).length === 1);
+
+  // L2: a timed-out lookup -> a friendly Hebrew error (not a stuck chat)
+  db.telegram_chat_state = db.telegram_chat_state.filter(x => x.chat_id !== 734);
+  draftLookupTimeoutOnce = true; reset(); await post(text(734, "תכין לי הצעת מחיר"));
+  check("L2 the draft lookup times out -> 'שגיאה זמנית. נסו שוב בעוד רגע.'", /שגיאה זמנית/.test(txt(last())));
 
   // ===== Phase 7a: callback validation, 24 h draft expiry, quote rate limit 30 =====
   for (const bad of ["q:ok:not-a-uuid", "q:ok:" + draftOf(722).id + ":extra", "q:pdf:../../etc", "cyclecat:abc", "confirm:' or 1=1"]) {
