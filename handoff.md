@@ -1181,7 +1181,7 @@ Plus a live Playwright pass of `admin.html`: category filtering, every modal's o
 ### Status
 ✅ All fixes live on `main` (commit `d741969`). Nothing currently queued as a known follow-up for this feature.
 
-## 32. Telegram Price Quotes via the bot — READY TO MERGE (2026-10-25 → 2026-10-27)
+## 32. Telegram Price Quotes via the bot — LIVE (merged 2026-10-28, `0e3827c`)
 
 ### Feature summary
 Price quotes (הצעות מחיר) are created through the existing Telegram bot (`api/telegram-webhook.js`, @mrpolish_expenses_bot), mostly by Miri (Ori's assistant) on her phone: Hebrew **voice**, **free text** or a **menu button** → the bot builds a **draft** → it's reviewed and edited in-chat → **approve** → a race-safe number is allocated, the quote is saved to `public.quotes`, a **server-side PDF** is rendered with the **same template as the admin panel**, stored in a private bucket and sent back to the chat → the quote syncs live to `admin.html` (installed as a PWA on 3 phones).
@@ -1192,7 +1192,7 @@ Price quotes (הצעות מחיר) are created through the existing Telegram bot
 - **`shared/quote-template.js`**: the one quote-PDF template used by both the panel and the server.
 
 ### Branch & commits
-Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea44`**, so production is untouched until the owner merges (Phase 7b).
+Branch `feature/telegram-quotes` (pushed to origin), **merged into `main` on 2026-10-28** (merge commit `0e3827c`; `main` was at `47dea44` before).
 
 | Commit | Phase | Summary |
 |---|---|---|
@@ -1227,7 +1227,7 @@ Branch `feature/telegram-quotes` (pushed to origin). **`main` is still at `47dea
 | 5c / 5d | Quote drafts; approve → number → PDF → send; 📜 / 🔍 / 📄 | ✅ live-tested by the owner |
 | 6 / 6b | Panel live sync + RPC numbering; bot UX fixes from the live test | ✅ live-tested by the owner |
 | 7a | Hardening, `privacy.html`, spike deleted, audit, readiness checklist | ✅ |
-| **7b** | **Merge to `main` + production checks**, run by the owner (checklist below) | ⏳ |
+| 7b | Merge to `main` (`0e3827c`) + production checks + production bot commands | ✅ **LIVE 2026-10-28** |
 
 ### Key approved decisions (full list in the plan)
 - **PDF:** vector `page.pdf()` via puppeteer-core + @sparticuz/chromium, **always one A4 page**, no zoom ever. Layout steps: tighten line spacing at 16px first, then shrink the font to a **13px floor**. Target **≤ 12 lines** at full size; max 15 at the floor. **Too long → refuse** (`fits:false`) and ask for a shorter text. The panel shows "התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור".
@@ -1294,14 +1294,17 @@ Any live test that calls `create_quote` or `consume_daily_quota` **must run in a
 - DB changes happen only after explicit approval, applied by the owner in the Supabase SQL Editor (see the `apply_migration` lesson above).
 - Long pasted prompts can get truncated in the Antigravity chat. **If a prompt looks cut off, say so instead of guessing.**
 
-### Next step: Phase 7b, the merge (owner-run)
-Full checklist (env vars, merge steps, post-deploy checks, rollback, optional cleanup): **`telegram-quotes-plan.md` → "Production readiness checklist"**. In short:
-1. Run `supabase-telegram-retention-cron.sql` in the SQL Editor (+ its verify query). The privacy promise "drafts deleted within 24 h" depends on it.
-2. Confirm **`INTERNAL_API_SECRET`** is set for **Production** (new in this feature; the others already exist: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_CHATS`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_AI_API_KEY`).
-3. PR `feature/telegram-quotes` → `main`, merge, wait for the production deploy.
-4. `node tools/set-bot-commands.js production`.
-5. Post-deploy checks: production webhook info clean; /start, receipt, quote (a real number!), panel live update + PDF download.
-6. Rollback: Vercel **Instant Rollback**. DB changes are additive, so the old code still works. Webhook URL unchanged (`https://mr-polishes.com/api/telegram-webhook`).
-7. Optional afterwards: remove the test bot's webhook + `TELEGRAM_TEST_*` vars.
+### LIVE in production (2026-10-28)
+- **Merged** `feature/telegram-quotes` → `main` with `--no-ff`: merge commit **`0e3827c`** ("Merge feature/telegram-quotes: Telegram price quotes via the bot"), pushed 2026-10-28. The production deployment is Ready (`mrpolish-project-3l75eqrps-polish1.vercel.app`, served at `https://mr-polishes.com`).
+- **Before the merge (owner):** `supabase-telegram-retention-cron.sql` applied in the SQL Editor (hourly `telegram-retention-hourly`); `INTERNAL_API_SECRET` set for Production. All 7 test suites passed (343 checks).
+- **Post-deploy checks (read-only, no live quotes), all OK:** `/`, `/admin.html` (live-sync code present), `/privacy.html` (AI section present) → 200; `POST /api/render-quote-pdf` without a secret → 401 (also with `test_data`); `/api/spike-quote-pdf` → 404; `POST /api/telegram-webhook` without Telegram's secret → 401; the CSP header includes `wss://mmognkxkglkotzkuxzly.supabase.co`; production bot `@mrpolish_expenses_bot` `getWebhookInfo`: same URL `https://mr-polishes.com/api/telegram-webhook`, `pending_update_count` 0, no `last_error`, `allowed_updates` message + callback_query.
+- **`node tools/set-bot-commands.js production`** run: `/start` תפריט ראשי · `/quote` הצעת מחיר חדשה · `/help` עזרה.
+- **Not done by Claude (on purpose):** no live quote was created. The first real quote (via the bot or the panel) gets **מס׳ 014**.
 
-Open notes: `npm audit` shows 6 high zod findings (not exploitable here, no safe fix yet; see the plan's Phase 7a notes). The `supabase` MCP server needs its OAuth login (`/mcp`) before Claude can run SQL; until then the owner runs SQL in the editor.
+**Rollback** (if anything goes wrong): Vercel → Deployments → the previous production deployment (built from `47dea44`) → **Instant Rollback**. DB changes are additive, so the old code keeps working; the webhook URL is unchanged.
+
+**Remaining optional items**
+- Delete the test bot's Preview-only vars in Vercel (`TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS`); `node tools/set-test-webhook.js delete`; optionally delete the test bot in @BotFather and the `TELEGRAM_TEST_*` lines in `.env`. Before that, clean any test quotes with `node tools/cleanup-test-quotes.js` (dry run → `--apply`).
+- Run `npm audit --omit=dev` periodically (e.g. monthly). The 6 known high zod findings are not exploitable here; update `@vercel/functions` / `puppeteer-core` once they ship zod ≥ 4.6.6.
+- Optionally delete the merged branch `feature/telegram-quotes` (kept for now).
+- `supabase` MCP: finish its OAuth login (`/mcp`) so future sessions can run read-only SQL checks.
