@@ -22,3 +22,7 @@ npm-debug.log*
 
 .vercel
 .env*
+.mcp.json
+
+# Fake Hebrew voice clips for local quote-extraction tests (Phase 4b)
+test-audio/

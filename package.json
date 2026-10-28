@@ -1,0 +1,12 @@
+{
+  "name": "mrpolish-site",
+  "private": true,
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "153.0.0",
+    "@vercel/functions": "3.10.1",
+    "puppeteer-core": "25.11.0"
+  }
+}
