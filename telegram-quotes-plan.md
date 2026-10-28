@@ -1,8 +1,8 @@
 # Telegram Quotes — Project Plan
 
 Single source of truth for the "price quotes via Telegram bot" feature, across sessions.
-Branch: `feature/telegram-quotes`. Production `main` stays untouched until the final merge.
-Session handoff (status, commits, live DB state, tooling lessons): **`handoff.md` §32**. As of 2026-10-27: Phases 0–5b ✅ (test bot live on the branch preview), `awaiting_since` column applied (SQL Editor, not in migration history). Phase 5c ✅ (quote drafts in the bot). Phase 5d ✅ (approve → PDF, 📜, 🔍). Phase 6 ✅ (panel live sync + RPC numbering), 6b ✅, 7a ✅ (hardening, privacy, spike removed). 7b ✅: **LIVE in production since 2026-10-28** (merge commit `0e3827c`). See "Phase 7b notes". Audit fix batches A ✅ (`f8d62c1`) + B ✅ (`8681463`); remaining: L3 accepted, L8 kept, I1–I7 info.
+**Status (2026-10-28): LIVE in production** (merge `0e3827c` into `main`), all phases 0–7b ✅. **Audit fix batches A ✅ (`f8d62c1`) and B ✅ (`8681463`)**; intentionally left: L3 (accepted), L8 (test bot kept, with the cleanup tool), I1–I7 (info). Developed on `feature/telegram-quotes` (merged); the audit fixes on `fix/audit-batch-a` / `fix/audit-batch-b` (merged).
+The final, self-contained summary (architecture map, DB objects, decisions, audit, operations, pending items): **`handoff.md` §32**. This file keeps the per-phase detail.
 
 ---
 

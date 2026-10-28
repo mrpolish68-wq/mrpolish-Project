@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-10-26 (§32 — **Telegram price quotes feature, IN PROGRESS** on branch `feature/telegram-quotes`, NOT merged: Phases 0–3b done (shared PDF template, aligned ruled lines, DB migration applied live), **next is Phase 4** (production server PDF + Gemini quote extraction + quotas). Read §32 and `telegram-quotes-plan.md` on that branch to continue. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-10-28 (§32 — **Telegram price quotes feature: LIVE in production since 2026-10-28** (merge `0e3827c`), followed by **audit fix batches A (`f8d62c1`) and B (`8681463`)** from a full code review + security audit (no Critical/High findings). §32 is the complete, final summary: what it does, the architecture map, the DB objects, decisions, the audit, operations and pending items. `telegram-quotes-plan.md` has the per-phase detail. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -1181,156 +1181,90 @@ Plus a live Playwright pass of `admin.html`: category filtering, every modal's o
 ### Status
 ✅ All fixes live on `main` (commit `d741969`). Nothing currently queued as a known follow-up for this feature.
 
-## 32. Telegram Price Quotes via the bot — LIVE (merged 2026-10-28, `0e3827c`; audit batches A `f8d62c1` + B `8681463`)
+## 32. Telegram Price Quotes via the bot — LIVE (2026-10-28)
 
-### Feature summary
-Price quotes (הצעות מחיר) are created through the existing Telegram bot (`api/telegram-webhook.js`, @mrpolish_expenses_bot), mostly by Miri (Ori's assistant) on her phone: Hebrew **voice**, **free text** or a **menu button** → the bot builds a **draft** → it's reviewed and edited in-chat → **approve** → a race-safe number is allocated, the quote is saved to `public.quotes`, a **server-side PDF** is rendered with the **same template as the admin panel**, stored in a private bucket and sent back to the chat → the quote syncs live to `admin.html` (installed as a PWA on 3 phones).
+**Status:** live in production at `https://mr-polishes.com` since **2026-10-28** (merge commit `0e3827c`), followed by **audit fix batch A** (`f8d62c1`) and **batch B** (`8681463`). Live data after launch: 8 quotes (numbers 6–13, all from the panel), `quote_counter.floor_next` = 14, so **the next quote is מס׳ 014**. Per-phase detail lives in `telegram-quotes-plan.md`.
 
-### Where the truth lives
-- **`telegram-quotes-plan.md`** (branch `feature/telegram-quotes`): every approved decision, phase scopes and statuses, per-phase notes, live DB state. **Read it before doing anything.**
-- **`supabase-quotes-telegram.sql`**: the DB migration (applied live), with a commented ROLLBACK section.
-- **`shared/quote-template.js`**: the one quote-PDF template used by both the panel and the server.
+### 32.1 What it does
+Miri (Ori's assistant) or Ori creates a price quote (הצעת מחיר) in the existing Telegram bot **@mrpolish_expenses_bot**:
+1. **Start:** a Hebrew **voice note** or **text** with the client, address, work and final price, or tap 🧾 / `/quote` (the bot then asks for those details).
+2. **Draft:** Gemini reads the message; the code builds a draft: date (DD.MM.YYYY, today in Israel unless one was said), client, address ("<street> <number>, <city>"), description lines, the total plus the words it came from (`💰 נאמר: "…"`), and warnings (sum mismatch, too long for one page). A missing total → "❗ חסר מחיר", and the bot waits for it.
+3. **Edits:** ✏️ client / address / description / total / date (in code, no AI); 🎤 up to 3 corrections by voice or text; ✂️ auto-shorten when too long; a bare amount ("4200") updates the price; other messages ask "לעדכן את הטיוטה?"; ❌ cancels.
+4. **✅ approve:** `create_quote` allocates the number (idempotent via `client_ref`) → the PDF is rendered on the server → sent to the chat as `הצעת-מחיר-NNN.pdf` → the draft is deleted. Every "⏳" step carries 🔄.
+5. **Panel:** the quote appears live in `admin.html` with a `📱 טלגרם` badge; "📄 צפה / הורדה" downloads the stored PDF (or renders it fresh if it was edited).
 
-### Branch & commits
-Branch `feature/telegram-quotes` (pushed to origin), **merged into `main` on 2026-10-28** (merge commit `0e3827c`; `main` was at `47dea44` before).
+**Menu** (`/start`, `/quote`, `/help` + a persistent keyboard): 🧾 הצעת מחיר חדשה · 📷 סריקת קבלה · 📜 הצעות אחרונות (last 5, each with 📄 resend) · 🔍 חיפוש הצעה (by client name) · 💰 סיכום הוצאות החודש · ❓ עזרה. The help and `/start` show "📊 נותרו היום: N הצעות מחיר". Receipts (📷) work exactly as before (§29–31).
 
-| Commit | Phase | Summary |
-|---|---|---|
-| `be7fd85` | 1 | Preview-only Chromium PDF spike (`api/spike-quote-pdf.js`, puppeteer-core + @sparticuz/chromium, embedded Heebo font). |
-| `8e40938` | 1b | First version of `telegram-quotes-plan.md`. |
-| `2786b1b` | — | Project-scoped Supabase MCP config (`.mcp.json`, `?project_ref=mmognkxkglkotzkuxzly`). |
-| `7791b29` | 1b | Plan updated with the live DB state (read-only check). |
-| `f008901` | 2 | `shared/quote-template.js` (UMD) used by `admin.html` + the spike; VAT line changed; `shared/quote-logo.js` deleted. |
-| `95d2777` | 2b | Ruled line under every description line + 13px font floor, both PDF paths; refusal when too long. |
-| `0f54700` | 3a | DB migration file written + tested locally (not applied). |
-| `1ca3358` | 3b | Robust bot detection in `create_quote`; migration applied live (by the owner) + live verification. |
-| `94f9886` | 4a | `api/render-quote-pdf.js`: production PDF function (secret or session auth, storage upsert, `pdf_path`). |
-| `86fa5f8` | 4b | `api/_quote-extract.js` (Gemini extraction + corrections) + `api/_quota.js`. |
-| `c07d4f5` | 5a | Test-bot tooling (`tools/set-test-webhook.js`), quotas back to 15 / 20 / 3 (paid Tier 1). |
-| `b59c3d2` | 5a-2 | Preview uses the `TELEGRAM_TEST_*` vars (`telegramConfig()`), never the production bot. |
-| `116fe74` | 5b | Dedupe, ACK + `waitUntil`, sweeps, routing, menu, receipt quota, the known bugs fixed. |
-| `aab4ed3` | 5b | `awaiting_since` column applied (SQL Editor). |
-| `9366d71` | 5c | Quote draft flow (extract, draft message, ✏️ edits, 🎤 corrections, ✂️, ❌). |
-| `0792abe` | 5d | ✅ approve → `create_quote` → PDF → sendDocument; 📜 recent, 🔍 search, 📄 resend; `tools/cleanup-test-quotes.js`. |
-| `796597b` | 6 | Panel: Realtime + wake-up refetch, `📱 טלגרם` badge, create_quote before the PDF, server PDF for bot quotes. |
-| `695aff4` | 6b | Open-draft amount / follow-up prompt, address "<street> <number>, <city>", money "4,200 ₪". |
-| (the 7a commit) | 7a | Hardening, privacy text, spike deleted, retention cron file, readiness checklist. |
+### 32.2 Architecture map
+**Code**
+| File | Role |
+|---|---|
+| `api/telegram-webhook.js` | The bot. Telegram secret check, chat allowlist, prod vs. test config (`telegramConfig()`), dedupe by `update_id`, ACK + `waitUntil`, routing, menu, receipts, quote drafts / edits / corrections, ✅ approve → `create_quote` → PDF → `sendDocument`, 📜/🔍/📄, retention sweeps, per-flow rate limits, `fetchT` timeouts. |
+| `api/render-quote-pdf.js` | Server PDF: headless Chromium (puppeteer-core + @sparticuz/chromium), one A4 page via the shared template, upload to `quotes-pdf/<id>.pdf` + `pdf_path`. Auth: `X-Internal-Secret` (the bot) or a Supabase session (the panel). `test_data` / `dry_run` only outside production. |
+| `api/_quote-extract.js` | Gemini (`gemini-3.5-flash`) extraction, corrections and shortening; phone stripping; the total-evidence rule; item math; address normalization; typed `ai_busy` / `ai_failed` errors. |
+| `api/_quota.js` | `consumeQuota` / `getRemaining` via the DB RPCs; `LIMITS = { quote: 15, receipt: 20, voiceCorrections: 3 }`. |
+| `api/parse-receipt.js`, `api/_rate-limit.js` | Pre-existing: the receipt OCR core (reused by the bot) and the in-memory rate limiter. |
+| `shared/quote-template.js` | The one quote template (UMD) for the panel and the server: `buildDoc`, `WO_CSS`, the logo, `fitToOnePage` / `layoutDescription` (aligned rules, 13px floor), `estimateDescriptionFits`. |
+| `shared/fonts/Heebo-wght.ttf` (+ `OFL.txt`) | Embedded Hebrew font for the server PDF. |
+| `admin.html` (quote tab) | `create_quote` + `client_ref` before rendering; number estimate + hint; Realtime + wake-up refetch; the 📱 badge; server-PDF download; DD.MM.YYYY default date; amounts "3,000 ₪". |
+| `privacy.html` | The "שימוש בשירותי בינה מלאכותית" section (Gemini, minimal data, voice not kept by the bot, drafts deleted within 24 h). |
+| `vercel.json` / `.vercelignore` | Function limits (webhook 60 s; render 60 s + `includeFiles` for Chromium + fonts), the report-only CSP (incl. `wss://` for Realtime). `.vercelignore` keeps `*.md`, `*.sql`, `tools/`, `tests/`, `test-audio/`, `.env*` off the site. |
+| `tools/set-telegram-webhook.js` | Production bot webhook (pre-existing). |
+| `tools/set-test-webhook.js` | The TEST bot: `chatid` / `register` / `info` / `delete`; refuses the production token. |
+| `tools/set-bot-commands.js` | `setMyCommands` for `test` or `production`. |
+| `tools/cleanup-test-quotes.js` | Deletes test-chat telegram quotes + their PDFs and resets the counter (dry run by default, `--apply`). |
+| `tools/ensure-internal-api-secret.js` | Appends `INTERNAL_API_SECRET` to `.env` if missing (never prints it). |
+| `tests/` (`npm test`) | 8 offline suites, 402 checks: bot routing / quotes / approve / config, quote extraction, the panel (Playwright), the SQL file (PGlite), the privacy page. |
 
-### Phase status
+**Database & storage** (project `mmognkxkglkotzkuxzly`)
+| Object | Created by |
+|---|---|
+| `quotes` columns `source`, `vat_mode`, `pdf_path`, `telegram_chat_id`, `updated_at` + checks (`source <> 'telegram' or total > 0`); trigger `quotes_before_update` (clears `pdf_path` when a printed field changes) | `supabase-quotes-telegram.sql` |
+| `quote_counter` (floor 14) + `create_quote(jsonb)` (SECURITY DEFINER, `search_path=''`, advisory lock, bot detection; EXECUTE: authenticated + service_role) | `supabase-quotes-telegram.sql`, made idempotent by `supabase-quotes-idempotency.sql` |
+| `quotes.client_ref` + unique index `quotes_client_ref_key` | `supabase-quotes-idempotency.sql` |
+| Bot tables `telegram_pending_quotes`, `telegram_chat_state`, `telegram_processed_updates`, `telegram_daily_usage` (RLS on, zero policies, service_role only) | `supabase-quotes-telegram.sql` |
+| `consume_daily_quota` / `get_daily_quota_remaining` (service_role only) | `supabase-quotes-telegram.sql` |
+| `telegram_pending_receipts` (pre-existing) + `awaiting_since`; anon/authenticated grants revoked | `supabase-telegram-receipts*.sql`, `supabase-telegram-receipts-awaiting-since.sql`, `supabase-quotes-idempotency.sql` (L7) |
+| Bucket `quotes-pdf` (private, 5 MB, PDF only, authenticated SELECT); `receipts` limited to 15 MB + jpeg/png/webp/pdf | `supabase-quotes-telegram.sql` |
+| Realtime: `public.quotes` in `supabase_realtime` | `supabase-quotes-telegram.sql` |
+| `pg_cron` job `telegram-retention-hourly` (drafts + chat state > 23 h, processed updates > 7 d, usage > 30 d) | `supabase-telegram-retention-cron.sql` |
 
-| # | Phase | Status |
-|---|---|---|
-| 0–3b | Recon, PDF spike, plan, shared template, ruled lines, DB migration (applied live via the SQL Editor, **not in the migration history**) | ✅ |
-| 4a / 4b | Production PDF function; Gemini extraction + quota helpers | ✅ |
-| 5a / 5a-2 | Test bot on the branch preview (`TELEGRAM_TEST_*` vars) | ✅ |
-| 5b | Reliability, routing, menu, receipt quota, known bugs fixed (+ `awaiting_since` column applied) | ✅ |
-| 5c / 5d | Quote drafts; approve → number → PDF → send; 📜 / 🔍 / 📄 | ✅ live-tested by the owner |
-| 6 / 6b | Panel live sync + RPC numbering; bot UX fixes from the live test | ✅ live-tested by the owner |
-| 7a | Hardening, `privacy.html`, spike deleted, audit, readiness checklist | ✅ |
-| 7b | Merge to `main` (`0e3827c`) + production checks + production bot commands | ✅ **LIVE 2026-10-28** |
+**None of these were applied with `apply_migration`, so none are in the Supabase migration history.** The owner ran `supabase-quotes-telegram.sql`, `-awaiting-since.sql` and `-retention-cron.sql` in the SQL Editor; Claude applied `supabase-quotes-idempotency.sql` through the `supabase` MCP `execute_sql`. The `.sql` files in the repo are the record.
 
-### Key approved decisions (full list in the plan)
-- **PDF:** vector `page.pdf()` via puppeteer-core + @sparticuz/chromium, **always one A4 page**, no zoom ever. Layout steps: tighten line spacing at 16px first, then shrink the font to a **13px floor**. Target **≤ 12 lines** at full size; max 15 at the floor. **Too long → refuse** (`fits:false`) and ask for a shorter text. The panel shows "התיאור ארוך מדי לעמוד אחד — נא לקצר את התיאור".
-- **Ruled lines:** one rule aligned under **every** description text line (min 7), in **both** the panel PDF and the server PDF (`MrpQuoteTemplate.fitToOnePage(document)`).
-- **VAT:** the PDF line reads "עוסק פטור – המחיר סופי, לא יתווסף מע"מ." plus `quotes.vat_mode` (`'exempt'` default; `'licensed'` is reserved, not built).
-- **No client phone anywhere:** not in the DB, not in the PDF, and the bot never asks for it.
-- **The AI never invents a price.** Ori/Miri state the final total, and the bot asks if it's missing. A bot quote can't be approved without a total (enforced in code + DB). All arithmetic happens in code.
-- **Intent:** keyword/exact-label matching only, **no Gemini classification**. When unclear, show the menu with "🧾 להכין הצעת מחיר?".
-- **Menu:** `/start`, `/quote`, `/help` + reply keyboard: 🧾 הצעת מחיר חדשה · 📷 סריקת קבלה · 📜 הצעות אחרונות · 🔍 חיפוש הצעה · 💰 סיכום הוצאות החודש · ❓ עזרה.
-- **Quotas:** 15 quotes / 20 receipt scans per day, **global** across chats, reset at midnight Israel time (DB), plus 3 voice corrections per quote. (Gemini is on a **paid Tier 1** project with a monthly spend cap; these limits protect the cap.)
-- **Gemini (paid Tier 1, spend cap; `gemini-3.5-flash`) with privacy minimization:**
-  - audio is never persisted;
-  - the transcript lives only in the draft, deleted on approve/cancel; drafts older than 24 h are never used and are deleted (webhook sweep + the hourly `pg_cron` job in `supabase-telegram-retention-cron.sql`, once applied);
-  - Gemini sees only the current message;
-  - logs are PII-free.
-- **Numbering:** the `create_quote(jsonb)` RPC (advisory lock, `greatest(max+1, floor)`), counter floor **14** (the last issued quote is 13). The DB is the only numbering source.
-- **Stored PDF path (Phase 4):** one deterministic object per quote, `quotes-pdf/<quote id>.pdf`, upserted on regeneration. Editing a printed field nulls `pdf_path` (trigger).
-- **Out of scope:** Ori's signature and client e-signature (Project 2).
+**Environment variables (Production):** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_CHATS`, `SUPABASE_SERVICE_ROLE_KEY`, `GOOGLE_AI_API_KEY`, `INTERNAL_API_SECRET`, plus Vercel's system vars (`VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`). **Preview only:** `TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS` (production ignores them). Production webhook: `https://mr-polishes.com/api/telegram-webhook`.
 
-### Live DB state after Phase 3b (verified 2026-10-25 ~19:50 UTC)
-- `public.quotes`: + `source` ('panel'|'telegram'), `vat_mode`, `pdf_path`, `telegram_chat_id`, `updated_at`. Checks: source, vat_mode, `source <> 'telegram' or total > 0`. Trigger `quotes_before_update`. **8 quotes, numbers 6–13**, all panel/exempt.
-- `public.quote_counter` = **(true, 14)**. `create_quote(jsonb)` (security definer; authenticated + service_role). The bot is detected via JWT claims role **or** the `role` setting **or** the legacy claim. Only the bot may set `source='telegram'` / `telegram_chat_id`.
-- Bot tables (RLS on, zero policies, no anon/authenticated grants): `telegram_pending_quotes`, `telegram_chat_state`, `telegram_processed_updates`, `telegram_daily_usage`.
-- `consume_daily_quota(kind, limit)` / `get_daily_quota_remaining(kind, limit)`: service_role only.
-- Storage: new private `quotes-pdf` bucket (5 MB, PDF only, authenticated SELECT policy). `receipts` bucket now limited to 15 MB + jpeg/png/webp/pdf.
-- Realtime: `public.quotes` is in `supabase_realtime`.
-- Advisors: an expected WARN for `create_quote` executable by authenticated (intended), plus INFO items for the new zero-policy tables and unused new indexes.
+### 32.3 Key decisions & rules
+- **The AI never invents a price.** The total is accepted only with the exact words that state it, verified in code (digits or Hebrew number words); it's never derived from the items; all arithmetic is in code. A bot quote can't be approved without a total (code + a DB check).
+- **Numbering:** only `create_quote` assigns numbers (advisory lock, `greatest(max+1, floor)`), for the bot and the panel alike; `client_ref` (the draft id / a per-form UUID) makes retries return the same quote.
+- **Quotas:** 15 quotes and 20 receipt scans per day (global, reset at midnight Israel time, in the DB), 3 corrections per quote.
+- **Gemini:** `gemini-3.5-flash` on a **paid Tier 1** project with a monthly spend cap; the quotas protect the cap. Spend-cap/429 refusals → a friendly "busy" message. Intent detection is keyword-based (no AI classification).
+- **PDF:** vector `page.pdf()`, **always one A4 page**, never zoomed; a ruled line under **every** description line (min 7) in both the panel and the server PDF; tighten spacing at 16px, then shrink to a **13px floor**; still too long → refuse and ask to shorten (✂️).
+- **VAT:** the PDF line "עוסק פטור – המחיר סופי, לא יתווסף מע"מ."; `quotes.vat_mode` = `'exempt'` (`'licensed'` reserved, not built).
+- **No client phone anywhere** (DB, PDF, bot); phones are stripped from what reaches Gemini and from every output.
+- **Privacy / retention:** Gemini gets only the current message; audio is processed in memory and never stored by the bot (it stays in the Telegram chat, where it can be deleted); the transcript lives only in the draft, deleted on ✅/❌; drafts and parked messages are never used after 24 h and are deleted by the hourly cron; expired pending receipts are deleted file-first; logs carry no PII.
 
-### Test-data rule (live project)
-Any live test that calls `create_quote` or `consume_daily_quota` **must run in a single transaction that is rolled back**, so no number is consumed and the counter stays at 14. **Pre-launch checklist (Phase 7):** delete any test rows, then set `quote_counter.floor_next = greatest(max(number)+1, 14)` and verify it.
+### 32.4 Audit (2026-10-28) and its fixes
+A full code review + security audit of everything since `47dea44` found **no Critical or High** issues.
+- **Batch A** (`f8d62c1`): **M1/L10** idempotent `create_quote` via `client_ref` (bot = draft id, panel = per-form UUID; the panel's PDF is built from the saved row); **L7** revoke the old anon/authenticated grants on `telegram_pending_receipts`; **`.vercelignore`** hardening (internal docs, SQL and tools were publicly served; now 404). SQL applied via `execute_sql` and verified live (the file's verify block a–d; data untouched).
+- **Batch B** (`8681463`): **M2** render timeout 35 s + 🔄 on every "⏳" message; **M3** expired receipts' files deleted before their rows (never a confirmed expense's file); **L1** `pdf_path` must be `<uuid>.pdf`; **L2** `fetchT` timeouts on every fetch; **L4** `💰 נאמר: "…"`; **L5** ❌/🆕 ignored while approving + re-check before a new draft; **L6** DD.MM.YYYY everywhere; **L9** the exact privacy wording on voice recordings.
+- **Intentionally left:** **L3** (a quota unit is used before work that can still fail; protects the spend cap); **L8** (the test bot stays, with the cleanup tool); **I1–I7** (info: `VERCEL_PROJECT_PRODUCTION_URL` must be the bare domain; in-memory rate limits; dedupe fails open; CSP report-only with `'unsafe-inline'`; admins can write `quotes.source` / `pdf_path` directly; rotate the preview bypass secret when the test bot is retired).
+- **`npm audit`:** 6 "high" entries, all one zod advisory (GHSA-mrhx-c7xc-m3w5) via `@vercel/functions → @vercel/oidc → @vercel/cli-config` and `puppeteer-core → chromium-bidi`. **Not exploitable here** (no untrusted input is validated with zod); no safe upgrade exists yet.
 
-### Preview / test bot
-- The Phase 1 spike (`api/spike-quote-pdf.js`) is **deleted** (7a, owner-approved), along with its `vercel.json` entry.
-- **Test bot** `@Mrpolish_test_quotes_bot`: its webhook points at the stable branch alias `https://mrpolish-project-git-feature-telegram-quotes-polish1.vercel.app/api/telegram-webhook` (+ bypass param), set by `tools/set-test-webhook.js`. Preview-only Vercel vars: `TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS` (owner chat 1230764171). Production ignores them.
-- Test quotes from the test chat: `node tools/cleanup-test-quotes.js` (dry run) → `--apply` (deletes their PDFs + rows, resets `quote_counter` to `greatest(max+1, 14)`). Last run 2026-10-27: back to 8 quotes (6–13), counter 14, no PDFs.
+### 32.5 Operations
+- **Tests:** `npm test` (all offline, no secrets; Chrome for the panel suite: `CHROME_PATH`, or `SKIP_BROWSER=1`). The live Gemini cases run only with `LIVE=1` and are not part of `npm test`.
+- **Test bot:** `@Mrpolish_test_quotes_bot` runs on the branch preview `https://mrpolish-project-git-feature-telegram-quotes-polish1.vercel.app` via the **Preview-only** `TELEGRAM_TEST_*` vars; `tools/set-test-webhook.js` (`chatid`, `register`, `info`, `delete`). It writes to the **production** database, so test **drafts and ❌** only; if a test quote was approved, run `node tools/cleanup-test-quotes.js` (dry run) → `--apply` (deletes the test chat's telegram quotes + PDFs and resets the counter; never touches panel quotes).
+- **Rollback:** Vercel → Deployments → the previous production deployment → **Instant Rollback**. All DB changes are additive, so older code keeps working; the webhook URL never changes.
+- **Supabase MCP:** use only the server named **`supabase`** (project-scoped to `mmognkxkglkotzkuxzly` via `.mcp.json`; confirm with `get_project_url`), never "claude.ai Supabase". `apply_migration` is declined in this panel → use **`execute_sql`** (when approved) or the **SQL Editor**. `execute_sql` returns only the last statement's result; for a rolled-back live test, use one `DO` block that ends with `raise exception 'RESULT …'`. Never select client PII; aggregates only.
+- **Permission mode:** avoid **Auto** mode for database work; DB changes need explicit owner approval, step by step.
+- **Vercel previews** are behind Vercel Authentication (the owner opens them logged in; scripts use the bypass secret). A commit's preview/production URL: the public GitHub API `…/repos/mrpolish68-wq/mrpolish-Project/deployments?sha=<sha>` → `statuses` → `environment_url`.
+- **Working method:** one phase/batch per command; report, then stop. Nothing is deleted without the owner's approval. If a pasted prompt looks cut off, say so. Edit docs with the file-edit tool (not `String.replace`: `$`` in inserted text broke `3a2c27a`).
+- **Dev gotchas:** Windows checkouts are CRLF (`core.autocrlf`), so scripted text edits must normalize line endings; bash heredocs mangle JS with quotes / `\n` (write scripts with the file tools); local PDF checks use the repo's `puppeteer-core` + the installed Chrome (`C:/Program Files/Google/Chrome/Application/chrome.exe`); html2canvas tests need Heebo loaded like `admin.html` does; never use global kill commands, only PIDs you started.
 
-### Environment & tooling lessons (read before Phase 4)
-- **Supabase MCP:**
-  - Use ONLY the MCP server named **`supabase`**. It is project-scoped to `mmognkxkglkotzkuxzly` via `.mcp.json` and enabled in `.claude/settings.local.json`.
-  - **Never** use "claude.ai Supabase": it's a different account, and it's disabled for this project. Never touch the personal-dashboard project.
-  - Because the server is project-scoped, `list_projects` does **not** exist. Confirm the project with `get_project_url` instead.
-- **`apply_migration` was declined by the tool layer 3 times**, even after the owner switched permission mode. Don't retry in a loop. Hand the owner the `.sql` file to run in the Supabase SQL Editor, then verify with `execute_sql`.
-- **`execute_sql` returns only the LAST statement's result**, so `begin; …; select; rollback;` hides the output. For rolled-back live tests, use **one DO block** that does `set local role …` plus `set_config('request.jwt.claims', …, true)`, runs the test and ends with `raise exception 'RESULT …'`. The exception rolls back the whole transaction and the message carries the results. Never select PII (`client_name`, `address`, `description`); use aggregates only.
-- **Vercel previews are protected:** `curl` gets a 302, so the owner opens preview URLs while logged in. `gh` is **not installed**. To find a commit's preview URL, use the public GitHub API: `https://api.github.com/repos/mrpolish68-wq/mrpolish-Project/deployments?sha=<sha>`, then that deployment's `statuses`, then `environment_url`.
-- **Local PDF/visual checks:**
-  - Use the repo's `puppeteer-core` (ESM; `require()` works on Node 24, take `.default || module`) with the installed Chrome at `C:/Program Files/Google/Chrome/Application/chrome.exe`.
-  - The spike 404s locally, so reproduce its render path in a script.
-  - Taking a screenshot **after** `page.pdf()` gives a blank image; screenshot first, or read the PDF itself.
-- **html2canvas (panel path) tests:** the parent page must load Heebo the way `admin.html` does (Google Fonts link in `<head>`). Otherwise the quote renders in a fallback font and looks broken. That was a false alarm in Phase 2b, and the real panel is fine.
-- **Migration tests:** `@electric-sql/pglite@0.3.15` (Postgres 17.5, in-process), installed in a scratchpad folder, with stubs mimicking the live schema and fake data. 57 checks passed. Docker Desktop is installed but not running, so don't depend on it.
-- **Shell gotcha:** writing JS through a bash heredoc turned `"\\n"` inside template literals into real newlines (syntax errors). Use the Write/Edit tools for JS with string escapes.
-- Verification artifacts go in `.playwright-mcp/` (gitignored). LF→CRLF warnings from git are harmless. Never use global kill commands; only kill PIDs you started.
+### 32.6 Pending (optional)
+- Enable **GitHub Dependabot** alerts + security updates for the repo.
+- A **monthly `npm audit`** (watch for zod ≥ 4.6.6 in `@vercel/cli-config` / `chromium-bidi`).
+- **Project 2:** Ori's signature on the PDF + client e-signature.
+- When the test bot is no longer needed: delete its Preview-only vars, `node tools/set-test-webhook.js delete`, rotate the preview bypass secret; optionally delete the merged branches.
 
-### Known bugs (from Phase 0): all fixed
-- `findAwaitingEdit` freshness → measured from the edit tap (`awaiting_since`, 5b).
-- `supabaseInsert` logged PostgREST bodies → status + error code only (5b).
-- One shared bot rate limit → per flow (receipt 10, quote 30, menu 30 per 10 min; callbacks 20/min).
-- The panel rendered before inserting → `create_quote` first, render with the returned number (6).
-- `saveQuoteToDb` had no `.catch` → always calls back; button restored + Hebrew error (6).
-
-### Working method
-- The owner works with a separate Claude assistant that writes **one English command per phase**. Claude Code executes **one phase**, reports, and **STOPS**.
-- Nothing is deleted without the owner's approval.
-- DB changes happen only after explicit approval, applied by the owner in the Supabase SQL Editor (see the `apply_migration` lesson above).
-- Long pasted prompts can get truncated in the Antigravity chat. **If a prompt looks cut off, say so instead of guessing.**
-
-### LIVE in production (2026-10-28)
-- **Merged** `feature/telegram-quotes` → `main` with `--no-ff`: merge commit **`0e3827c`** ("Merge feature/telegram-quotes: Telegram price quotes via the bot"), pushed 2026-10-28. The production deployment is Ready (`mrpolish-project-3l75eqrps-polish1.vercel.app`, served at `https://mr-polishes.com`).
-- **Before the merge (owner):** `supabase-telegram-retention-cron.sql` applied in the SQL Editor (hourly `telegram-retention-hourly`); `INTERNAL_API_SECRET` set for Production. All 7 test suites passed (343 checks).
-- **Post-deploy checks (read-only, no live quotes), all OK:** `/`, `/admin.html` (live-sync code present), `/privacy.html` (AI section present) → 200; `POST /api/render-quote-pdf` without a secret → 401 (also with `test_data`); `/api/spike-quote-pdf` → 404; `POST /api/telegram-webhook` without Telegram's secret → 401; the CSP header includes `wss://mmognkxkglkotzkuxzly.supabase.co`; production bot `@mrpolish_expenses_bot` `getWebhookInfo`: same URL `https://mr-polishes.com/api/telegram-webhook`, `pending_update_count` 0, no `last_error`, `allowed_updates` message + callback_query.
-- **`node tools/set-bot-commands.js production`** run: `/start` תפריט ראשי · `/quote` הצעת מחיר חדשה · `/help` עזרה.
-- **Not done by Claude (on purpose):** no live quote was created. The first real quote (via the bot or the panel) gets **מס׳ 014**.
-
-**Rollback** (if anything goes wrong): Vercel → Deployments → the previous production deployment (built from `47dea44`) → **Instant Rollback**. DB changes are additive, so the old code keeps working; the webhook URL is unchanged.
-
-### Audit fix batch A: DONE (merged 2026-10-28, `f8d62c1`)
-From the 2026-10-28 full code review + security audit (no Critical/High findings). Branch `fix/audit-batch-a` (`fd2b38c`, `ef17dc9`), merged with `--no-ff` as **`f8d62c1`**; production Ready.
-- **M1 / L10, idempotent quote creation:** `supabase-quotes-idempotency.sql` adds `quotes.client_ref` + the unique partial index `quotes_client_ref_key`. `create_quote` returns the existing row for a repeated `p->>'client_ref'` (checked under the advisory lock: no new number, no counter change); otherwise unchanged. The bot sends the draft id; the panel sends one `crypto.randomUUID()` per new-quote form (reused on retries, reset after a save or a new form) and builds the PDF from the SAVED row (it warns if that differs from the form).
-- **L7:** `revoke all on public.telegram_pending_receipts from anon, authenticated` (only the webhook uses it, via service_role).
-- **SQL applied 2026-10-28 by Claude via the `supabase` MCP `execute_sql`** (the file's sections 1–3, verbatim), **NOT via `apply_migration`, so it is NOT in the migration history** (same as Phase 3b and the `awaiting_since` column). Verified live: (a) column + index present; (b) the file's DO block raised `RESULT same_id=t same_number=t counter_moved_on_retry=0 second_ref_new_number=t` and rolled back; (c) 0 anon/authenticated grants left on `telegram_pending_receipts`; (d) `create_quote` still SECURITY DEFINER, `search_path=""`, EXECUTE = authenticated + service_role (+ owner). After the test: 8 quotes, max 13, `floor_next` 14, no `client_ref` rows.
-- **Public file exposure fixed:** `.vercelignore` now has `*.md`, `*.sql`, `tools/` (and `tests/`). Before this, production served `/handoff.md`, `/CLAUDE.md`, `/memory.md`, the plans, every `supabase-*.sql` and `tools/*.js`; no secrets, but internal details. Nothing at runtime needs them (`api/*` reads only `shared/quote-template.js` + `shared/fonts/*`); `package.json` / `package-lock.json` still deploy. Verified on the preview and on production: those paths → 404; `/`, `/admin.html`, `/privacy.html` → 200; both APIs → 401 without a secret; the production bot webhook has no error and no backlog.
-- **Tests are in the repo:** `tests/` + `npm test` (offline; dev deps `playwright-core@1.64.0`, `@electric-sql/pglite@0.3.15`): 368 checks in 7 suites, including the new M1 cases (bot + panel) and the SQL suite (the file executed in PGlite).
-- Still open after batch A: see batch B below (M2, M3, L1, L2, L4–L6, L9 done there).
-
-### Audit fix batch B: DONE (merged 2026-10-28, `8681463`)
-Branch `fix/audit-batch-b` (`f77270a`), merged with `--no-ff` as **`8681463`**; preview + production checks all passed. No DB schema changes.
-- **M2:** the PDF render timeout is **35 s** (under the 60 s function limit). Both in-progress messages ("⏳ יוצר את ההצעה…", "⏳ מפיק PDF…") carry a **🔄** (`q:retry`), so a timed-out or killed run never leaves a message without buttons; a timeout says "ה-PDF נכשל (זמן ההמתנה עבר)" + 🔄. A 🔄/✅ while an approval holds the lease gets a "still in progress" note instead of silence.
-- **M3:** expired pending receipts: the sweep deletes their **files first** (bulk Storage delete), then the rows; a file that a confirmed expense points to (`business_expenses.receipt_url`) is never deleted; if Storage fails, the rows are kept and retried. ❌ / missing-amount also go file → row (the row is kept if the file can't be deleted, so the sweep cleans up later).
-- **L1:** a stored PDF is fetched only when `pdf_path` matches `^[0-9a-f-]{36}\.pdf$` (bot and panel); anything else is re-rendered.
-- **L2:** every Supabase / Storage / Telegram fetch in the webhook goes through `fetchT` (10 s; file download + sendDocument 20 s); timeouts surface as the existing friendly Hebrew errors.
-- **L4:** the draft shows the stated-total words: `💰 נאמר: "…"` (kept through corrections, cleared when the total is typed by hand).
-- **L5:** ❌ and 🆕 are ignored while a draft is being approved (lease); `createDraftFrom` re-checks for an open draft before using quota/AI (shows the continue/new choice instead).
-- **L6:** dates DD.MM.YYYY (zero-padded) everywhere: quote drafts, receipt summaries (display; the DB keeps ISO), and the panel's default date for a NEW quote. Existing rows unchanged.
-- **L9:** `privacy.html` AI section now says: "הבוט שלנו אינו שומר הקלטות קוליות — ההקלטה מעובדת ונמחקת מהזיכרון מיד, והיא נשארת רק בצ'אט בטלגרם, שם ניתן למחוק אותה." (the rest of the page unchanged).
-- **Tests:** `npm test` 402 checks in 8 suites (+ a new `privacy-page` suite), every item above covered.
-
-### Audit: remaining open items (after batches A + B)
-- **L3, accepted as-is:** a quota unit is used before work that can still fail (receipt download, a failed/empty extraction). Deliberate: it protects the Gemini spend cap.
-- **L8, kept:** the test bot stays (its Preview-only `TELEGRAM_TEST_*` vars), with `tools/cleanup-test-quotes.js` to remove test quotes and reset the counter. Remember that a test quote takes a real number until cleaned up.
-- **I1–I7, info only:** I1 `VERCEL_PROJECT_PRODUCTION_URL` must be the bare domain (confirmed by the first real ✅); I2 in-memory rate limits; I3 dedupe fails open; I4 the zod advisories (not exploitable; re-check monthly); I5 CSP report-only + `'unsafe-inline'`; I6 admins can write `quotes.source`/`pdf_path` directly; I7 rotate the preview bypass secret when the test bot is retired.
-
-**Remaining optional items**
-- Delete the test bot's Preview-only vars in Vercel (`TELEGRAM_TEST_BOT_TOKEN`, `TELEGRAM_TEST_WEBHOOK_SECRET`, `TELEGRAM_TEST_ALLOWED_CHATS`); `node tools/set-test-webhook.js delete`; optionally delete the test bot in @BotFather and the `TELEGRAM_TEST_*` lines in `.env`. Before that, clean any test quotes with `node tools/cleanup-test-quotes.js` (dry run → `--apply`).
-- Run `npm audit --omit=dev` periodically (e.g. monthly). The 6 known high zod findings are not exploitable here; update `@vercel/functions` / `puppeteer-core` once they ship zod ≥ 4.6.6.
-- Optionally delete the merged branch `feature/telegram-quotes` (kept for now).
-- `supabase` MCP: finish its OAuth login (`/mcp`) so future sessions can run read-only SQL checks.
+### 32.7 Commit history (main)
+`47dea44` (before the feature) → phases 1–7a on `feature/telegram-quotes` (`be7fd85` spike … `e77d9d4` hardening; one commit per phase, see the plan) → **`0e3827c`** merge (LIVE) → `595ac8c` docs → **`f8d62c1`** audit batch A (`fd2b38c` client_ref + tests in the repo, `ef17dc9` `.vercelignore`) → `43889d3` docs → **`8681463`** audit batch B (`f77270a`) → `3a2c27a` docs (accidentally duplicated content) → `83bc39a` fix.
