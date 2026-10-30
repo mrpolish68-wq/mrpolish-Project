@@ -12,6 +12,9 @@
      SUPABASE — lead storage backend (REST API)
   --------------------------------------------------------- */
   var SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co/rest/v1/";
+  // ?review=1 or #write-review opens the write-a-review modal on load (the WhatsApp review request
+  // links here as the secondary option to Google — media-projects plan, decision D10).
+  var OPEN_REVIEW_FROM_LINK = /[?&]review=1(&|$)/.test(location.search) || location.hash === "#write-review";
   var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
 
   /* ---------------------------------------------------------
@@ -47,6 +50,13 @@
   (function initPreloader() {
     var pre = document.getElementById("preloader");
     if (!pre) return;
+
+    // A review-request link (?review=1 / #write-review) goes straight to the review form (§8d):
+    // no splash in front of it.
+    if (OPEN_REVIEW_FROM_LINK) {
+      if (pre.parentNode) pre.parentNode.removeChild(pre);
+      return;
+    }
 
     // Perf: show the intro splash at most ONCE per browser session. Every
     // subsequent navigation / return renders the real page immediately
@@ -1002,6 +1012,16 @@
     }
 
     openBtn.addEventListener("click", openModal);
+    if (OPEN_REVIEW_FROM_LINK) {
+      // Open once the page has its language applied (the modal text is translated via data-i18n),
+      // with the reviews section behind it, so closing the modal lands somewhere sensible.
+      setTimeout(function () {
+        var section = document.getElementById("testimonials");
+        if (section && section.scrollIntoView) section.scrollIntoView({ block: "start" });
+        openModal();
+        gaEvent("review_link_open");
+      }, 300);
+    }
 
     modal.querySelectorAll("[data-review-close]").forEach(function (el) {
       el.addEventListener("click", closeModal);

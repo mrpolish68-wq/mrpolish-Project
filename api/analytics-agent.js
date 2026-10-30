@@ -524,6 +524,18 @@ async function runAgent() {
 }
 
 module.exports = async function handler(req, res) {
+  // ?task=… routes extra server-to-server tasks through this same function (Hobby function limit);
+  // each has its own auth. No task = the daily agent below (CRON_SECRET), unchanged.
+  var task = req.query && typeof req.query.task === "string" ? req.query.task : "";
+  if (task === "lead-alert") {
+    await require("./_lead-alert.js").handleLeadAlert(req, res);
+    return;
+  }
+  if (task) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
   var cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     var auth = req.headers.authorization || "";
