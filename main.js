@@ -440,6 +440,8 @@
   var form = document.getElementById("leadForm");
   var status = document.getElementById("formStatus");
   var PHONE_INTL = "972529534540";
+  var LEAD_MIN_WAIT_MS = 400;   // see the redirect at the end of the submit handler
+  var LEAD_MAX_WAIT_MS = 3000;
 
   function t(en, he) {
     return document.documentElement.lang === "en" ? en : he;
@@ -503,22 +505,33 @@
       //    "Thanks!" and the lead was never saved (found + fixed 2026-08-15).
       //    location/notes are sent as `null` (never "") when blank — the
       //    optional-field RLS check only accepts NULL or a real value.
-      fetch(SUPABASE_URL + "leads", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SUPABASE_ANON_KEY,
-          "Authorization": "Bearer " + SUPABASE_ANON_KEY,
-          "Prefer": "return=minimal"
-        },
-        body: JSON.stringify({
-          name: name,
-          phone: phone,
-          location: location || null,
-          service: service,
-          notes: notesWithConsent || null
-        })
-      }).then(function (res) {
+      //    keepalive (2026-10-30): the redirect below used to fire 400 ms after
+      //    submit and abort the in-flight insert (seen as net::ERR_ABORTED), so
+      //    on a slow phone connection a lead could be lost. keepalive lets the
+      //    request outlive the page; a browser that refuses keepalive here (it
+      //    needs a CORS preflight) falls back to a normal fetch, and the
+      //    redirect waits for the insert either way (see leadDone below).
+      var leadBody = JSON.stringify({
+        name: name,
+        phone: phone,
+        location: location || null,
+        service: service,
+        notes: notesWithConsent || null
+      });
+      function postLead(keepalive) {
+        return fetch(SUPABASE_URL + "leads", {
+          method: "POST",
+          keepalive: keepalive,
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            "Prefer": "return=minimal"
+          },
+          body: leadBody
+        });
+      }
+      var leadDone = postLead(true).catch(function () { return postLead(false); }).then(function (res) {
         if (!res.ok) {
           return res.text().then(function (body) {
             console.error("Lead DB insert failed (" + res.status + "): " + body);
@@ -541,7 +554,17 @@
       status.classList.add("ok");
       form.reset();
 
-      setTimeout(function () { window.location.href = "thankyou.html"; }, 400);
+      // Redirect once the insert has finished (at least LEAD_MIN_WAIT_MS so the
+      // "thanks" note is seen), but never later than LEAD_MAX_WAIT_MS — keepalive
+      // still carries a slower insert through the page change.
+      var redirected = false;
+      function goThanks() {
+        if (redirected) return;
+        redirected = true;
+        window.location.href = "thankyou.html";
+      }
+      Promise.all([leadDone, new Promise(function (r) { setTimeout(r, LEAD_MIN_WAIT_MS); })]).then(goThanks, goThanks);
+      setTimeout(goThanks, LEAD_MAX_WAIT_MS);
     });
   }
 
