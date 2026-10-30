@@ -97,6 +97,28 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  // Burst guard (handoff §33): if RECENT_PUBLISH_LIMIT posts already went live in the last
+  // 10 minutes, don't publish this one now — it stays 'approved' and the next cron/GitHub run
+  // (~10 min, itself capped at MAX_PUBLISH_PER_RUN) publishes it. If the count can't be read,
+  // fail safe the same way. Future rows (a native Facebook schedule) aren't going live now.
+  if (core.isDueNow(row)) {
+    var recent;
+    try {
+      recent = await core.countRecentlyPublished();
+    } catch (err) {
+      console.error("[manual-trigger] recent-publish count failed row=" + id + " error=" + err.message);
+      recent = core.RECENT_PUBLISH_LIMIT;
+    }
+    if (recent >= core.RECENT_PUBLISH_LIMIT) {
+      console.log("[manual-trigger] throttled row=" + id + " recent=" + recent);
+      res.status(200).json({
+        id: id, ok: true, deferred: true, throttled: true,
+        reason: "כמה פוסטים כבר פורסמו בדקות האחרונות — הפוסט נשאר מאושר ויפורסם בסבב הבא (תוך כ-10 דקות)."
+      });
+      return;
+    }
+  }
+
   console.log("[manual-trigger] user=" + user.id + " row=" + id + " platform=" + row.platform + " category=" + row.content_category + " scheduled_for=" + row.scheduled_for);
   var result = await core.publishOne(row, { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "manual" });
   console.log("[manual-trigger] result row=" + id + " " + JSON.stringify(result));

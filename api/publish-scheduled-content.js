@@ -65,6 +65,30 @@ const CLAIM_LEASE_MS = 5 * 60 * 1000;
 // a human to look at, same as before this existed.
 const MAX_AUTO_RETRY_ATTEMPTS = 3;
 
+// Burst guard (2026-10-30 incident, handoff §33): one cron/GitHub run publishes at most this many
+// rows (due rows first, oldest first, then auto-retries with whatever is left); the rest stay
+// 'approved' for the next run (~10 min). The real-time path (publish-now.js) refuses to publish
+// when RECENT_PUBLISH_LIMIT posts already went live within RECENT_PUBLISH_WINDOW_MS.
+const MAX_PUBLISH_PER_RUN = 3;
+const RECENT_PUBLISH_LIMIT = 3;
+const RECENT_PUBLISH_WINDOW_MS = 10 * 60 * 1000;
+
+// How many rows went live (published_at) in the last RECENT_PUBLISH_WINDOW_MS.
+async function countRecentlyPublished() {
+  var sinceIso = new Date(Date.now() - RECENT_PUBLISH_WINDOW_MS).toISOString();
+  var url = SUPABASE_URL + "/rest/v1/content_queue?select=id&published_at=gte." + encodeURIComponent(sinceIso) +
+    "&limit=" + (RECENT_PUBLISH_LIMIT + 1);
+  var res = await fetch(url, { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("Supabase query failed: " + res.status);
+  var rows = await res.json();
+  return Array.isArray(rows) ? rows.length : 0;
+}
+
+// True when publishOne would go live right now (not a future native Facebook schedule).
+function isDueNow(row) {
+  return new Date(row.scheduled_for).getTime() - Date.now() <= FB_MIN_SCHEDULE_MS;
+}
+
 function supabaseHeaders() {
   var key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   return {
@@ -614,7 +638,10 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  console.log("[cron] " + due.length + " due row(s) found");
+  // Burst guard: at most MAX_PUBLISH_PER_RUN rows per run (fetchDueApproved is oldest first).
+  var waiting = Math.max(0, due.length - MAX_PUBLISH_PER_RUN);
+  due = due.slice(0, MAX_PUBLISH_PER_RUN);
+  console.log("[cron] " + due.length + " due row(s) this run" + (waiting ? ", " + waiting + " waiting for the next run" : ""));
   var ctx = { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "cron" };
   var results = [];
   for (var i = 0; i < due.length; i++) {
@@ -622,6 +649,7 @@ module.exports = async function handler(req, res) {
     console.log("[cron] row=" + due[i].id + " " + JSON.stringify(result));
     results.push(result);
   }
+  var retryBudget = MAX_PUBLISH_PER_RUN - due.length;
 
   // Auto-retry pass: rows a previous run marked 'failed' (e.g. the IG poll-timeout, which
   // explicitly says "safe to retry") used to require a human to notice and re-click "אשר" in
@@ -636,7 +664,8 @@ module.exports = async function handler(req, res) {
     console.log("[cron] fetchFailedForRetry failed: " + err.message);
   }
   var retryResults = [];
-  for (var k = 0; k < failedCandidates.length; k++) {
+  if (failedCandidates.length > retryBudget) waiting += failedCandidates.length - Math.max(0, retryBudget);
+  for (var k = 0; k < failedCandidates.length && retryResults.length < retryBudget; k++) {
     var candidate = failedCandidates[k];
     var reclaimed = await reclaimFailedRow(candidate);
     if (!reclaimed) {
@@ -670,7 +699,7 @@ module.exports = async function handler(req, res) {
 
   res.status(200).json({
     processed: results.length, results: results,
-    retried: retryResults.length, retryResults: retryResults,
+    retried: retryResults.length, retryResults: retryResults, waiting: waiting,
     statusChecks: checkResults.length, statusCheckResults: checkResults
   });
 };
@@ -685,3 +714,7 @@ module.exports.checkScheduledStatus = checkScheduledStatus;
 module.exports.checkPinStatus = checkPinStatus;
 module.exports.fetchFailedForRetry = fetchFailedForRetry;
 module.exports.reclaimFailedRow = reclaimFailedRow;
+module.exports.countRecentlyPublished = countRecentlyPublished;
+module.exports.isDueNow = isDueNow;
+module.exports.MAX_PUBLISH_PER_RUN = MAX_PUBLISH_PER_RUN;
+module.exports.RECENT_PUBLISH_LIMIT = RECENT_PUBLISH_LIMIT;
