@@ -566,15 +566,16 @@ async function handleNotifySample(req, res) {
   function sampleRow(n, title, mediaType) {
     return { id: "sample-" + stamp + "-" + n, title: title, platform: "both", media_type: mediaType };
   }
+  var FB = "https://www.facebook.com/margalitlitushim", IG = "https://www.instagram.com/mr.polish.floors/";
   var plans = [
-    { key: "sample:" + stamp + ":1", kind: "published", row: sampleRow(1, "[בדיקה] רילס: פרויקט בזלת שחורה, לפני ואחרי", "reel"),
-      fb: { url: "https://www.facebook.com/margalitlitushim" }, ig: { permalink: "https://www.instagram.com/mr.polish.floors/" } },
-    { key: "sample:" + stamp + ":2", kind: "published", row: sampleRow(2, "[בדיקה] פוסט: קייס סטאדי, בזלת שחורה", "image"),
-      fb: { earlier: true }, ig: { permalink: "https://www.instagram.com/mr.polish.floors/" } },
+    { key: "sample:" + stamp + ":1", kind: "published", row: sampleRow(1, "[בדיקה] רילס: פרויקט בזלת שחורה, לפני ואחרי", "reel"), attempt: 2,
+      fb: { state: "now", url: FB }, ig: { state: "now", permalink: IG } },
+    { key: "sample:" + stamp + ":2", kind: "published", row: sampleRow(2, "[בדיקה] פוסט: קייס סטאדי, בזלת שחורה", "image"), attempt: 2,
+      fb: { state: "earlier", url: FB }, ig: { state: "now", permalink: IG } },
     { key: "sample:" + stamp + ":3", kind: "failed_retry", row: sampleRow(3, "[בדיקה] רילס: פרויקט גרנוליט", "reel"), attempt: 2,
-      want: { fb: true, ig: true }, fbDone: true, igDone: false, reason: notify.friendlyReason("did not finish processing within the poll window") },
-    { key: "sample:" + stamp + ":4", kind: "failed_final", row: sampleRow(4, "[בדיקה] פוסט: יום בעבודה, רגע המסירה", "image"), attempt: 3,
-      want: { fb: true, ig: true }, fbDone: true, igDone: false, reason: notify.friendlyReason("Application request limit reached") }
+      fb: { state: "earlier", url: FB }, ig: { state: "missing" }, reason: notify.friendlyReason("did not finish processing within the poll window") },
+    { key: "sample:" + stamp + ":4", kind: "failed_final", row: sampleRow(4, "[בדיקה] רילס: פרויקט בומנייט", "reel"), attempt: 3,
+      fb: { state: "missing" }, ig: { state: "missing" }, reason: notify.friendlyReason("Application request limit reached") }
   ];
   var sent = 0;
   for (var i = 0; i < plans.length; i++) sent += await notify.deliver(plans[i], {});

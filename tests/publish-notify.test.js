@@ -92,6 +92,14 @@ function check(name, cond, detail) {
 }
 async function drain() { const p = bg; bg = []; await Promise.all(p); }
 const tgSends = () => calls.filter(c => c.kind === "tg" && c.method === "sendMessage");
+const TITLE = "📝 רילס: פרויקט בזלת שחורה";
+const SEP = "━━━━━━━━━━";
+const TIME_RE = /\n🕐 \d\d\.\d\d · \d\d:\d\d$/;
+const noTime = (t) => String(t).replace(TIME_RE, "");
+const btns = (s) => (s && s.body.reply_markup ? s.body.reply_markup.inline_keyboard.map(r => r.length + ":" + r[0].text + "|" + r[0].url) : []);
+const FB111 = "1:📘 לפוסט בפייסבוק|https://www.facebook.com/PAGE1_111";
+const IGP = "1:📸 לפוסט באינסטגרם|https://www.instagram.com/p/FAKE123/";
+const PANEL = "1:🗂️ פתח בפאנל|https://mr-polishes.com/admin.html";
 const past = new Date(Date.now() - 60000).toISOString();
 const future = new Date(Date.now() + 3 * 3600 * 1000).toISOString();
 let rid = 0;
@@ -110,9 +118,14 @@ function row(extra) {
   check("success: publishOne ok + status published", res.ok && res.status === "published");
   check("success: one message per allowed production chat (500, 501), production token", s.length === 2 && s.every(x => x.token === "111:PRODFAKE") &&
     s.map(x => String(x.body.chat_id)).join(",") === "500,501", JSON.stringify(s.map(x => [x.token, x.body.chat_id])));
-  check("success: exact text with FB post URL + IG permalink", s[0] && s[0].body.text ===
-    "✅ פורסם: רילס: פרויקט בזלת שחורה\nפייסבוק: https://www.facebook.com/PAGE1_111\nאינסטגרם: https://www.instagram.com/p/FAKE123/", s[0] && s[0].body.text);
+  check("success: exact lines (header, title, separator, both platforms ✅ פורסם)", s[0] && noTime(s[0].body.text) ===
+    ["✅ הפוסט פורסם בהצלחה", TITLE, SEP, "📘 פייסבוק: ✅ פורסם", "📸 אינסטגרם: ✅ פורסם"].join("\n"), s[0] && s[0].body.text);
+  check("success: last line is 🕐 DD.MM · HH:MM", s[0] && TIME_RE.test(s[0].body.text));
+  check("success: no raw URL in the text", s[0] && !/https?:\/\//.test(s[0].body.text));
+  check("success: one URL button per live platform (FB post URL, IG permalink), one per row", btns(s[0]).join(" ") === FB111 + " " + IGP, btns(s[0]).join(" "));
   check("success: plain text (no parse_mode), link previews off", s[0] && !("parse_mode" in s[0].body) && s[0].body.disable_web_page_preview === true);
+  check("time: Israel time format", notify.formatIsraelTime(new Date("2026-11-01T08:05:00Z")) === "01.11 · 10:05" &&
+    notify.formatIsraelTime(new Date("2026-10-30T22:30:00Z")) === "31.10 · 00:30", notify.formatIsraelTime(new Date("2026-10-30T22:30:00Z")));
   check("success: permalink fetched by GET on the IG media id", calls.some(c => c.kind === "graph" && c.method === "GET" && c.path === "IGMEDIA1" && /fields=permalink/.test(c.qs)));
 
   // 2. Facebook already posted earlier → only Instagram runs, message says "כבר פורסם קודם"
@@ -122,14 +135,17 @@ function row(extra) {
   await drain(); s = tgSends();
   check("IG-only rerun: no Facebook publish call at all", !calls.some(c => c.kind === "graph" && c.method === "POST" && /^PAGE1\//.test(c.path)));
   check("IG-only rerun: test bot (preview/local) to the test chat", s.length === 1 && s[0].token === "222:TESTFAKE" && String(s[0].body.chat_id) === "600");
-  check("IG-only rerun: FB line 'כבר פורסם קודם' + IG link", s[0] && s[0].body.text ===
-    "✅ פורסם: רילס: פרויקט בזלת שחורה\nפייסבוק: כבר פורסם קודם\nאינסטגרם: https://www.instagram.com/p/FAKE123/", s[0] && s[0].body.text);
+  check("IG-only rerun: FB '✅ כבר פורסם קודם', IG '✅ פורסם'", s[0] && noTime(s[0].body.text) ===
+    ["✅ הפוסט פורסם בהצלחה", TITLE, SEP, "📘 פייסבוק: ✅ כבר פורסם קודם", "📸 אינסטגרם: ✅ פורסם"].join("\n"), s[0] && s[0].body.text);
+  check("IG-only rerun: buttons for both live posts (FB from the earlier id)", btns(s[0]).join(" ") ===
+    "1:📘 לפוסט בפייסבוק|https://www.facebook.com/PAGE1_777 " + IGP, btns(s[0]).join(" "));
 
   // 3. Reel (video id without "_") → /videos URL
   reset(); notify._resetDedupe();
   r = row({ media_type: "reel", content_category: "reel", platform: "facebook" });
   await core.publishOne(r, CTX); await drain(); s = tgSends();
-  check("reel on Facebook: video URL under the Page", s[0] && s[0].body.text.endsWith("פייסבוק: https://www.facebook.com/PAGE1/videos/999") && !/אינסטגרם/.test(s[0].body.text), s[0] && s[0].body.text);
+  check("reel on Facebook only: no Instagram line, video URL button under the Page", s[0] && !/אינסטגרם/.test(s[0].body.text) &&
+    btns(s[0]).join(" ") === "1:📘 לפוסט בפייסבוק|https://www.facebook.com/PAGE1/videos/999", btns(s[0]).join(" "));
 
   // 4. Partial, first failure → ⚠️ + retry line
   reset(); notify._resetDedupe();
@@ -137,8 +153,10 @@ function row(extra) {
   r = row();
   res = await core.publishOne(r, CTX); await drain(); s = tgSends();
   check("partial: publishOne reports failure and keeps the FB id", !res.ok && res.fbPostId === "PAGE1_111");
-  check("partial (first failure): ⚠️ FB ✔ IG ✖ + friendly reason + retry line", s.length === 1 && s[0].body.text ===
-    "⚠️ רילס: פרויקט בזלת שחורה: פייסבוק ✔, אינסטגרם ✖ (מטא הגבילה זמנית את קצב הפרסום)\n🔄 המערכת תנסה שוב אוטומטית", s[0] && s[0].body.text);
+  check("partial (first failure): ⚠️ header, FB ✅ IG ❌, reason, retry line, no time", s.length === 1 && s[0].body.text ===
+    ["⚠️ הפוסט פורסם חלקית", TITLE, SEP, "📘 פייסבוק: ✅ פורסם", "📸 אינסטגרם: ❌ לא פורסם",
+      "💬 הסיבה: מטא הגבילה זמנית את קצב הפרסום", "🔄 מה הלאה: המערכת תנסה שוב אוטומטית"].join("\n"), s[0] && s[0].body.text);
+  check("partial: button only for the live Facebook post, no panel button", btns(s[0]).join(" ") === FB111, btns(s[0]).join(" "));
   check("partial: raw Meta error not in the message", s[0] && !/Application request limit/.test(s[0].body.text));
 
   // 5. Middle auto-retry failure → silent
@@ -153,16 +171,21 @@ function row(extra) {
   igCreateError = { code: 4, message: "Application request limit reached" };
   r = row({ fb_post_id: "PAGE1_777", publish_attempts: 2 });
   await core.publishOne(r, Object.assign({}, CTX, { autoRetry: true })); await drain(); s = tgSends();
-  check("final failure: ❌ after 3 attempts, FB ✔ (earlier), IG ✖", s.length === 1 && s[0].body.text ===
-    "⚠️ רילס: פרויקט בזלת שחורה: פייסבוק ✔, אינסטגרם ✖ (מטא הגבילה זמנית את קצב הפרסום)\n❌ לא פורסם אחרי 3 ניסיונות — כדאי לבדוק בפאנל", s[0] && s[0].body.text);
+  check("final failure: FB ✅ earlier, IG ❌ אחרי 3 ניסיונות, 'מה לעשות' line", s.length === 1 && s[0].body.text ===
+    ["⚠️ הפוסט פורסם חלקית", TITLE, SEP, "📘 פייסבוק: ✅ כבר פורסם קודם", "📸 אינסטגרם: ❌ לא פורסם אחרי 3 ניסיונות",
+      "💬 הסיבה: מטא הגבילה זמנית את קצב הפרסום", "👈 מה לעשות: לבדוק בפאנל"].join("\n"), s[0] && s[0].body.text);
+  check("final failure: FB post button + panel button", btns(s[0]).join(" ") ===
+    "1:📘 לפוסט בפייסבוק|https://www.facebook.com/PAGE1_777 " + PANEL, btns(s[0]).join(" "));
 
   // 7. Scheduled approval of one of the 19 rows (publish_attempts already 1) failing on its slot → first failure of this approval
   reset(); notify._resetDedupe();
   fbError = { code: 368, message: "אנו מגבילים את התדירות שבה אפשר לפרסם" };
   r = row({ media_type: "reel", content_category: "reel", publish_attempts: 1 });
   await core.publishOne(r, CTX); await drain(); s = tgSends();
-  check("scheduled run fails (attempt 2, not an auto-retry): notified, both ✖, retry line", s.length === 1 &&
-    s[0].body.text === "⚠️ רילס: פרויקט בזלת שחורה: פייסבוק ✖, אינסטגרם ✖ (מטא הגבילה זמנית את קצב הפרסום)\n🔄 המערכת תנסה שוב אוטומטית", s[0] && s[0].body.text);
+  check("scheduled run fails (attempt 2, not an auto-retry): ❌ header, both ❌, retry line", s.length === 1 &&
+    s[0].body.text === ["❌ הפוסט לא פורסם במלואו", TITLE, SEP, "📘 פייסבוק: ❌ לא פורסם", "📸 אינסטגרם: ❌ לא פורסם",
+      "💬 הסיבה: מטא הגבילה זמנית את קצב הפרסום", "🔄 מה הלאה: המערכת תנסה שוב אוטומטית"].join("\n"), s[0] && s[0].body.text);
+  check("nothing live: no buttons at all (no reply_markup)", s[0] && !("reply_markup" in s[0].body));
 
   // 8. Deferred (future + Instagram), natively scheduled (future, Facebook only), skipped (claim lost) → silent
   reset(); notify._resetDedupe();
@@ -184,7 +207,8 @@ function row(extra) {
   check("scheduled → live: both checks report nowPublished", c1.nowPublished && c2.nowPublished);
   check("scheduled → live: flip is conditional on status=scheduled", patches.filter(p => /status=eq\.scheduled/.test(p.qs)).length === 2);
   check("scheduled → live: exactly one ✅ (only the matching PATCH notifies)", s.length === 1 &&
-    s[0].body.text === "✅ פורסם: רילס: פרויקט בזלת שחורה\nפייסבוק: https://www.facebook.com/PAGE1_555", s[0] && s[0].body.text);
+    noTime(s[0].body.text) === ["✅ הפוסט פורסם בהצלחה", TITLE, SEP, "📘 פייסבוק: ✅ פורסם"].join("\n") &&
+    btns(s[0]).join(" ") === "1:📘 לפוסט בפייסבוק|https://www.facebook.com/PAGE1_555", s[0] && s[0].body.text);
 
   // 10. Dedupe of the same (row, outcome, attempt)
   reset(); notify._resetDedupe();
@@ -227,7 +251,7 @@ function row(extra) {
   const long = "‫כותרת\u0007 ארוכה " + "מאוד ".repeat(40);
   await notify.notifyPublishResult(row({ title: long, platform: "facebook" }), { ok: true, status: "published", fbPostId: "PAGE1_2" }, CTX); await drain();
   s = tgSends();
-  const firstLine = s[0] ? s[0].body.text.split("\n")[0].replace("✅ פורסם: ", "") : "";
+  const firstLine = s[0] ? s[0].body.text.split("\n")[1].replace("📝 ", "") : "";
   check("title: control/bidi chars removed, cut to 80 with …", firstLine.length === 80 && firstLine.endsWith("…") && !/[\u0000-\u001f‫]/.test(firstLine), firstLine.length + "");
   check("title: falls back to the caption, then a placeholder", notify.cleanTitle({ title: "", caption: "כיתוב" }) === "כיתוב" && notify.cleanTitle({}) === "פוסט ללא כותרת");
 
@@ -239,8 +263,9 @@ function row(extra) {
   // 14. Story/media_type guard failure → first-failure message
   setEnv(TEST); reset(); notify._resetDedupe();
   await core.publishOne(row({ content_category: "story", media_type: "image", platform: "instagram" }), CTX); await drain(); s = tgSends();
-  check("story guard failure: ⚠️ IG ✖ with its reason", s.length === 1 && s[0].body.text ===
-    "⚠️ רילס: פרויקט בזלת שחורה: אינסטגרם ✖ (סוג המדיה לא מתאים לסטורי)\n🔄 המערכת תנסה שוב אוטומטית", s[0] && s[0].body.text);
+  check("story guard failure: only the Instagram line, with its reason", s.length === 1 && s[0].body.text ===
+    ["❌ הפוסט לא פורסם במלואו", TITLE, SEP, "📸 אינסטגרם: ❌ לא פורסם", "💬 הסיבה: סוג המדיה לא מתאים לסטורי",
+      "🔄 מה הלאה: המערכת תנסה שוב אוטומטית"].join("\n"), s[0] && s[0].body.text);
 
   // 15. Cron handler end to end: a due row succeeds, a failed row's middle auto-retry stays silent
   setEnv(Object.assign({}, TEST, { CRON_SECRET: "cron-fake", META_PAGE_ACCESS_TOKEN: "meta-token-fake", META_PAGE_ID: "PAGE1", META_IG_USER_ID: "IGU1" }));
@@ -262,7 +287,7 @@ function row(extra) {
   global.fetch = origFetch;
   await drain(); s = tgSends();
   check("cron: processed 1 + retried 1", resObj.code === 200 && out.processed === 1 && out.retried === 1, JSON.stringify(out));
-  check("cron: one ✅ for the due row, nothing for the middle auto-retry", s.length === 1 && s[0].body.text.startsWith("✅ פורסם: פוסט תקין"), s.map(x => x.body.text).join(" | "));
+  check("cron: one ✅ for the due row, nothing for the middle auto-retry", s.length === 1 && s[0].body.text.startsWith("✅ הפוסט פורסם בהצלחה\n📝 פוסט תקין\n"), s.map(x => x.body.text).join(" | "));
 
   // 16. Preview-only sample hook
   setEnv(Object.assign({}, PROD, { VERCEL_ENV: "production", INTERNAL_API_SECRET: "internal-fake" })); reset(); notify._resetDedupe();
@@ -275,8 +300,10 @@ function row(extra) {
   s = tgSends();
   check("sample hook (preview): 4 messages to the test bot, no Meta / DB calls", resObj.code === 200 && out.delivered === 4 &&
     s.length === 4 && s.every(x => x.token === "222:TESTFAKE") && !calls.some(c => c.kind === "graph" || c.kind === "rest"), JSON.stringify(out));
-  check("sample hook: covers ✅, ✅ with 'כבר פורסם קודם', 🔄 and ❌", /^✅/.test(s[0].body.text) && /כבר פורסם קודם/.test(s[1].body.text) &&
-    /🔄/.test(s[2].body.text) && /❌/.test(s[3].body.text));
+  check("sample hook: covers ✅, ✅ with 'כבר פורסם קודם', ⚠️ + 🔄 and ❌ + panel", /^✅ הפוסט פורסם בהצלחה/.test(s[0].body.text) &&
+    /✅ כבר פורסם קודם/.test(s[1].body.text) && /^⚠️ הפוסט פורסם חלקית[\s\S]*🔄 מה הלאה/.test(s[2].body.text) &&
+    /^❌ הפוסט לא פורסם במלואו[\s\S]*אחרי 3 ניסיונות[\s\S]*👈 מה לעשות/.test(s[3].body.text) && btns(s[3]).join(" ") === PANEL, s.map(x => x.body.text).join(" | "));
+  check("sample hook: no raw URLs in any text, no ✔/✖ anywhere", s.every(x => !/https?:\/\/|[✔✖]/.test(x.body.text)));
 
   // 17. Logs never carry titles, tokens or secrets
   check("logs: no titles, tokens or secrets", !logs.some(l => /בזלת|פוסט תקין|פוסט שנכשל|כותרת|TESTFAKE|PRODFAKE|meta-token-fake|internal-fake|svc-fake|cron-fake/.test(l)),

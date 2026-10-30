@@ -2,11 +2,14 @@
 // result (cron, GitHub trigger and the panel's real-time Approve all share publishOne), and one
 // when a natively-scheduled Facebook post is confirmed live by checkScheduledStatus().
 //
-// Rules (owner spec, 2026-10-30):
-//   - published            → "✅ פורסם: <title>" + one line per platform (link, or "כבר פורסם קודם")
-//   - failed / partial     → "⚠️ <title>: פייסבוק ✔/✖, אינסטגרם ✔/✖ (<reason>)" + retry/final line,
-//                            only on the FIRST failure of an approval and on the FINAL one
-//                            (auto-retries in between stay silent)
+// Rules (owner spec, 2026-10-30): plain text, one item per line — status header, "📝 <title>",
+// a separator, one "📘 פייסבוק: …" / "📸 אינסטגרם: …" line per targeted platform (✅ פורסם /
+// ✅ כבר פורסם קודם / ❌ לא פורסם [אחרי N ניסיונות]), then the time (success) or the reason + what
+// next (failure). No raw URLs: links are inline URL buttons for the live posts, plus "פתח בפאנל"
+// on a final failure.
+//   - published         → always
+//   - failed / partial  → only on the FIRST failure of an approval and on the FINAL one
+//                         (auto-retries in between stay silent)
 //   - natively scheduled on Facebook, deferred, skipped → nothing (✅ follows once it is live)
 //
 // Never breaks or delays publishing: notifyPublishResult() starts the work and returns at once
@@ -92,52 +95,84 @@ function planPublishNotification(row, result, ctx) {
   if (!row || !result || result.deferred || result.skipped) return null;
   var attempt = (row.publish_attempts || 0) + 1;
   var want = targets(row);
+  // Per targeted platform: 'earlier' (live before this attempt), 'now' (went live in this
+  // attempt) or 'missing' (not live). id = the live post/media id, used only for the buttons.
+  function side(want, earlierId, nowId) {
+    if (!want) return null;
+    if (earlierId) return { state: "earlier", id: earlierId };
+    if (nowId) return { state: "now", id: nowId };
+    return { state: "missing" };
+  }
+  var fb = side(want.fb, row.fb_post_id, result.fbPostId);
+  var ig = side(want.ig, row.ig_post_id, result.igPostId);
   if (result.ok && result.status === "published") {
-    return {
-      key: row.id + ":published:" + attempt, kind: "published", row: row,
-      fb: want.fb ? (row.fb_post_id ? { earlier: true } : (result.fbPostId ? { id: result.fbPostId } : null)) : null,
-      ig: want.ig ? (row.ig_post_id ? { earlier: true } : (result.igPostId ? { id: result.igPostId } : null)) : null
-    };
+    return { key: row.id + ":published:" + attempt, kind: "published", row: row, attempt: attempt, fb: fb, ig: ig };
   }
   if (result.ok) return null; // 'scheduled' (Facebook will publish it later) or anything else non-final
   var maxAttempts = ctx.maxAttempts || 3;
   var retriesLeft = attempt < maxAttempts;
   if (ctx.autoRetry && retriesLeft) return null; // a middle auto-retry: stay quiet
-  var fbDone = !!(result.fbPostId || row.fb_post_id);
-  var igDone = !!(result.igPostId || row.ig_post_id);
   return {
     key: row.id + ":failed:" + attempt, kind: retriesLeft ? "failed_retry" : "failed_final", row: row,
-    attempt: attempt, want: want, fbDone: fbDone, igDone: igDone, reason: friendlyReason(result.error)
+    attempt: attempt, fb: fb, ig: ig, reason: friendlyReason(result.error)
   };
 }
 
 function planScheduledLiveNotification(row) {
   if (!row || !row.fb_post_id) return null;
-  return { key: row.id + ":published:scheduled", kind: "published", row: row, fb: { id: row.fb_post_id }, ig: null };
+  return { key: row.id + ":published:scheduled", kind: "published", row: row, fb: { state: "now", id: row.fb_post_id }, ig: null };
 }
 
-async function buildText(plan, ctx) {
-  var title = cleanTitle(plan.row);
+const PANEL_URL = "https://mr-polishes.com/admin.html";
+const SEPARATOR = "━━━━━━━━━━";
+
+// "DD.MM · HH:MM" in Israel time.
+function formatIsraelTime(date) {
+  var parts = {};
+  new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+    .formatToParts(date).forEach(function (p) { parts[p.type] = p.value; });
+  return parts.day + "." + parts.month + " · " + (parts.hour === "24" ? "00" : parts.hour) + ":" + parts.minute;
+}
+
+function platformLine(label, p, plan) {
+  if (p.state === "earlier") return label + ": ✅ כבר פורסם קודם";
+  if (p.state === "now") return label + ": ✅ פורסם";
+  return label + ": ❌ לא פורסם" + (plan.kind === "failed_final" ? " אחרי " + plan.attempt + " ניסיונות" : "");
+}
+
+// The message: plain text (one item per line, no raw URLs) + inline URL buttons for the live posts
+// (and the panel on a final failure). A link that can't be resolved simply gets no button.
+async function buildMessage(plan, ctx) {
+  ctx = ctx || {};
+  var sides = [plan.fb, plan.ig].filter(Boolean);
+  var anyLive = sides.some(function (p) { return p.state !== "missing"; });
+  var header = plan.kind === "published" ? "✅ הפוסט פורסם בהצלחה"
+    : anyLive ? "⚠️ הפוסט פורסם חלקית" : "❌ הפוסט לא פורסם במלואו";
+  var lines = [header, "📝 " + cleanTitle(plan.row), SEPARATOR];
+  if (plan.fb) lines.push(platformLine("📘 פייסבוק", plan.fb, plan));
+  if (plan.ig) lines.push(platformLine("📸 אינסטגרם", plan.ig, plan));
   if (plan.kind === "published") {
-    var lines = ["✅ פורסם: " + title];
-    if (plan.fb) lines.push("פייסבוק: " + (plan.fb.earlier ? "כבר פורסם קודם" : plan.fb.url || facebookUrl(plan.fb.id, plan.row, ctx.pageId)));
-    if (plan.ig) {
-      if (plan.ig.earlier) lines.push("אינסטגרם: כבר פורסם קודם");
-      else {
-        var link = plan.ig.permalink || await instagramPermalink(plan.ig.id, ctx.token);
-        lines.push("אינסטגרם: " + (link || "פורסם (הקישור לא זמין כרגע)"));
-      }
-    }
-    return lines.join("\n");
+    lines.push("🕐 " + formatIsraelTime(ctx.now || new Date()));
+  } else {
+    lines.push("💬 הסיבה: " + plan.reason);
+    lines.push(plan.kind === "failed_retry" ? "🔄 מה הלאה: המערכת תנסה שוב אוטומטית" : "👈 מה לעשות: לבדוק בפאנל");
   }
-  var parts = [];
-  if (plan.want.fb) parts.push("פייסבוק " + (plan.fbDone ? "✔" : "✖"));
-  if (plan.want.ig) parts.push("אינסטגרם " + (plan.igDone ? "✔" : "✖"));
-  var head = "⚠️ " + title + ": " + parts.join(", ") + " (" + plan.reason + ")";
-  var tail = plan.kind === "failed_retry"
-    ? "🔄 המערכת תנסה שוב אוטומטית"
-    : "❌ לא פורסם אחרי " + plan.attempt + " ניסיונות — כדאי לבדוק בפאנל";
-  return head + "\n" + tail;
+
+  var buttons = [];
+  if (plan.fb && plan.fb.state !== "missing") {
+    var fbLink = plan.fb.url || (plan.fb.id ? facebookUrl(plan.fb.id, plan.row, ctx.pageId) : null);
+    if (fbLink) buttons.push({ text: "📘 לפוסט בפייסבוק", url: fbLink });
+  }
+  if (plan.ig && plan.ig.state !== "missing") {
+    var igLink = plan.ig.permalink || (plan.ig.id ? await instagramPermalink(plan.ig.id, ctx.token) : null);
+    if (igLink) buttons.push({ text: "📸 לפוסט באינסטגרם", url: igLink });
+  }
+  if (plan.kind === "failed_final") buttons.push({ text: "🗂️ פתח בפאנל", url: PANEL_URL });
+
+  return {
+    text: lines.join("\n"),
+    reply_markup: buttons.length ? { inline_keyboard: buttons.map(function (b) { return [b]; }) } : null
+  };
 }
 
 // Sends one plan to every allowed chat. Resolves to the number of chats reached; never rejects.
@@ -150,11 +185,13 @@ async function deliver(plan, ctx) {
       console.log("[publish-notify] skipped (bot not configured) row=" + plan.row.id + " kind=" + plan.kind);
       return 0;
     }
-    var text = await buildText(plan, ctx || {});
+    var msg = await buildMessage(plan, ctx || {});
     var sent = 0;
     for (var i = 0; i < chats.length; i++) {
       try {
-        await tgCallTimed("sendMessage", { chat_id: chats[i], text: text, disable_web_page_preview: true }, timeoutMs);
+        var payload = { chat_id: chats[i], text: msg.text, disable_web_page_preview: true };
+        if (msg.reply_markup) payload.reply_markup = msg.reply_markup;
+        await tgCallTimed("sendMessage", payload, timeoutMs);
         sent++;
       } catch (err) {
         console.error("[publish-notify] send failed row=" + plan.row.id + " kind=" + plan.kind + ": " + err.message);
@@ -196,7 +233,7 @@ function notifyScheduledLive(row, ctx) {
 
 module.exports = {
   notifyPublishResult, notifyScheduledLive, planPublishNotification, planScheduledLiveNotification,
-  buildText, deliver, cleanTitle, friendlyReason,
+  buildMessage, deliver, cleanTitle, friendlyReason, formatIsraelTime,
   _setTimeoutMs: function (ms) { timeoutMs = ms; },
   _resetDedupe: function () { sentKeys.clear(); }
 };
