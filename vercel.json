@@ -11,9 +11,8 @@
   ],
   "functions": {
     "api/publish-scheduled-content.js": { "maxDuration": 60 },
-    "api/publish-now.js": { "maxDuration": 60 },
+    "api/panel.js": { "maxDuration": 60 },
     "api/analytics-agent.js": { "maxDuration": 60 },
-    "api/analytics-refresh.js": { "maxDuration": 60 },
     "api/parse-receipt.js": { "maxDuration": 30 },
     "api/telegram-webhook.js": { "maxDuration": 60 },
     "api/render-quote-pdf.js": {
@@ -21,6 +20,13 @@
       "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,shared/fonts/**}"
     }
   },
+  "rewrites": [
+    { "source": "/api/publish-now", "destination": "/api/panel?action=publish-now" },
+    { "source": "/api/check-publish-status", "destination": "/api/panel?action=check-publish-status" },
+    { "source": "/api/check-pin-status", "destination": "/api/panel?action=check-pin-status" },
+    { "source": "/api/social-snapshot", "destination": "/api/panel?action=social-snapshot" },
+    { "source": "/api/analytics-refresh", "destination": "/api/panel?action=analytics-refresh" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

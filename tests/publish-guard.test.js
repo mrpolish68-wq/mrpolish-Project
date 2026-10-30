@@ -61,7 +61,7 @@ const origLog = console.log;
 console.log = () => {}; console.error = () => {};
 
 const cron = require(REPO + "/api/publish-scheduled-content.js");
-const publishNow = require(REPO + "/api/publish-now.js");
+const publishNow = require(REPO + "/api/_publish-now.js");
 
 let passed = 0, total = 0;
 function check(name, cond, detail) {

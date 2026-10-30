@@ -422,7 +422,7 @@ async function generateMonthlyPlanIfDue() {
 }
 
 // The actual work, split out from the HTTP handler so both the cron entry point below and
-// api/analytics-refresh.js (the dashboard's session-authenticated "🔄 רענון אנליטיקה" button —
+// api/_analytics-refresh.js, served at /api/analytics-refresh via api/panel.js (the dashboard's session-authenticated "🔄 רענון אנליטיקה" button —
 // same split as publish-scheduled-content.js's publishOne / publish-now.js) can run the exact
 // same logic. Idempotent throughout (upserts + existence-checks), so a manual trigger the same
 // day the cron already ran just corrects/no-ops rather than duplicating anything.
@@ -542,7 +542,7 @@ module.exports = async function handler(req, res) {
   }
 };
 
-// Exported for api/analytics-refresh.js (the dashboard's manual trigger) and local
+// Exported for api/_analytics-refresh.js (the dashboard's manual trigger) and local
 // smoke-testing — same reuse pattern as publish-scheduled-content.js's exports for
 // publish-now.js.
 module.exports.runAgent = runAgent;
