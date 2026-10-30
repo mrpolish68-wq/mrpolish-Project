@@ -20,8 +20,10 @@
 "use strict";
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
-const LIMITS = Object.freeze({ quote: 15, receipt: 20, voiceCorrections: 3 });
-const DAILY_KINDS = ["quote", "receipt"];
+// media_file: files processed per day (api/media.js); media_ai: Gemini vision calls (Phase 9).
+// The DB accepts these kinds since supabase-media-projects.sql §6.
+const LIMITS = Object.freeze({ quote: 15, receipt: 20, voiceCorrections: 3, media_file: 80, media_ai: 30 });
+const DAILY_KINDS = ["quote", "receipt", "media_file", "media_ai"];
 const FETCH_TIMEOUT_MS = 8000;
 
 class QuotaError extends Error {

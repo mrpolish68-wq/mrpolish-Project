@@ -139,7 +139,7 @@ const opts = (f) => ({ fetch: f, apiKey: "test", todayIL: "27.10.2026" });
   catch (e) { check("HTTP 500 -> quota_unavailable", e.code === "quota_unavailable"); }
   try { await Q.consumeQuota("quote", { fetch: rpcMock("x"), serviceKey: "k" }); check("bad response -> quota_unavailable", false); }
   catch (e) { check("bad response -> quota_unavailable", e.code === "quota_unavailable"); }
-  check("LIMITS", eq(Q.LIMITS, { quote: 15, receipt: 20, voiceCorrections: 3 }) && Object.isFrozen(Q.LIMITS));
+  check("LIMITS", eq(Q.LIMITS, { quote: 15, receipt: 20, voiceCorrections: 3, media_file: 80, media_ai: 30 }) && Object.isFrozen(Q.LIMITS));
 
   // spend cap / billing refusals -> ai_busy; an unrelated 400 stays ai_failed
   const busyCases = [

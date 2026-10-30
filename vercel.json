@@ -12,6 +12,7 @@
   "functions": {
     "api/publish-scheduled-content.js": { "maxDuration": 60 },
     "api/panel.js": { "maxDuration": 60 },
+    "api/media.js": { "maxDuration": 60, "includeFiles": "assets/watermark/**" },
     "api/analytics-agent.js": { "maxDuration": 60 },
     "api/parse-receipt.js": { "maxDuration": 30 },
     "api/telegram-webhook.js": { "maxDuration": 60 },

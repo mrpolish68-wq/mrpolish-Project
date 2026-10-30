@@ -10,7 +10,8 @@
   "dependencies": {
     "@sparticuz/chromium": "153.0.0",
     "@vercel/functions": "3.10.1",
-    "puppeteer-core": "25.11.0"
+    "puppeteer-core": "25.11.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.3.15",
