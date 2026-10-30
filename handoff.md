@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-10-28 (§32 — **Telegram price quotes feature: LIVE in production since 2026-10-28** (merge `0e3827c`), followed by **audit fix batches A (`f8d62c1`) and B (`8681463`)** from a full code review + security audit (no Critical/High findings). §32 is the complete, final summary: what it does, the architecture map, the DB objects, decisions, the audit, operations and pending items. `telegram-quotes-plan.md` has the per-phase detail. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-10-30 (§33 — **Telegram notifications for published / failed posts: LIVE** (merge `d2ac3bf`), the 2026-10-30 burst incident and the 19-post catch-up schedule (1–9 Nov), the GitHub frequent trigger re-enabled, the GitHub CLI installed. Before that, 2026-10-28: §32 — **Telegram price quotes feature: LIVE in production since 2026-10-28** (merge `0e3827c`), followed by **audit fix batches A (`f8d62c1`) and B (`8681463`)** from a full code review + security audit (no Critical/High findings). §32 is the complete, final summary: what it does, the architecture map, the DB objects, decisions, the audit, operations and pending items. `telegram-quotes-plan.md` has the per-phase detail. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -1268,3 +1268,61 @@ A full code review + security audit of everything since `47dea44` found **no Cri
 
 ### 32.7 Commit history (main)
 `47dea44` (before the feature) → phases 1–7a on `feature/telegram-quotes` (`be7fd85` spike … `e77d9d4` hardening; one commit per phase, see the plan) → **`0e3827c`** merge (LIVE) → `595ac8c` docs → **`f8d62c1`** audit batch A (`fd2b38c` client_ref + tests in the repo, `ef17dc9` `.vercelignore`) → `43889d3` docs → **`8681463`** audit batch B (`f77270a`) → `3a2c27a` docs (accidentally duplicated content) → `83bc39a` fix.
+
+## 33. Publish notifications on Telegram + the 2026-10-30 burst incident — LIVE (2026-10-30)
+
+**Status:** live in production since **2026-10-30** (merge `d2ac3bf`; branch commits `d4c7370`, `b88e809`). Verified after deploy: the sample hook returns 404 in production, the cron endpoint without `CRON_SECRET` returns 401, a manual GitHub workflow run succeeded (`processed: 0`), and the production bot's `getWebhookInfo` shows no errors and 0 pending updates.
+
+### 33.1 The incident that led to it
+On 2026-10-30 at 06:45 UTC, ~31 old `content_queue` rows (scheduled 26 Jul – 11 Aug) were bulk-approved in the panel on purpose. Their `scheduled_for` was in the past, so **Approve published them immediately** (`bulkApprove()` → `triggerRealtimePublish()` per row; there is no stale-date guard). Result: 12 published (8 feed posts on FB+IG, 4 IG stories) within ~1 minute; 12 went to Facebook but failed on Instagram (Meta "Application request limit reached" / "Media ID is not available" / the reel poll timeout); 7 reels failed on both (Facebook's anti-spam rate limit). The daily cron's auto-retry (`publish_attempts < 3`) would have burst the 19 failed rows again at 15:00 UTC.
+**Fix (owner-approved, via `supabase` MCP `execute_sql`):** the 19 failed rows were moved to `pending_approval` (post ids, errors and `publish_attempts` untouched), then given new `scheduled_for` slots and set to `approved` (dates first, status second, only for future dates). The other 17 rows were verified unchanged (md5 fingerprint). The published posts stay.
+**Still open (not built):** a stale-date guard on Approve / bulk Approve (ask before publishing a row whose date is in the past); `bulkReject()` doesn't set `rejected_at`, so bulk-rejected rows are never archived.
+
+### 33.2 The catch-up schedule (Israel time; all `approved`, published by the cron)
+Rules: max 3 feed posts/reels per day at 10:00 / 14:00 / 19:00; Friday only 10:00 and 14:00; Saturday only 19:00; original order kept; never two reels one after another on the same day.
+
+| Date | Time | Item | Publishes to |
+|---|---|---|---|
+| Sun 1.11 | 10:00 · 14:00 · 19:00 | רילס בזלת שחורה · פוסט קייס סטאדי בזלת · רילס מדרגות חלילה | FB+IG · IG · FB+IG |
+| Mon 2.11 | 10:00 · 14:00 · 19:00 | רילס שיש קרמה · פוסט הבדיקה לפני הכל · פוסט אבן ירושלמית | FB+IG · IG · IG |
+| Tue 3.11 | 10:00 · 14:00 | פוסט בין הלפני לאחרי · רילס מדע האבן | IG · FB+IG |
+| Wed 4.11 | 10:00 | רילס גרנוליט | IG |
+| Thu 5.11 | 10:00 | רילס בטון מוחלק | FB+IG |
+| Fri 6.11 | 10:00 · 14:00 | רילס בומנייט · פוסט 'אתם מגיעים גם אלינו?' | FB+IG · IG |
+| Sat 7.11 | 19:00 | פוסט נקבוביות | IG |
+| Sun 8.11 | 10:00 · 14:00 · 19:00 | פוסט אדריכלים וקבלנים · פוסט מדרגות חלילה · פוסט הכולל השמח | IG · IG · IG |
+| Mon 9.11 | 10:00 · 14:00 · 19:00 | רילס 5 פרויקטים · פוסט בית חולים · פוסט רגע המסירה | FB+IG · IG · IG |
+
+"IG" = Facebook already has the post from 30 Oct; `publishOne` skips any platform that already has a post id (`hasFacebook = … && !row.fb_post_id`), so Facebook is never posted twice. Every row has an Instagram side and Instagram can't be pre-scheduled, so **each post goes out on the first cron/GitHub run after its slot** (≈10 min, more if GitHub's schedule slips).
+
+### 33.3 GitHub frequent trigger + the GitHub CLI
+- `.github/workflows/publish-scheduler.yml` had been **`disabled_inactivity` since 2026-10-14** (GitHub turns off scheduled workflows after 60 days without repo activity). Re-enabled 2026-10-30 with `gh workflow enable`; `CRON_SECRET` still works (manual runs `41067045670` and `41070173956` succeeded). **It can switch off again after any 60 quiet days** — check the Actions tab, or move to a scheduler without that rule.
+- **The GitHub CLI is installed** (winget, v2.103.3) at **`C:\Program Files\GitHub CLI\gh.exe`**, logged in as `mrpolish68-wq` (scopes `repo`, `workflow`). Call it by the full path until the PATH refreshes in a new terminal. Deployment URLs: `gh api "repos/mrpolish68-wq/mrpolish-Project/deployments?sha=<sha>"` → `statuses_url` → `environment_url`.
+
+### 33.4 The notifications
+**Files:** `api/_publish-notify.js` (rules, message, delivery), `api/_telegram.js` (`telegramConfig()` moved here from the bot + a timed sender; the bot imports it), hooks in `api/publish-scheduled-content.js`, tests in `tests/publish-notify.test.js` (49 checks; `npm test` = 451 checks in 9 suites).
+**When:** after every `publishOne()` result — so the daily Vercel cron, the GitHub trigger and the panel's Approve (`publish-now`) are all covered — and when `checkScheduledStatus()` confirms a natively scheduled Facebook post is live.
+- Published → always. Failed / partial → only on the **first failure of an approval** (an attempt not started by the auto-retry) and on the **final** one (`publish_attempts` reaches 3); auto-retries in between stay silent.
+- Natively scheduled on Facebook, deferred (future + Instagram), skipped (claim lost) → no message.
+**Format** (plain text, no `parse_mode`, one item per line; no raw URLs):
+```
+✅ הפוסט פורסם בהצלחה   |  ⚠️ הפוסט פורסם חלקית  |  ❌ הפוסט לא פורסם במלואו
+📝 <title, cleaned, max 80 chars>
+━━━━━━━━━━
+📘 פייסבוק: ✅ פורסם | ✅ כבר פורסם קודם | ❌ לא פורסם [אחרי N ניסיונות — final only]
+📸 אינסטגרם: (same)                        ← only the platforms the row targets
+🕐 DD.MM · HH:MM (Israel time)             ← success
+💬 הסיבה: <friendly reason>                ← failure (raw Meta error stays in publish_error)
+🔄 מה הלאה: המערכת תנסה שוב אוטומטית  |  👈 מה לעשות: לבדוק בפאנל (final)
+```
+Header on failure: ⚠️ if any targeted platform is live (now or earlier), otherwise ❌. **Inline URL buttons** (one per row): "📘 לפוסט בפייסבוק" / "📸 לפוסט באינסטגרם" for every live platform (FB post URL, or `facebook.com/<page>/videos/<id>` for reels; the IG permalink via a GET on the media id — no button if it can't be fetched), plus "🗂️ פתח בפאנל" (`https://mr-polishes.com/admin.html`) on a final failure.
+**Bot:** production = the production bot to every chat in `TELEGRAM_ALLOWED_CHATS`; previews/local = the test bot (`TELEGRAM_TEST_*`). No bot configured → skipped with a log line.
+**Never blocks publishing:** started after the result without being awaited (`waitUntil` keeps the function alive), ~8 s timeout on every Telegram / Meta call, never throws; logs carry only the row id and the kind.
+**No duplicates, no new table:** only the `claimRow()` winner produces a result for an attempt (`publish_attempts` numbers it), and the scheduled→published flip is now a conditional PATCH on `status=scheduled` (only the caller that matched notifies); plus a per-instance key set.
+**Preview test hook:** `GET /api/publish-scheduled-content?notify_sample=1` with `X-Internal-Secret` (and the Vercel bypass header) sends 4 sample messages to the test bot, touching no row and calling no Meta. **404 in production**, 401 without the secret.
+
+### 33.5 Vercel Hobby function limit
+The Hobby plan allows **12 serverless functions** per deployment; the project uses **11** (`api/*.js` not starting with `_`). The test hook was put inside `publish-scheduled-content.js` to keep the last slot free. New shared code goes in `api/_*.js` (not counted). The projects/media feature will need to fit in **one** new function or merge endpoints.
+
+### 33.6 Commit history (main)
+… `83bc39a` → `c054989` docs → **`d2ac3bf`** merge `feature/publish-notifications` (`d4c7370` notifications, `b88e809` structured message + buttons) → §33 docs.
