@@ -22,12 +22,19 @@ const MAX_INPUT_PIXELS = 100 * 1000 * 1000;   // a decompression-bomb guard (a 1
 const ORIGINAL_MAX_EDGE = 2560;
 const SITE_WIDTHS = [480, 960, 1600];
 const IG_SIZE = { width: 1080, height: 1350 };  // 4:5
-const WATERMARK_WIDTH = 0.12;                   // of the output width
-const WATERMARK_MIN_PX = 72;
+const WATERMARK_MIN_PX = 60;
 const WATERMARK_MARGIN = 0.03;                  // of the shorter side
-// The three designs rendered by tools/render-watermarks.js. DEFAULT until the owner picks one.
-const WATERMARK_STYLES = ["wordmark", "badge", "url"];
-const DEFAULT_WATERMARK_STYLE = "wordmark";
+// The three designs rendered by tools/render-watermarks.js, each with its width (share of the
+// output width) and opacity. Owner decision 2026-10-30: the BADGE, 20% smaller than the first
+// 12% (≈ 9.6%), at 85% opacity — the default everywhere.
+const WATERMARKS = {
+  badge:    { width: 0.096, opacity: 0.85 },
+  wordmark: { width: 0.12,  opacity: 1 },
+  url:      { width: 0.12,  opacity: 1 }
+};
+const WATERMARK_STYLES = Object.keys(WATERMARKS);
+const DEFAULT_WATERMARK_STYLE = "badge";
+const WATERMARK_WIDTH = WATERMARKS[DEFAULT_WATERMARK_STYLE].width;
 const WATERMARK_DIR = path.join(__dirname, "..", "assets", "watermark");
 
 class MediaError extends Error {
@@ -69,10 +76,18 @@ function assertSupportedImage(buf) {
 var wmCache = {};
 async function watermarkFor(style, outWidth, outHeight) {
   if (WATERMARK_STYLES.indexOf(style) === -1) style = DEFAULT_WATERMARK_STYLE;
-  var w = Math.max(WATERMARK_MIN_PX, Math.round(outWidth * WATERMARK_WIDTH));
+  var spec = WATERMARKS[style];
+  var w = Math.max(WATERMARK_MIN_PX, Math.round(outWidth * spec.width));
   var key = style + ":" + w;
   if (!wmCache[key]) {
-    wmCache[key] = await sharp(path.join(WATERMARK_DIR, style + ".png")).resize({ width: w }).png().toBuffer({ resolveWithObject: true });
+    var img = sharp(path.join(WATERMARK_DIR, style + ".png")).resize({ width: w });
+    if (spec.opacity < 1) {
+      // composite has no opacity option: scale the PNG's own alpha (dest-in with a constant alpha)
+      img = sharp(await img.png().toBuffer()).composite([{
+        input: Buffer.from([255, 255, 255, Math.round(255 * spec.opacity)]), raw: { width: 1, height: 1, channels: 4 }, tile: true, blend: "dest-in"
+      }]);
+    }
+    wmCache[key] = await img.png().toBuffer({ resolveWithObject: true });
   }
   var wm = wmCache[key];
   var margin = Math.round(Math.min(outWidth, outHeight) * WATERMARK_MARGIN);

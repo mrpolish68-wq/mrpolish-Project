@@ -94,7 +94,7 @@ function gpsEntries(buf) {
   const src = await photo(3000, 2000);
   const off = await MP.processImage(src, { watermark: false });
   const on = await MP.processImage(src, { watermark: true });
-  check("watermark off → none; on → the default style 'wordmark'", off.watermark === null && on.watermark === "wordmark");
+  check("watermark off → none; on → the default style 'badge' (owner decision)", off.watermark === null && on.watermark === "badge" && MP.DEFAULT_WATERMARK_STYLE === "badge");
   check("the ORIGINAL is never watermarked (identical bytes on/off)", off.original.buffer.equals(on.original.buffer));
   const rawOff = await sharp(off.variants.jpg.buffer).raw().toBuffer({ resolveWithObject: true });
   const rawOn = await sharp(on.variants.jpg.buffer).raw().toBuffer({ resolveWithObject: true });
@@ -107,14 +107,22 @@ function gpsEntries(buf) {
   }
   const wmWidth = (maxX - minX + 1) / W;
   check("watermark sits in the bottom-RIGHT corner", changed > 500 && minX > W * 0.75 && minY > H * 0.8 && maxX < W && maxY < H, JSON.stringify({ minX, maxX, minY, maxY, W, H }));
-  check("watermark is ~12% of the width (subtle)", wmWidth > 0.09 && wmWidth < 0.13, wmWidth.toFixed(3));
+  // the badge PNG is 9.6% of the width incl. its soft shadow; the visible change is a bit narrower
+  check("badge watermark ≈ 9.6% of the width (20% smaller than the first 12%)", wmWidth > 0.075 && wmWidth <= 0.097, wmWidth.toFixed(3));
+  // 85% opacity: on pure black vs pure white, the badge's opaque center must still show the background
+  const solid = async (bg) => (await MP.processImage(await sharp({ create: { width: 1600, height: 1200, channels: 3, background: bg } }).jpeg().toBuffer(), { watermark: true })).variants.jpg.buffer;
+  const cx = Math.round(1600 - 1600 * 0.03 * 0.75 - 1600 * 0.096 / 2), cy = Math.round(1200 - 1200 * 0.03 - 1600 * 0.096 / 2);
+  const onBlack = await sharp(await solid("#000000")).extract({ left: cx, top: cy, width: 1, height: 1 }).raw().toBuffer();
+  const onWhite = await sharp(await solid("#ffffff")).extract({ left: cx, top: cy, width: 1, height: 1 }).raw().toBuffer();
+  const diff = Math.abs(onWhite[0] - onBlack[0]) + Math.abs(onWhite[1] - onBlack[1]) + Math.abs(onWhite[2] - onBlack[2]);
+  check("badge at 85% opacity: ~15% of the floor shows through (black vs white background differ by ~15%)", diff > 3 * 255 * 0.08 && diff < 3 * 255 * 0.25, diff + " (" + [...onBlack] + " vs " + [...onWhite] + ")");
   const igOff = await sharp(off.ig.buffer).raw().toBuffer(), igOn = await sharp(on.ig.buffer).raw().toBuffer();
   check("watermark also on the Instagram image", !igOff.equals(igOn));
-  for (const style of ["badge", "url"]) {
+  for (const style of ["wordmark", "url"]) {
     const s = await MP.processImage(src, { watermark: true, watermarkStyle: style });
-    check("style '" + style + "' renders and differs from the wordmark", s.watermark === style && !s.variants.jpg.buffer.equals(on.variants.jpg.buffer));
+    check("style '" + style + "' still available and differs from the badge", s.watermark === style && !s.variants.jpg.buffer.equals(on.variants.jpg.buffer));
   }
-  check("an unknown style falls back to the default", (await MP.processImage(src, { watermark: true, watermarkStyle: "nope" })).watermark === "wordmark");
+  check("an unknown style falls back to the default (badge)", (await MP.processImage(src, { watermark: true, watermarkStyle: "nope" })).watermark === "badge");
   check("the 3 watermark PNGs exist with transparency", ["wordmark", "badge", "url"].every(n => fs.existsSync(path.join(REPO, "assets/watermark", n + ".png"))) &&
     (await Promise.all(["wordmark", "badge", "url"].map(n => sharp(path.join(REPO, "assets/watermark", n + ".png")).metadata()))).every(m => m.hasAlpha));
 

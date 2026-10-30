@@ -324,9 +324,9 @@ async function callGemini(op, parts, schema, opts) {
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ parts: parts }],
-          generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: 0.1 }
+          generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature: (opts && opts.temperature != null) ? opts.temperature : 0.1 }
         }),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
+        signal: AbortSignal.timeout((opts && opts.timeoutMs) || GEMINI_TIMEOUT_MS)
       });
     } catch (err) {
       outcome = "ai_busy(network)";
@@ -356,7 +356,7 @@ async function callGemini(op, parts, schema, opts) {
       throw new QuoteExtractError("ai_failed", "Gemini response was not valid JSON");
     }
   } finally {
-    console.log("[quote-extract] op=" + op + " ms=" + (Date.now() - t0) + " outcome=" + outcome);
+    console.log("[" + ((opts && opts.logTag) || "quote-extract") + "] op=" + op + " ms=" + (Date.now() - t0) + " outcome=" + outcome);
   }
 }
 
@@ -586,6 +586,8 @@ module.exports = {
   shortenIfTooLong: ensureFits,
   shortenDescription: shortenDescription,
   GEMINI_MODEL: GEMINI_MODEL,
+  // the shared Gemini call (also used by api/_media-ai.js): same model, key, timeout, busy detection
+  callGemini: callGemini,
   // exported for tests
   _internal: { stripPhones: stripPhones, parseAmount: parseAmount, verifyStatedTotal: verifyStatedTotal, buildDraft: buildDraft }
 };

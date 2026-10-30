@@ -157,8 +157,8 @@ function gpsEntries(buf) {
   const pub = ups.filter(u => u.bucket === "project-media").map(u => u.path.split("/").pop()).sort();
   check("public project-media: w480/w960/w1600 .webp + w1600.jpg + ig.jpg", JSON.stringify(pub) === JSON.stringify(["ig.jpg", "w1600.jpg", "w1600.webp", "w480.webp", "w960.webp"]), pub.join(","));
   check("public files are cached for a year (immutable paths include the media id)", ups.filter(u => u.bucket === "project-media").every(u => u.cache === "31536000" && u.path.startsWith(P1 + "/" + row.id + "/")));
-  check("variants in the row: paths + sizes, IG 1080×1350, watermark 'wordmark' (project watermark on)", row.variants.ig.width === 1080 && row.variants.ig.height === 1350 &&
-    row.variants.w1600.path === P1 + "/" + row.id + "/w1600.webp" && row.variants.watermark === "wordmark");
+  check("variants in the row: paths + sizes, IG 1080×1350, watermark 'badge' (project watermark on)", row.variants.ig.width === 1080 && row.variants.ig.height === 1350 &&
+    row.variants.w1600.path === P1 + "/" + row.id + "/w1600.webp" && row.variants.watermark === "badge");
   const stored = store["project-originals/" + P1 + "/" + row.id + ".jpg"].buf;
   const sm = await sharp(stored).metadata();
   check("the stored original has NO EXIF/GPS (the upload had a GPS block)", gpsEntries(photo) > 0 && !sm.exif && stored.indexOf(Buffer.from("SECRET-CAM")) === -1 && gpsEntries(stored) === -1);
