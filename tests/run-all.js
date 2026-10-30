@@ -4,8 +4,8 @@
 // All suites are OFFLINE: Telegram, Supabase, Gemini and the PDF renderer are mocked (the SQL
 // suite runs the migration files in PGlite, an in-process Postgres). Nothing touches the live
 // project and no secrets are needed.
-//   - panel-quotes.test.js drives admin.html in Chrome via playwright-core; set CHROME_PATH if
-//     Chrome isn't at the default Windows location, or SKIP_BROWSER=1 to skip it.
+//   - panel-*.test.js drive admin.html in Chrome via playwright-core; set CHROME_PATH if
+//     Chrome isn't at the default Windows location, or SKIP_BROWSER=1 to skip them.
 // Not in here on purpose (they call real services): the live Gemini cases (bot-quotes with
 // LIVE=1) and the local render-quote-pdf check against a real quote.
 "use strict";
@@ -20,7 +20,7 @@ let failed = 0;
 let total = 0;
 
 for (const f of files) {
-  if (f === "panel-quotes.test.js" && process.env.SKIP_BROWSER === "1") {
+  if (/^panel-/.test(f) && process.env.SKIP_BROWSER === "1") {
     console.log("SKIP " + f + " (SKIP_BROWSER=1)");
     continue;
   }

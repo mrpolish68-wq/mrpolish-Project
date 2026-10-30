@@ -43,6 +43,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha384-JcnsjUPPylna1s1fvi1u12X5qjY5OL56iySh75FdtrwhO/SWXgMjoVqcKyIIWOLk" crossorigin="anonymous"></script>
   <!-- Shared quote template (WO_CSS + buildDoc + logo): the same file the server PDF renderer uses -->
   <script src="shared/quote-template.js"></script>
+  <script src="shared/burst-schedule.js"></script>
 
   <!-- Business expenses accountant export: ExcelJS builds the .xlsx client-side (supports embedding the logo image, unlike SheetJS's free build) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js" integrity="sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz" crossorigin="anonymous"></script>
@@ -610,6 +611,19 @@
     .cq-pin-toggle input { accent-color:var(--gold-600); width:17px; height:17px; flex-shrink:0; }
     .cq-pin-toggle-note { font-weight:400; color:var(--ink-500); font-size:.78rem; }
     .cq-modal-actions { display:flex; gap:10px; flex-wrap:wrap; margin-block-start:6px; }
+
+    /* Burst-guard dialogs (past date on Approve / bulk spread) */
+    .cq-guard-dialog--wide { width:min(760px,100%); }
+    .cq-guard-text { font-size:1rem; font-weight:600; color:var(--char-900); line-height:1.6; margin-block-end:8px; }
+    .cq-guard-sub { font-size:.84rem; color:var(--ink-600, var(--ink-700)); line-height:1.6; margin-block-end:12px; }
+    .cq-guard-picker { margin-block-start:16px; padding-block-start:14px; border-block-start:1px solid var(--marble-200); }
+    .cq-guard-error { color:oklch(0.5 0.18 25); font-size:.85rem; font-weight:600; margin-block-end:10px; }
+    .cq-spread-wrap { overflow-x:auto; margin-block-end:12px; border:1px solid var(--marble-200); border-radius:10px; }
+    .cq-spread-table { width:100%; border-collapse:collapse; font-size:.86rem; }
+    .cq-spread-table th, .cq-spread-table td { padding:8px 10px; text-align:start; border-block-end:1px solid var(--marble-100); white-space:nowrap; }
+    .cq-spread-table th { background:var(--marble-50); font-weight:700; color:var(--char-800); position:sticky; inset-block-start:0; }
+    .cq-spread-table td.cq-spread-title { white-space:normal; min-width:180px; }
+    .cq-spread-table tr.cq-spread-newday td { border-block-start:2px solid var(--marble-200); }
 
     /* Pin reminder — shown on a published/scheduled card whose pin_requested is still
        unconfirmed. Deliberately gold/attention-grabbing (not a status badge, not an error)
@@ -1242,6 +1256,58 @@
         <button class="btn btn-navy btn-sm" id="cqModalSave">💾 שמירת שינויים</button>
         <button class="btn btn-shimmer btn-sm" id="cqModalApprove">✅ אשר ותזמן</button>
         <button class="btn btn-navy btn-sm" id="cqModalReject">✋ דחה</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Burst guard: approving a post whose date already passed (handoff §33) -->
+  <div class="cq-modal" id="cqPastModal" hidden>
+    <div class="cq-modal__overlay" data-past-close></div>
+    <div class="cq-modal__dialog cq-guard-dialog" role="dialog" aria-modal="true" aria-labelledby="cqPastTitle" aria-describedby="cqPastText">
+      <button type="button" class="cq-modal__close" data-past-close aria-label="סגירה">&times;</button>
+      <h3 class="cq-modal__title" id="cqPastTitle">⏰ התאריך כבר עבר</h3>
+      <p class="cq-guard-text" id="cqPastText">התאריך של הפוסט הזה כבר עבר. לפרסם עכשיו, או לקבוע מועד חדש?</p>
+      <p class="cq-guard-sub" id="cqPastPostTitle"></p>
+      <div class="cq-modal-actions">
+        <button type="button" class="btn btn-shimmer btn-sm" id="cqPastNow">🚀 לפרסם עכשיו</button>
+        <button type="button" class="btn btn-navy btn-sm" id="cqPastPick">🗓️ לבחור מועד</button>
+        <button type="button" class="btn btn-navy btn-sm" data-past-close>ביטול</button>
+      </div>
+      <div class="cq-guard-picker" id="cqPastPicker" hidden>
+        <div class="cq-modal-row">
+          <div class="cq-modal-field">
+            <label for="cqPastDate">תאריך</label>
+            <input type="date" id="cqPastDate" />
+          </div>
+          <div class="cq-modal-field">
+            <label for="cqPastTime">שעה (שעון ישראל)</label>
+            <input type="time" id="cqPastTime" step="300" />
+          </div>
+        </div>
+        <p class="cq-guard-error" id="cqPastError" role="alert" hidden></p>
+        <button type="button" class="btn btn-shimmer btn-sm" id="cqPastConfirm">✅ אשר במועד הזה</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Burst guard: bulk Approve with past-dated posts → spread them over future slots -->
+  <div class="cq-modal" id="cqSpreadModal" hidden>
+    <div class="cq-modal__overlay" data-spread-close></div>
+    <div class="cq-modal__dialog cq-guard-dialog cq-guard-dialog--wide" role="dialog" aria-modal="true" aria-labelledby="cqSpreadTitle" aria-describedby="cqSpreadText">
+      <button type="button" class="cq-modal__close" data-spread-close aria-label="סגירה">&times;</button>
+      <h3 class="cq-modal__title" id="cqSpreadTitle">🗓️ פיזור פוסטים שהתאריך שלהם עבר</h3>
+      <p class="cq-guard-text" id="cqSpreadText"></p>
+      <p class="cq-guard-sub">עד 3 ביום: 10:00, 14:00, 19:00 (שישי 10:00 ו-14:00 בלבד, שבת 19:00 בלבד) · מהישן לחדש · בלי שני רילסים ברצף באותו יום.</p>
+      <div class="cq-spread-wrap">
+        <table class="cq-spread-table">
+          <thead><tr><th scope="col">תאריך</th><th scope="col">יום</th><th scope="col">שעה</th><th scope="col">פוסט</th><th scope="col">סוג</th><th scope="col">יפורסם ב</th></tr></thead>
+          <tbody id="cqSpreadBody"></tbody>
+        </table>
+      </div>
+      <p class="cq-guard-sub" id="cqSpreadFuture" hidden></p>
+      <div class="cq-modal-actions">
+        <button type="button" class="btn btn-shimmer btn-sm" id="cqSpreadApprove">✅ אשר ותזמן</button>
+        <button type="button" class="btn btn-navy btn-sm" data-spread-close>ביטול</button>
       </div>
     </div>
   </div>
@@ -4085,29 +4151,30 @@
 
         function clearSelection() { selectedIds = {}; syncSelectionUI(); }
 
+        // Burst guard (handoff §33): bulk Approve never publishes anything immediately. Past-dated
+        // rows are first spread over future slots (dialog with a preview table); future-dated rows
+        // keep their dates. scheduled_for is written FIRST, then status='approved' only for rows
+        // whose date is in the future, and publish-now is never called (nothing here is due) —
+        // the cron/GitHub runs publish each row when its slot arrives.
         function bulkApprove() {
           var ids = Object.keys(selectedIds);
           if (!ids.length) return;
-          sb.from("content_queue")
-            .update({ status: "approved", approved_at: new Date().toISOString() })
-            .in("id", ids)
-            .select()
-            .then(function (res) {
-              if (res.error) { alert("שגיאה באישור התוכן שנבחר. נסו שוב."); return; }
-              (res.data || []).forEach(function (updated) {
-                allContent = allContent.map(function (r) { return r.id === updated.id ? updated : r; });
-              });
-              clearSelection();
-              renderAll();
-              (res.data || []).forEach(function (updated) { triggerRealtimePublish(updated.id); });
-            });
+          var rows = ids.map(findById).filter(function (r) { return r && (r.status === "pending_approval" || r.status === "failed"); });
+          if (!rows.length) { alert("אין בבחירה פוסטים שממתינים לאישור."); return; }
+          var past = rows.filter(function (r) { return BS.isPast(r); });
+          var future = rows.filter(function (r) { return !BS.isPast(r); });
+          if (!past.length) {
+            approveFutureOnly(future.map(function (r) { return r.id; })).then(function () { clearSelection(); renderAll(); });
+            return;
+          }
+          openSpreadDialog(past, future);
         }
         function bulkReject() {
           var ids = Object.keys(selectedIds);
           if (!ids.length) return;
           if (!confirm("לדחות את " + ids.length + " הפוסטים שנבחרו? הם לא יפורסמו.")) return;
           sb.from("content_queue")
-            .update({ status: "rejected" })
+            .update({ status: "rejected", rejected_at: new Date().toISOString() })
             .in("id", ids)
             .select()
             .then(function (res) {
@@ -4326,10 +4393,183 @@
           });
         }
         function approve(id) {
+          var row = findById(id);
+          if (row && BS.isPast(row)) { openPastDialog(id); return; } // burst guard: ask first
+          approveAndPublishNow(id);
+        }
+        function approveAndPublishNow(id) {
           updateRow(id, { status: "approved", approved_at: new Date().toISOString() }).then(function (updated) {
             if (updated) triggerRealtimePublish(id);
           });
         }
+
+        /* ---------- Burst guard dialogs (handoff §33) ---------- */
+        var BS = window.MrpBurstSchedule;
+        var pastModal = document.getElementById("cqPastModal");
+        var pastPostTitle = document.getElementById("cqPastPostTitle");
+        var pastNowBtn = document.getElementById("cqPastNow");
+        var pastPickBtn = document.getElementById("cqPastPick");
+        var pastPicker = document.getElementById("cqPastPicker");
+        var pastDate = document.getElementById("cqPastDate");
+        var pastTime = document.getElementById("cqPastTime");
+        var pastError = document.getElementById("cqPastError");
+        var pastConfirmBtn = document.getElementById("cqPastConfirm");
+        var spreadModal = document.getElementById("cqSpreadModal");
+        var spreadText = document.getElementById("cqSpreadText");
+        var spreadBody = document.getElementById("cqSpreadBody");
+        var spreadFuture = document.getElementById("cqSpreadFuture");
+        var spreadApproveBtn = document.getElementById("cqSpreadApprove");
+        var pastId = null;
+        var spreadState = null; // { plan, future }
+        var guardLastFocus = null;
+
+        function replaceLocal(updated) {
+          allContent = allContent.map(function (r) { return r.id === updated.id ? updated : r; });
+        }
+        // Rows already waiting to publish (the spread starts after the latest of these).
+        function queuedRows(excludeIds) {
+          return allContent.filter(function (r) {
+            return (r.status === "approved" || r.status === "scheduled") && !(excludeIds && excludeIds[r.id]);
+          });
+        }
+        function platformsLabel(r) {
+          var fb = (r.platform === "facebook" || r.platform === "both") && !r.fb_post_id;
+          var ig = (r.platform === "instagram" || r.platform === "both") && !r.ig_post_id;
+          return fb && ig ? "פייסבוק + אינסטגרם" : fb ? "פייסבוק" : ig ? "אינסטגרם" : "—";
+        }
+        function openGuard(el, focusEl) {
+          guardLastFocus = document.activeElement;
+          el.hidden = false;
+          document.body.style.overflow = "hidden";
+          if (focusEl) focusEl.focus();
+        }
+        function closeGuard(el) {
+          el.hidden = true;
+          document.body.style.overflow = "";
+          if (guardLastFocus && guardLastFocus.focus) guardLastFocus.focus();
+        }
+        // status='approved' only for rows whose date is still in the future (server-side filter),
+        // so a past-dated row can never be approved by this path.
+        function approveFutureOnly(ids) {
+          if (!ids.length) return Promise.resolve([]);
+          return sb.from("content_queue")
+            .update({ status: "approved", approved_at: new Date().toISOString() })
+            .in("id", ids)
+            .gt("scheduled_for", new Date().toISOString())
+            .select()
+            .then(function (res) {
+              if (res.error) { alert("שגיאה באישור התוכן שנבחר. נסו שוב."); return null; }
+              (res.data || []).forEach(replaceLocal);
+              renderAll();
+              return res.data || [];
+            });
+        }
+
+        function openPastDialog(id) {
+          var row = findById(id);
+          if (!row) return;
+          pastId = id;
+          pastPostTitle.textContent = "📝 " + (row.title || "פוסט ללא כותרת") + " · מתוכנן ל-" + fmtDateTime(row.scheduled_for);
+          pastPicker.hidden = true;
+          pastError.hidden = true;
+          var exclude = {}; exclude[id] = true;
+          var slot = BS.nextFreeSlot({ existing: queuedRows(exclude) });
+          var p = israelParts(slot.iso);
+          pastDate.value = p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
+          pastTime.value = pad2(p.h) + ":" + pad2(p.min);
+          openGuard(pastModal, pastNowBtn);
+        }
+        pastNowBtn.addEventListener("click", function () {
+          var id = pastId;
+          closeGuard(pastModal);
+          if (id) approveAndPublishNow(id); // the server still limits how many go live per 10 min
+        });
+        pastPickBtn.addEventListener("click", function () {
+          pastPicker.hidden = false;
+          pastDate.focus();
+        });
+        pastConfirmBtn.addEventListener("click", function () {
+          var id = pastId;
+          var dp = (pastDate.value || "").split("-"), tp = (pastTime.value || "").split(":");
+          var iso = dp.length === 3 && tp.length >= 2 ? israelWallTimeToUTCISO(+dp[0], +dp[1], +dp[2], +tp[0], +tp[1]) : null;
+          if (!iso || isNaN(new Date(iso).getTime()) || new Date(iso).getTime() <= Date.now() + 60 * 1000) {
+            pastError.textContent = "יש לבחור תאריך ושעה עתידיים.";
+            pastError.hidden = false;
+            return;
+          }
+          closeGuard(pastModal);
+          // scheduled_for first, then approve (future only); no publish-now: the row isn't due.
+          updateRow(id, { scheduled_for: iso }).then(function (updated) {
+            if (updated) approveFutureOnly([id]);
+          });
+        });
+        Array.prototype.forEach.call(pastModal.querySelectorAll("[data-past-close]"), function (el) {
+          el.addEventListener("click", function () { closeGuard(pastModal); });
+        });
+
+        function openSpreadDialog(past, future) {
+          var exclude = {};
+          past.concat(future).forEach(function (r) { exclude[r.id] = true; });
+          var plan = BS.planSpread(past, { existing: queuedRows(exclude) });
+          spreadState = { plan: plan, future: future };
+          spreadText.textContent = past.length + " מהפוסטים שנבחרו מתוכננים לתאריך שכבר עבר. במקום לפרסם את כולם עכשיו, הם יפוזרו כך:";
+          var lastDay = null;
+          spreadBody.innerHTML = plan.map(function (item) {
+            var newDay = item.day !== lastDay; lastDay = item.day;
+            var r = item.row;
+            return '<tr' + (newDay ? ' class="cq-spread-newday"' : "") + '>' +
+              "<td>" + esc(item.dateLabel) + "</td><td>" + esc(item.dayLabel) + "</td><td>" + esc(item.timeLabel) + "</td>" +
+              '<td class="cq-spread-title">' + esc(r.title || "פוסט ללא כותרת") + "</td>" +
+              "<td>" + esc(CATEGORY_LABELS[r.content_category] || r.media_type) + "</td>" +
+              "<td>" + esc(platformsLabel(r)) + "</td></tr>";
+          }).join("");
+          spreadFuture.hidden = !future.length;
+          spreadFuture.textContent = future.length ? "עוד " + future.length + " פוסטים שנבחרו מתוכננים לתאריך עתידי — הם יאושרו ויישארו בתאריך שלהם." : "";
+          spreadApproveBtn.disabled = false;
+          openGuard(spreadModal, spreadApproveBtn);
+        }
+        spreadApproveBtn.addEventListener("click", function () {
+          if (!spreadState) return;
+          var st = spreadState;
+          spreadApproveBtn.disabled = true;
+          // 1) scheduled_for for every spread row, one by one; stop at the first failure.
+          var chain = Promise.resolve(true);
+          st.plan.forEach(function (item) {
+            chain = chain.then(function (ok) {
+              if (!ok) return false;
+              return sb.from("content_queue").update({ scheduled_for: item.iso }).eq("id", item.row.id).select().then(function (res) {
+                if (res.error || !res.data || !res.data[0]) return false;
+                replaceLocal(res.data[0]);
+                return true;
+              }, function () { return false; });
+            });
+          });
+          chain.then(function (ok) {
+            if (!ok) {
+              closeGuard(spreadModal);
+              spreadState = null;
+              renderAll();
+              alert("שגיאה בעדכון המועדים. אף פוסט לא אושר — נסו שוב.");
+              return;
+            }
+            // 2) only then approve (future dates only — all of them now).
+            var ids = st.plan.map(function (i) { return i.row.id; }).concat(st.future.map(function (r) { return r.id; }));
+            return approveFutureOnly(ids).then(function () {
+              closeGuard(spreadModal);
+              spreadState = null;
+              clearSelection();
+              renderAll();
+            });
+          });
+        });
+        Array.prototype.forEach.call(spreadModal.querySelectorAll("[data-spread-close]"), function (el) {
+          el.addEventListener("click", function () { spreadState = null; closeGuard(spreadModal); });
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key !== "Escape") return;
+          if (!pastModal.hidden) closeGuard(pastModal);
+          if (!spreadModal.hidden) { spreadState = null; closeGuard(spreadModal); }
+        });
         function reject(id) {
           if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
           updateRow(id, { status: "rejected", rejected_at: new Date().toISOString() });
@@ -4575,6 +4815,12 @@
           var idToPublish = activeId; // closeModal() clears activeId, so capture it first
           var scheduled = scheduledFromModal();
           if (!scheduled) { alert("תאריך/שעה לא תקינים."); return; }
+          if (new Date(scheduled).getTime() <= Date.now()) {
+            // Burst guard: save the edits (not the status), then ask "publish now or pick a date?".
+            updateRow(idToPublish, { caption: modalCaption.value, scheduled_for: scheduled, pin_requested: modalPinToggle.checked })
+              .then(function (updated) { closeModal(); if (updated) openPastDialog(idToPublish); });
+            return;
+          }
           updateRow(activeId, {
             caption: modalCaption.value, scheduled_for: scheduled,
             status: "approved", approved_at: new Date().toISOString(),
@@ -4587,7 +4833,7 @@
         modalRejectBtn.addEventListener("click", function () {
           if (!activeId) return;
           if (!confirm("לדחות את התוכן הזה? הוא לא יפורסם.")) return;
-          updateRow(activeId, { status: "rejected" }).then(function () { closeModal(); });
+          updateRow(activeId, { status: "rejected", rejected_at: new Date().toISOString() }).then(function () { closeModal(); });
         });
 
         /* ---------- Shared fetch (once, whichever tab opens first) ---------- */
