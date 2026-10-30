@@ -68,6 +68,7 @@ const { consumeQuota, getRemaining, LIMITS } = require("./_quota.js");
 const QX = require("./_quote-extract.js");
 const { estimateDescriptionFits } = require("../shared/quote-template.js");
 const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES, CATEGORIES } = require("./parse-receipt.js");
+const { telegramConfig } = require("./_telegram.js");
 
 // Constant-time comparison for the webhook secret — a plain !== short-circuits on the
 // first mismatched byte, which is the textbook timing side-channel for secret
@@ -398,29 +399,9 @@ async function claimPendingRow(id) {
 // Which bot this deployment serves
 // ---------------------------------------------------------------------------
 
-// Production serves Miri's bot from TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET /
-// TELEGRAM_ALLOWED_CHATS and ignores the TEST_ vars entirely. Every other environment
-// (branch previews, local runs) serves the separate TEST bot from TELEGRAM_TEST_BOT_TOKEN /
-// TELEGRAM_TEST_WEBHOOK_SECRET / TELEGRAM_TEST_ALLOWED_CHATS (Preview-only vars, see
-// tools/set-test-webhook.js) and NEVER falls back to the production values: a preview with a
-// missing TEST_ var processes nothing (see the handler). Values are never logged.
-function telegramConfig() {
-  var env = process.env;
-  if (env.VERCEL_ENV === "production") {
-    return {
-      test: false,
-      botToken: env.TELEGRAM_BOT_TOKEN || "",
-      webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || "",
-      allowedChats: env.TELEGRAM_ALLOWED_CHATS || ""
-    };
-  }
-  return {
-    test: true,
-    botToken: env.TELEGRAM_TEST_BOT_TOKEN || "",
-    webhookSecret: env.TELEGRAM_TEST_WEBHOOK_SECRET || "",
-    allowedChats: env.TELEGRAM_TEST_ALLOWED_CHATS || ""
-  };
-}
+// telegramConfig() lives in api/_telegram.js (shared with the publish notifications): production
+// = TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET / TELEGRAM_ALLOWED_CHATS; everything else = the
+// TELEGRAM_TEST_* vars, never falling back to production. Values are never logged.
 
 // ---------------------------------------------------------------------------
 // Telegram Bot API helpers

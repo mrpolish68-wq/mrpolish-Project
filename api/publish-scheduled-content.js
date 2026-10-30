@@ -9,6 +9,9 @@
 // allowed to call it* (CRON_SECRET here vs. a real Supabase session
 // there) differ.
 //
+// Every publishOne() result (and a scheduled post confirmed live) also sends a fire-and-forget
+// Telegram notification — see api/_publish-notify.js for the rules and the dedupe reasoning.
+//
 // Auth: protected by CRON_SECRET (Vercel automatically sends
 // "Authorization: Bearer {CRON_SECRET}" when it triggers a configured
 // cron job — see vercel.json). Rejects any request without a matching
@@ -33,6 +36,9 @@
 // in which case the row is simply left as-is and the daily cron here
 // picks it up as the fallback (see that file's header).
 "use strict";
+
+const crypto = require("crypto");
+const notify = require("./_publish-notify.js");
 
 const GRAPH_VERSION = "v20.0";
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -119,6 +125,20 @@ async function updateRow(id, patch) {
     body: JSON.stringify(patch)
   });
   if (!res.ok) throw new Error("Supabase update failed: " + res.status);
+}
+
+// PATCH only if the row still has the expected status; true if this caller's update matched.
+async function updateRowIfStatus(id, expectedStatus, patch) {
+  var url = SUPABASE_URL + "/rest/v1/content_queue?id=eq." + encodeURIComponent(id) +
+    "&status=eq." + encodeURIComponent(expectedStatus);
+  var res = await fetch(url, {
+    method: "PATCH",
+    headers: Object.assign({ Prefer: "return=representation" }, supabaseHeaders()),
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) throw new Error("Supabase update failed: " + res.status);
+  var rows = await res.json();
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 // Atomically claim an 'approved' row so exactly one publisher acts on it, even when a manual
@@ -340,8 +360,16 @@ async function publishInstagram(row, token, igUserId) {
 }
 
 // The one function both entry points (cron batch loop + the real-time single-row trigger)
-// call. ctx: { token, pageId, igUserId, triggerSource: 'cron' | 'manual' }.
+// call. ctx: { token, pageId, igUserId, triggerSource: 'cron' | 'manual', autoRetry?: true }.
+// After the result is known it starts a Telegram notification (api/_publish-notify.js) without
+// awaiting it, so a slow or broken Telegram can never delay or fail a publish.
 async function publishOne(row, ctx) {
+  var result = await publishOneCore(row, ctx);
+  notify.notifyPublishResult(row, result, Object.assign({}, ctx, { maxAttempts: MAX_AUTO_RETRY_ATTEMPTS }));
+  return result;
+}
+
+async function publishOneCore(row, ctx) {
   // Fail closed rather than silently mis-publish: content_category is the dashboard's
   // marketing classification (what Ori picked when drafting the row) while media_type is
   // what actually selects the Graph API endpoint (see file header + handoff.md). A Story
@@ -447,7 +475,8 @@ async function publishOne(row, ctx) {
     } catch (updateErr) {
       error += " (also failed to record error: " + updateErr.message + ")";
     }
-    return { id: row.id, ok: false, error: error };
+    // fbPostId/igPostId tell the notification which side (if any) did go out in this attempt.
+    return { id: row.id, ok: false, error: error, fbPostId: fbPostId, igPostId: igPostId };
   }
 }
 
@@ -469,10 +498,13 @@ async function checkScheduledStatus(row, ctx) {
     if (data.error) throw new Error("Facebook: " + data.error.message);
 
     if (data.is_published) {
-      await updateRow(row.id, {
+      // Conditional on status='scheduled': if the cron and the panel's "בדיקת סטטוס" button both
+      // see it live at once, only the caller whose PATCH matched sends the ✅ notification.
+      var flipped = await updateRowIfStatus(row.id, "scheduled", {
         status: "published", published_at: new Date().toISOString(),
         publish_error: null, last_publish_attempt_at: new Date().toISOString()
       });
+      if (flipped) notify.notifyScheduledLive(row, ctx);
       return { id: row.id, ok: true, nowPublished: true };
     }
     // Still genuinely scheduled, not published yet - not an error, just not due (or Meta
@@ -511,7 +543,50 @@ async function checkPinStatus(row, ctx) {
   }
 }
 
+function safeEqual(a, b) {
+  var bufA = Buffer.from(String(a || ""), "utf8");
+  var bufB = Buffer.from(String(b || ""), "utf8");
+  if (!bufA.length || bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// Preview-only test hook: ?notify_sample=1 sends the three message shapes (success, partial with a
+// retry left, final failure) to the TEST bot, using fake titles and the Page's public profile
+// links. 404 in production; elsewhere it needs X-Internal-Secret. Touches no row and calls no Meta.
+async function handleNotifySample(req, res) {
+  if (process.env.VERCEL_ENV === "production") {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  if (!process.env.INTERNAL_API_SECRET || !safeEqual(req.headers["x-internal-secret"], process.env.INTERNAL_API_SECRET)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  var stamp = Date.now();
+  function sampleRow(n, title, mediaType) {
+    return { id: "sample-" + stamp + "-" + n, title: title, platform: "both", media_type: mediaType };
+  }
+  var FB = "https://www.facebook.com/margalitlitushim", IG = "https://www.instagram.com/mr.polish.floors/";
+  var plans = [
+    { key: "sample:" + stamp + ":1", kind: "published", row: sampleRow(1, "[בדיקה] רילס: פרויקט בזלת שחורה, לפני ואחרי", "reel"), attempt: 2,
+      fb: { state: "now", url: FB }, ig: { state: "now", permalink: IG } },
+    { key: "sample:" + stamp + ":2", kind: "published", row: sampleRow(2, "[בדיקה] פוסט: קייס סטאדי, בזלת שחורה", "image"), attempt: 2,
+      fb: { state: "earlier", url: FB }, ig: { state: "now", permalink: IG } },
+    { key: "sample:" + stamp + ":3", kind: "failed_retry", row: sampleRow(3, "[בדיקה] רילס: פרויקט גרנוליט", "reel"), attempt: 2,
+      fb: { state: "earlier", url: FB }, ig: { state: "missing" }, reason: notify.friendlyReason("did not finish processing within the poll window") },
+    { key: "sample:" + stamp + ":4", kind: "failed_final", row: sampleRow(4, "[בדיקה] רילס: פרויקט בומנייט", "reel"), attempt: 3,
+      fb: { state: "missing" }, ig: { state: "missing" }, reason: notify.friendlyReason("Application request limit reached") }
+  ];
+  var sent = 0;
+  for (var i = 0; i < plans.length; i++) sent += await notify.deliver(plans[i], {});
+  res.status(200).json({ ok: true, messages: plans.length, delivered: sent });
+}
+
 module.exports = async function handler(req, res) {
+  if (req.query && req.query.notify_sample != null) {
+    await handleNotifySample(req, res);
+    return;
+  }
   var cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     var auth = req.headers.authorization || "";
@@ -570,7 +645,8 @@ module.exports = async function handler(req, res) {
       continue;
     }
     var freshRow = await fetchRowById(candidate.id);
-    var retryResult = await publishOne(freshRow, ctx);
+    // autoRetry: a failure here only notifies if it was the last allowed attempt.
+    var retryResult = await publishOne(freshRow, Object.assign({}, ctx, { autoRetry: true }));
     console.log("[cron] auto-retry row=" + candidate.id + " " + JSON.stringify(retryResult));
     retryResults.push(retryResult);
   }
