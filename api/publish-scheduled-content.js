@@ -411,6 +411,19 @@ async function publishOneCore(row, ctx) {
     return { id: row.id, ok: false, error: mismatchErr };
   }
 
+  // Carousels (media_type='carousel', the panel's "➕ פוסט חדש") are publishable only once the
+  // multi-photo flow ships (media-projects plan, Phase 12). Until then: fail closed, never fall
+  // through to the single video branch below with the first item only.
+  if (row.media_type === "carousel") {
+    var carouselErr = "Carousel publishing is not available yet — the row was not sent to Meta.";
+    await updateRow(row.id, {
+      status: "failed", publish_error: carouselErr,
+      trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
+      last_publish_attempt_at: new Date().toISOString()
+    });
+    return { id: row.id, ok: false, error: carouselErr };
+  }
+
   var now = new Date();
   var scheduledFor = new Date(row.scheduled_for);
   var isFuture = scheduledFor.getTime() - now.getTime() > FB_MIN_SCHEDULE_MS;

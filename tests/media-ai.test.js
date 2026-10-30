@@ -20,7 +20,8 @@ let requests = [], reply = null, status = 200, quotaCalls = 0, quotaMode = "ok";
 const fakeFetch = async (url, init) => {
   requests.push({ url, body: JSON.parse(init.body) });
   if (status !== 200) return { ok: false, status, json: async () => (status === 400 ? { error: { message: "Your project has exceeded its monthly spending cap" } } : { error: { status: status === 429 ? "RESOURCE_EXHAUSTED" : "INTERNAL" } }) };
-  return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] }) };
+  const r0 = Array.isArray(reply) ? reply.shift() : reply;   // an array = one reply per call, in order
+  return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(r0) }] } }] }) };
 };
 const quota = async () => { quotaCalls++; if (quotaMode === "down") throw new Error("db down"); return quotaMode === "empty" ? { ok: false, remaining: 0 } : { ok: true, remaining: 29 }; };
 const OPTS = { fetch: fakeFetch, consumeQuota: quota };
@@ -141,7 +142,10 @@ function base(images, extra) {
   check("live P3 shape: two 'after's, nothing to fill → order + needs_review", r.pairing_source === "order" && r.needs_review === true);
   reset(base([img("before", 1), img("after", 1)]));
   r = await AI.analyzeProject({ images: await imgs(2) }, OPTS);
-  check("confident AI pairs → needs_review false", r.pairing_source === "ai" && r.needs_review === false);
+  check("confident AI pairs (one pair) → needs_review false", r.pairing_source === "ai" && r.needs_review === false);
+  reset(base([img("before", 1), img("after", 1), img("before", 2), img("after", 2)]));
+  r = await AI.analyzeProject({ images: await imgs(4) }, OPTS);
+  check("confident AI pairs but 2+ pairs → needs_review (live: 6 look-alike photos mispaired at 0.9)", r.pairing_source === "ai" && r.needs_review === true);
 
   // ---- privacy flags ----
   reset(base([img("before", 1, { privacy_flags: [{ type: "license_plate", note: "car plate 12-345-67 visible" }, { type: "face", note: "a person at the door" }, { type: "bogus", note: "x" }] }), img("after", 1)]));
@@ -204,6 +208,56 @@ function base(images, extra) {
   check("…but not when the caption wasn't mentioned", !r.warnings.includes("caption_not_changed"));
   e = await errOf(AI.applyMediaCorrection(a0, { text: "  " }, OPTS));
   check("an empty correction → invalid_input", e && e.code === "invalid_input");
+
+  // ---- caption rules (owner, command 4) ----
+  const FREE = AI._internal.FREE_RE;
+  check("the CTA invites a check + a quote and never says free", AI.CTA_HE === "📞 לתיאום בדיקה והצעת מחיר: 052-9534540 (גם בוואטסאפ) · mr-polishes.com" && !FREE.test(AI.CTA_HE));
+  check("'free' detector: חינם / ללא עלות / בלי עלות / free; not 'free of scratches'", ["ייעוץ חינם", "בדיקה ללא עלות", "בלי עלות", "בחינם!", "a free quote", "no-cost visit"].every(t => FREE.test(t)) && !FREE.test("a floor free of scratches") && !FREE.test("ליטוש והברקה"));
+  reset(base([img("before", 1), img("after", 1)], {
+    caption_body_he: "שדרוג מטורף לסלון 🖤\nפרויקט אמיתי מהשטח, לא הדמיה. ליטוש והברקה של השיש עד ברק עמוק. מרחנו סילר הגנה לאורך זמן. בדיקה ללא עלות!",
+    title_he: "ייעוץ חינם לשיש", summary_en: "The marble was polished. A sealer now protects it.", service: "sealer",
+    hashtags: ["#ליטוש_שיש", "#סילר_לאבן", "#הגנה_לאבן", "#ייעוץ_חינם", "#שיש", "#לפני_ואחרי", "#מילוי_פוגות"] }));
+  r = await AI.analyzeProject({ images: await imgs(2), text: "ליטוש והברקה לשיש בסלון" }, OPTS);
+  check("'free' sentences are removed from the caption; a 'free' title is rejected", !FREE.test(r.caption_he) && r.title_he === null && r.warnings.some(w => /^title_he:free/.test(w)), r.caption_he);
+  check("unstated sealer: the sentence goes (HE + EN), so do #סילר / #הגנה tags and pads", !/סילר|הגנה/.test(r.caption_body_he) && !/seal|protect/i.test(r.summary_en || "") && !r.hashtags.some(t => /סילר|הגנה/.test(t)), r.caption_body_he + " | " + r.hashtags.join(" "));
+  check("unstated grout: #מילוי_פוגות dropped; 'free' hashtag dropped", !r.hashtags.some(t => /פוגות|חינם/.test(t)), r.hashtags.join(" "));
+  check("service 'sealer' that the user never said → not claimed (other) + a warning", r.service === "other" && r.warnings.includes("service:not_stated"));
+  check("slang removed (מטורף) and the stock opening removed; the facts stay", !/מטורף|פרויקט אמיתי מהשטח/.test(r.caption_body_he) && /שדרוג לסלון/.test(r.caption_body_he) && /ליטוש והברקה של השיש/.test(r.caption_body_he) && r.warnings.includes("caption:tone"), r.caption_body_he);
+  check("stated_claims empty when nothing gated was said", Array.isArray(r.stated_claims) && r.stated_claims.length === 0);
+  const prompt0 = requests[0].body.contents[0].parts[0].text;
+  check("the prompt carries the rules (2–3 sentences, varied opening, only stated work, never free, no slang)", /2–3 sentences/.test(prompt0) && /Vary the opening/.test(prompt0) && /ONLY the work the user stated/.test(prompt0) && /'ללא עלות'/.test(prompt0) && /מטורף/.test(prompt0));
+  reset(base([img("before", 1), img("after", 1)], { service: "sealer", caption_body_he: "אבן ירושלמית במרפסת קיבלה חיים חדשים ☀️\nניקוי, ליטוש וסילר הגנה שישמור עליה.", hashtags: ["#סילר", "#אבן_ירושלמית"] }));
+  r = await AI.analyzeProject({ images: await imgs(2), text: "ניקוי, ליטוש וסילר לאבן ירושלמית במרפסת" }, OPTS);
+  check("STATED sealer: the sentence, #סילר and the service are kept", /סילר/.test(r.caption_body_he) && r.hashtags.includes("#סילר") && r.service === "sealer" && r.stated_claims.includes("sealer"), r.caption_body_he);
+  reset(base([img("before", 1), img("after", 1)], { caption_body_he: "חזרנו לשיש הזה ✨\nמשפט שני. משפט שלישי. משפט רביעי. משפט חמישי." }));
+  r = await AI.analyzeProject({ images: await imgs(2) }, OPTS);
+  check("caption capped at 3 sentences (hook + 2)", r.caption_body_he === "חזרנו לשיש הזה ✨\nמשפט שני. משפט שלישי.", JSON.stringify(r.caption_body_he));
+  reset(base([img("before", 1), img("after", 1)], { caption_body_he: "השיש חזר לברק ✨\nליטוש מלא." }));
+  r = await AI.analyzeProject({ images: await imgs(2) }, Object.assign({ avoidOpenings: ["השיש חזר לברק! ✨\nעוד טקסט", "מדרגות שחזרו לחיים 📞 050-1112222"] }, OPTS));
+  const prompt1 = requests[0].body.contents[0].parts[0].text;
+  check("recent openings are sent (first lines only, phones stripped) and a repeat is flagged", /Recent posts opened like this/.test(prompt1) && /השיש חזר לברק/.test(prompt1) && !/עוד טקסט|1112222/.test(prompt1) && r.warnings.includes("opening_repeated"), r.warnings.join(","));
+
+  // ---- "shorter" must really shorten ----
+  const longBody = "רצפת השיש בסלון חזרה לברק המקורי שלה ✨\nליטשנו את כל השטח בשלבים, מהשחזה עדינה ועד הברקה סופית ואחידה בכל פינה. התוצאה היא משטח חלק, נקי ומבריק שמשקף את האור של החלון.";
+  const aLong = Object.assign(JSON.parse(JSON.stringify(a0)), { caption_body_he: longBody, stated_claims: [] });
+  const shortBody = "השיש בסלון חזר לברק ✨\nליטוש והברקה בכל השטח.";
+  reset([{ images: [], caption_body_he: shortBody }]);
+  r = await AI.applyMediaCorrection(aLong, { text: "תקצר את הכיתוב" }, OPTS);
+  check("'תקצר' → a really shorter caption on the first try (1 call, no warning)", r.caption_body_he === shortBody && quotaCalls === 1 && !r.warnings.includes("caption_not_changed") && !r.warnings.includes("caption_retried"));
+  reset([{ images: [], caption_body_he: longBody.replace("✨", "🌟") }, { caption_body_he: shortBody }]);
+  r = await AI.applyMediaCorrection(aLong, { text: "כיתוב קצר יותר בבקשה" }, OPTS);
+  check("not shorter → ONE focused retry with a length budget → accepted (caption_retried)", r.caption_body_he === shortBody && quotaCalls === 2 && requests.length === 2 &&
+    /AT MOST \d+ characters/.test(requests[1].body.contents[0].parts[0].text) && r.warnings.includes("caption_retried"), r.warnings.join(","));
+  check("…the retry's limit is ~60% of the old length", (requests[1].body.contents[0].parts[0].text.match(/AT MOST (\d+)/) || [])[1] == Math.floor(longBody.length * 0.6));
+  reset([{ images: [] }, { caption_body_he: longBody + " עוד משפט." }]);
+  r = await AI.applyMediaCorrection(aLong, { text: "תקצרו" }, OPTS);
+  check("still not shorter after the retry → old caption kept + caption_not_changed (no pretending)", r.caption_body_he === longBody && r.warnings.includes("caption_not_changed") && quotaCalls === 2);
+  reset([{ images: [], caption_body_he: "השיש בסלון ✨\nמרחנו סילר הגנה." }]);
+  r = await AI.applyMediaCorrection(aLong, { text: "תשכתב את הכיתוב" }, OPTS);
+  check("a correction may not add unstated work (the sealer sentence is dropped)", !/סילר/.test(r.caption_body_he || ""), r.caption_body_he);
+  reset([{ images: [], caption_body_he: "השיש בסלון ✨\nמרחנו סילר הגנה." }]);
+  r = await AI.applyMediaCorrection(Object.assign({}, aLong, { stated_claims: ["sealer"] }), { text: "תשכתב את הכיתוב" }, OPTS);
+  check("…but work stated in the original message stays allowed (stated_claims carried)", /סילר/.test(r.caption_body_he) && r.stated_claims.includes("sealer"));
 
   check("logs: op/timing/outcome only (no prompts, captions or keys)", logs.every(l => /^\[media-ai\] op=\w+ ms=\d+ outcome=/.test(l)) && !logs.some(l => /g-fake|כהן|שיש/.test(l)), logs.slice(0, 2).join(" | "));
   out("\n" + passed + "/" + total + " passed");

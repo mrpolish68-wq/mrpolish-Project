@@ -12,6 +12,7 @@ const read = (f) => fs.readFileSync(ROOT + f, "utf8");
 const PGNET_RE = /create extension if not exists pg_net with schema extensions;/;
 const SCHED = read("supabase-scheduler-pgcron.sql"), LEAD = read("supabase-lead-alert.sql"), MEDIA = read("supabase-media-projects.sql");
 const QUOTES = read("supabase-quotes-telegram.sql");
+const REALTIME = read("supabase-projects-realtime.sql");
 const runnable = (s) => s.replace(PGNET_RE, "-- (pg_net: provided by the stub)");
 const block = (s, start, end) => { const i = s.indexOf(start); const j = s.indexOf(end, i); return s.slice(i, j); };
 
@@ -228,10 +229,17 @@ await db.exec("insert into storage.objects (bucket_id, name) values ('project-or
 check("storage: anon can't list project-originals or content-media", (await as("anon", () => all("select name from storage.objects"))).length === 0);
 check("storage: authenticated can list project-originals (the panel's previews)", (await as("authenticated", () => all("select name from storage.objects where bucket_id='project-originals'"))).length === 1);
 
+// realtime (command 4): projects + project_media join the publication; idempotent
+await db.exec("create publication supabase_realtime");
+await db.exec("alter publication supabase_realtime add table public.quotes");
+await db.exec(REALTIME); await db.exec(REALTIME);
+const pubTables = (await all("select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1")).map(r => r.tablename);
+check("realtime: projects + project_media added, quotes kept, applied twice without error", JSON.stringify(pubTables) === JSON.stringify(["project_media", "projects", "quotes"]), pubTables.join(","));
+
 // files: status lines present
 check("files say their status (scheduler: SAFE NOW, lead alert: AT MERGE, schema: SAFE NOW)",
-  /STATUS: SAFE TO APPLY NOW/.test(SCHED) && /STATUS: APPLY AT MERGE/.test(LEAD) && /STATUS: SAFE TO APPLY NOW/.test(MEDIA));
-check("files have VERIFY + ROLLBACK sections", [SCHED, LEAD, MEDIA].every(s => /VERIFY/.test(s) && /ROLLBACK/.test(s)));
+  /STATUS: SAFE TO APPLY NOW/.test(SCHED) && /STATUS: APPLY AT MERGE/.test(LEAD) && /STATUS: SAFE TO APPLY NOW/.test(MEDIA) && /SAFE TO APPLY NOW/.test(REALTIME));
+check("files have VERIFY + ROLLBACK sections", [SCHED, LEAD, MEDIA, REALTIME].every(s => /VERIFY/.test(s) && /ROLLBACK/.test(s)));
 
 console.log("\n" + pass + "/" + (pass + fail) + " passed");
 process.exitCode = fail ? 1 : 0;

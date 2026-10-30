@@ -17,7 +17,11 @@
 //   - roles / services / flag types are enums, lengths are capped;
 //   - when the pairing confidence is low or the pairs don't make sense, pairing falls back to the
 //     file names (before/after/לפני/אחרי) or the upload order (1st = before, 2nd = after, …);
-//   - the call to action (phone 052-9534540 + WhatsApp) is appended by code, word for word.
+//   - the call to action (phone 052-9534540 + WhatsApp) is appended by code, word for word;
+//   - caption rules (owner, command 4): never "free" / "ללא עלות" / "חינם"; only work the user stated
+//     or that is plainly visible (no sealer / grout / crystal / anti-slip / crack-repair claims or
+//     hashtags unless stated); no slang ("מטורף" …); no stock opening ("פרויקט אמיתי מהשטח, לא
+//     הדמיה"); 2–3 sentences; a "shorter" correction must really shorten (checked, retried once).
 // Quota: one 'media_ai' unit per call (api/_quota.js); a 429 / spend-cap refusal → code 'ai_busy'.
 "use strict";
 
@@ -34,8 +38,10 @@ const AI_EDGE = 1024;
 const PAIRING_MIN_CONFIDENCE = 0.6;
 const ROLE_MIN_CONFIDENCE = 0.6;
 const GEMINI_VISION_TIMEOUT_MS = 55000;
-const LIMITS = { alt: 125, title: 70, summary: 420, caption: 900, note: 120, city: 40 };
-const CTA_HE = "📞 בדיקת התאמה ללא עלות - ייעוץ אישי מאורי: 052-9534540 (גם בוואטסאפ) · mr-polishes.com";
+const LIMITS = { alt: 125, title: 70, summary: 420, caption: 480, note: 120, city: 40 };
+const MAX_CAPTION_SENTENCES = 3;
+const SHORTER_RATIO = 0.8;        // a "shorter" caption must drop to ≤ 80% of the old length
+const CTA_HE = "📞 לתיאום בדיקה והצעת מחיר: 052-9534540 (גם בוואטסאפ) · mr-polishes.com";
 const SERVICE_HE = { floor_polish: "ליטוש מרצפות", crystal: "פוליש קריסטל", marble_stone: "ליטוש שיש ואבן", sealer: "סילר הגנה",
   concrete: "ליטוש בטון", bomanite: "חידוש בומנייט", stairs: "חידוש מדרגות", other: "ליטוש רצפות" };
 const SERVICE_TAGS = { floor_polish: ["#ליטוש_מרצפות", "#חידוש_ריצוף"], crystal: ["#פוליש_קריסטל", "#הברקת_רצפות"], marble_stone: ["#ליטוש_שיש", "#ליטוש_אבן"],
@@ -43,11 +49,16 @@ const SERVICE_TAGS = { floor_polish: ["#ליטוש_מרצפות", "#חידוש_�
 const BASE_TAGS = ["#מיסטר_פוליש", "#לפני_ואחרי", "#ליטוש_רצפות", "#רצפות", "#עיצוב_הבית", "#שיפוץ"];
 
 // The brand voice, learned (read-only) from the published content_queue captions, 2026-10-30.
+// Tightened by the owner (command 4): professional + warm, no slang, 2–3 sentences, a varied opening,
+// only the work that was stated or is plainly visible, never "free".
 const BRAND_VOICE = [
-  "Write like Mr. Polish's own posts: warm, confident, expert but plain Hebrew, never salesy.",
-  "Structure: ONE short hook line ending with ONE fitting emoji; then 1–2 short paragraphs: what was done on this floor and the result.",
-  "Typical phrases: 'פרויקט אמיתי מהשטח, לא הדמיה', 'שירות בפריסה ארצית', '30 שנות ניסיון של אורי'. Use at most one of them.",
-  "Talk about the floor/stone and the work (ליטוש, הברקה, סילר, חידוש), not about the client.",
+  "Voice: a professional, warm expert with 30 years in floor polishing and stone restoration — calm, precise, plain Hebrew. Never salesy, no hype.",
+  "No slang or exaggeration (never words like מטורף, פצצה, הזוי, וואו, אש, אחלה).",
+  "Length: 2–3 sentences in total. The first is a short opening line with at most ONE fitting emoji; then 1–2 sentences on what was done and the result.",
+  "Vary the opening: start from what is special in THIS project (the material, the space, the problem that was solved). Never open with a stock phrase such as 'פרויקט אמיתי מהשטח, לא הדמיה'.",
+  "Describe ONLY the work the user stated, or what is plainly visible in the photos (e.g. polishing, shine, cleaning). Do NOT mention sealer / protection, grout filling, crystallization, anti-slip or crack repair unless the user said it — and no hashtags for work that wasn't done.",
+  "Never mention prices, discounts, offers, 'free', 'חינם', 'ללא עלות' or 'בלי עלות'.",
+  "Talk about the floor/stone and the work, not about the client.",
   "Do NOT write the call to action, a phone number, a link or hashtags inside the caption body — the system adds them."
 ].join("\n");
 
@@ -70,6 +81,20 @@ const PRICE_RE = /₪|ש["״'׳]ח|\bשקל|\bNIS\b|\bILS\b|(?:מחיר|עלות
 const PHONE_RE = /(?:\+|00)?972[\s\-.]?\d|\b0\d{1,2}[\s\-.]?\d{3}[\s\-.]?\d{3,4}\b|\d(?:[\s\-.]?\d){8,}/;
 const HONORIFIC_RE = /(?:משפחת|למשפחת|ממשפחת|הלקוח(?:ה)?|הלקוחות|ללקוח(?:ה)?)\s+(?!שלנו|שלי|שלו|שלה|ש)[א-תA-Za-z]{2,}/;
 const CITY_BAD_RE = new RegExp("\\d|" + STREET_WORDS, "u");
+// "free" in any form (owner: never). English "free of / free from" (= without) is allowed.
+const FREE_RE = /חינם|ללא\s+(?:עלות|תשלום|חיוב)|בלי\s+(?:עלות|תשלום|חיוב)|על\s+חשבוננו|מתנה|\bfree\b(?!-?\s*(?:of|from)\b)|no[\s-]cost|at\s+no\s+(?:charge|cost)|complimentary|gratis/i;
+// Work that must not be claimed unless the user said it (owner: describe only stated / visible work).
+const CLAIMS = {
+  sealer: /סילר|ציפוי\s+(?:מגן|הגנה)|שכב(?:ת|ות)\s+(?:הגנה|מגן)|הגנה|מוגנ|להגן|איטום|אוטמ|sealer|sealant|\bseal(?:ed|ing|s)?\b|protect/i,
+  grout: /פוגות|פוגה|רובה|grout/i,
+  crystal: /קריסטל|התגבשות|crystal/i,
+  antislip: /(?:נגד|מונע(?:ת)?|למניעת)\s+החלקה|אנטי[\s-]?סליפ|anti[\s-]?slip|non[\s-]?slip|slip[\s-]resist/i,
+  cracks: /(?:תיקון|מילוי|איחוי|תיקוני)\s+(?:ה)?סדק(?:ים)?|crack\s+repair|(?:repair|fill)(?:ed|ing)?\s+(?:the\s+)?cracks/i
+};
+const CLAIM_SERVICES = { sealer: "sealer", crystal: "crystal" };
+// Slang removed word by word (the prompt already forbids it); the stock opening removed as a phrase.
+const SLANG_RE = /(^|[^א-ת])(?:מטורפ(?:ת|ים|ות)|מטורף|פצצ(?:ה|ות)|הזו(?:י|יה|יים|יות)|ו?וואו+|ואו+|סחתיין|אחלה|משוגע(?:ת|ים)?|פסיכי(?:ת)?|קטלני(?:ת)?|ברמות)(?=[^א-ת]|$)/g;
+const STOCK_RE = /פרויקט\s+אמיתי\s+מהשטח[\s,–-]*(?:ו?לא)\s+הדמיה[\s.!,–-]*/g;
 
 function clean(v, max) {
   if (v == null) return null;
@@ -102,9 +127,11 @@ function sensitiveTokens(sourceText, knownNames) {
   return out.filter(function (w, i, a) { return a.indexOf(w) === i && STOP.indexOf(w) === -1; });
 }
 
-function forbiddenIn(s, tokens) {
+function forbiddenIn(s, tokens, banned) {
   if (!s) return null;
   if (PRICE_RE.test(s)) return "price";
+  if (FREE_RE.test(s)) return "free";
+  for (var b = 0; banned && b < banned.length; b++) if (CLAIMS[banned[b]].test(s)) return "claim_" + banned[b];
   if (PHONE_RE.test(s)) return "phone";
   if (STREET_RE.test(s)) return "street";
   if (HONORIFIC_RE.test(s)) return "client";
@@ -114,19 +141,42 @@ function forbiddenIn(s, tokens) {
   return null;
 }
 // Drop the sentences that carry a forbidden thing; re-check; null if anything survives.
-function sanitize(s, tokens, max) {
+function sanitize(s, tokens, max, banned) {
   s = clean(s, 4000);
   if (!s) return { value: null, removed: [] };
   var removed = [];
   var kept = s.split(/(?<=[.!?…\n])\s*/u).filter(function (sentence) {
-    var why = forbiddenIn(sentence, tokens);
+    var why = forbiddenIn(sentence, tokens, banned);
     if (why) removed.push(why);
     return !why;
   }).join(" ").replace(/\s+\n/g, "\n").trim();
   kept = clean(kept, max);
-  if (kept && forbiddenIn(kept, tokens)) return { value: null, removed: removed.concat("rejected") };
+  if (kept && forbiddenIn(kept, tokens, banned)) return { value: null, removed: removed.concat("rejected") };
   return { value: kept, removed: removed };
 }
+// Tone (owner): slang words and the stock opening are removed; the text keeps its sentences.
+function tone(s) {
+  if (s == null) return null;
+  var before = String(s);
+  var t = before.replace(STOCK_RE, "").replace(SLANG_RE, "$1")
+    .replace(/[ \t]{2,}/g, " ").replace(/ +([!?.,])/g, "$1").replace(/^[ \t,–-]+/gm, "").trim();
+  return { value: t, changed: t !== before.trim() };
+}
+// At most MAX_CAPTION_SENTENCES sentences (a hook line on its own counts as one).
+function capSentences(body) {
+  if (!body) return body;
+  var parts = body.split(/(?<=[.!?…])\s+|\n+/u).map(function (x) { return x.trim(); }).filter(Boolean);
+  if (parts.length <= MAX_CAPTION_SENTENCES) return body;
+  return parts[0] + "\n" + parts.slice(1, MAX_CAPTION_SENTENCES).join(" ");
+}
+// Which claim-gated kinds of work the user actually stated (text / transcript).
+function statedClaims(sourceText) {
+  return Object.keys(CLAIMS).filter(function (k) { return CLAIMS[k].test(String(sourceText || "")); });
+}
+function bannedClaims(stated) {
+  return Object.keys(CLAIMS).filter(function (k) { return (stated || []).indexOf(k) === -1; });
+}
+function firstLine(s) { return String(s || "").split(/\n|(?<=[.!?…])\s/u)[0].replace(/[^\p{L}\p{N} ]/gu, "").replace(/\s+/g, " ").trim(); }
 
 // ---------------------------------------------------------------------------
 // City (D7): only if the user said it; a city, never a street or a number
@@ -204,17 +254,21 @@ function fallbackPairing(images) {
 // ---------------------------------------------------------------------------
 // Hashtags + caption
 // ---------------------------------------------------------------------------
-function normalizeTags(list, service, city) {
+function normalizeTags(list, service, city, banned) {
   var out = [];
+  var okTag = function (t) {   // no tag for work that wasn't stated, no "free"
+    var words = t.replace(/^#/, "").replace(/_/g, " ");
+    return !FREE_RE.test(words) && !(banned || []).some(function (k) { return CLAIMS[k].test(words); });
+  };
   // "#בית_שמש" and "#ביתשמש" are the same tag: compare without underscores
   var key = function (t) { return t.replace(/_/g, ""); };
   var has = function (t) { return out.some(function (o) { return key(o) === key(t); }); };
   (list || []).forEach(function (t) {
     var tag = "#" + String(t || "").replace(/^#+/, "").trim().replace(/\s+/g, "_");
-    if (/^#[\p{L}\p{N}_]{2,40}$/u.test(tag) && !has(tag) && !/\d{3,}/.test(tag)) out.push(tag);
+    if (/^#[\p{L}\p{N}_]{2,40}$/u.test(tag) && !has(tag) && !/\d{3,}/.test(tag) && okTag(tag)) out.push(tag);
   });
   var pad = (SERVICE_TAGS[service] || []).concat(BASE_TAGS);
-  for (var i = 0; out.length < 6 && i < pad.length; i++) if (!has(pad[i])) out.push(pad[i]);
+  for (var i = 0; out.length < 6 && i < pad.length; i++) if (!has(pad[i]) && okTag(pad[i])) out.push(pad[i]);
   out = out.slice(0, 10);
   if (city) {   // the stated city is always tagged (local search), replacing the last tag if full
     var cityTag = "#" + city.replace(/\s+/g, "_");
@@ -334,12 +388,20 @@ function flagsToDb(privacy) {
 
 function shape(raw, ctx) {
   var tokens = ctx.tokens, warnings = [];
+  var sourceText = [ctx.userText, raw.transcript].filter(Boolean).join("\n");
+  var stated = statedClaims(sourceText), banned = bannedClaims(stated);
   var field = function (name, value, max) {
-    var r = sanitize(value, tokens, max);
+    var t = tone(value);
+    if (t && t.changed) warnings.push(name + ":tone");
+    var r = sanitize(t ? t.value : value, tokens, max, banned);
     if (r.removed.length) warnings.push(name + ":" + r.removed.join("+"));
     return r.value;
   };
   var service = SERVICES.indexOf(raw.service) !== -1 ? raw.service : "other";
+  // a sealer / crystal service the user never mentioned is not claimed
+  Object.keys(CLAIM_SERVICES).forEach(function (k) {
+    if (service === CLAIM_SERVICES[k] && banned.indexOf(k) !== -1) { service = "other"; warnings.push("service:not_stated"); }
+  });
 
   // images (by the AI's 1-based index, mapped back to the caller's ids)
   var byIndex = {};
@@ -369,23 +431,25 @@ function shape(raw, ctx) {
   }
   images.forEach(function (im) { im.ai_flags = flagsToDb(im.privacy_flags); im.flagged = im.privacy_flags.some(function (p) { return p.type !== "other"; }) || im.privacy_flags.length > 0; });
 
-  var sourceText = [ctx.userText, raw.transcript].filter(Boolean).join("\n");
   var city = acceptCity(raw.city, sourceText);
   if (raw.city && !city) warnings.push("city:not_stated_or_invalid");
-  var body = field("caption", raw.caption_body_he, LIMITS.caption);
-  var hashtags = normalizeTags(raw.hashtags, service, city);
+  var body = capSentences(field("caption", raw.caption_body_he, LIMITS.caption));
+  var hashtags = normalizeTags(raw.hashtags, service, city, banned);
+  if (body && (ctx.avoidOpenings || []).some(function (o) { return firstLine(o) && firstLine(o) === firstLine(body); })) warnings.push("opening_repeated");
   var missing = (Array.isArray(raw.missing) ? raw.missing : []).filter(function (m) { return typeof m === "string" && m !== "city"; }).slice(0, 5);
   if (!city) missing.unshift("city");
   if (!body) missing.push("caption");
   return {
     images: images.map(function (im) { delete im.order; delete im.filename; return im; }),
     pairing_source: pairingSource, pairing_confidence: pairingConfidence,
-    // anything but the AI's own confident pairs → the bot shows the pairs and asks Miri to confirm
-    needs_review: pairingSource !== "ai",
+    // anything but the AI's own confident pairs → the bot / panel shows the pairs and asks Miri to
+    // confirm. Also 2+ pairs: live (command 4) Gemini paired 6 look-alike basalt photos wrongly at 0.9.
+    needs_review: pairingSource !== "ai" || images.filter(function (im) { return im.role === "before"; }).length >= 2,
     service: service, city: city,
     title_he: field("title_he", raw.title_he, LIMITS.title), title_en: field("title_en", raw.title_en, LIMITS.title),
     summary_he: field("summary_he", raw.summary_he, LIMITS.summary), summary_en: field("summary_en", raw.summary_en, LIMITS.summary),
     caption_body_he: body, hashtags: hashtags, caption_he: body ? composeCaption(body, hashtags) : null,
+    stated_claims: stated,     // so a later correction may still mention work the user stated
     transcript: raw.transcript ? QX.stripPhones(String(raw.transcript)).slice(0, 4000) : null,
     missing: missing.filter(function (m, i, a) { return a.indexOf(m) === i; }),
     warnings: warnings
@@ -400,6 +464,7 @@ async function analyzeProject(input, opts) {
   var images = (input && input.images) || [];
   if (!images.length) throw new MediaAiError("invalid_input", "no images", "לא התקבלו תמונות.");
   if (images.length > MAX_IMAGES) throw new MediaAiError("invalid_input", "too many images", "אפשר עד " + MAX_IMAGES + " תמונות בפרויקט.");
+  var avoid = (Array.isArray(opts.avoidOpenings) ? opts.avoidOpenings : []).map(function (o) { return clean(QX.stripPhones(String(o || "")).split("\n")[0], 90); }).filter(Boolean).slice(0, 8);
   var prepared = [];
   for (var i = 0; i < images.length; i++) {
     var im = images[i];
@@ -419,13 +484,14 @@ async function analyzeProject(input, opts) {
     user.kind === "audio" ? "The user also sent a voice note (attached last): transcribe it into 'transcript' and use what it says." :
       user.kind === "text" ? "The user's message (use it; it is the ONLY source for the city):\n«" + user.text + "»" : "The user sent no message.",
     RULES,
-    "caption_body_he (Hebrew, for Facebook/Instagram):\n" + BRAND_VOICE,
+    "caption_body_he (Hebrew, for Facebook/Instagram):\n" + BRAND_VOICE +
+      (avoid.length ? "\nRecent posts opened like this — your opening must be clearly different:\n" + avoid.map(function (o) { return "- " + o; }).join("\n") : ""),
     "Output Hebrew AND English where both are asked."
   ].join("\n\n");
   var parts = [{ text: prompt }].concat(imageParts(prepared));
   if (user.kind === "audio") parts.push({ text: "Voice note:" }, user.part);
   var raw = await gemini("analyze", parts, ANALYSIS_SCHEMA, opts);
-  var result = shape(raw || {}, { images: prepared, userText: user.text, tokens: sensitiveTokens(user.text + "\n" + ((raw && raw.transcript) || ""), opts.knownNames) });
+  var result = shape(raw || {}, { images: prepared, userText: user.text, avoidOpenings: avoid, tokens: sensitiveTokens(user.text + "\n" + ((raw && raw.transcript) || ""), opts.knownNames) });
   return result;
 }
 
@@ -455,6 +521,9 @@ async function applyMediaCorrection(analysis, input, opts) {
 
   var spoken = [user.text, patch.transcript].filter(Boolean).join("\n");
   var tokens = sensitiveTokens(spoken, opts.knownNames);
+  var stated = (Array.isArray(analysis.stated_claims) ? analysis.stated_claims : []).concat(statedClaims(spoken))
+    .filter(function (k, i, a) { return CLAIMS[k] && a.indexOf(k) === i; });
+  var banned = bannedClaims(stated);
   var warnings = [];
   var next = JSON.parse(JSON.stringify(analysis));
   next.warnings = [];
@@ -476,15 +545,34 @@ async function applyMediaCorrection(analysis, input, opts) {
     var c = acceptCity(patch.city, spoken);
     if (c) next.city = c; else warnings.push("city:not_stated_or_invalid");
   }
+  var cleanField = function (k, value) {
+    var t = tone(value);
+    var r = sanitize(t ? t.value : value, tokens, k === "caption_body_he" ? LIMITS.caption : k.indexOf("title") === 0 ? LIMITS.title : LIMITS.summary, banned);
+    if (r.removed.length) warnings.push(k + ":" + r.removed.join("+"));
+    return k === "caption_body_he" ? capSentences(r.value) : r.value;
+  };
+  var oldBody = analysis.caption_body_he || "";
   ["title_he", "title_en", "summary_he", "summary_en", "caption_body_he"].forEach(function (k) {
     if (patch[k] == null) return;
-    var r = sanitize(patch[k], tokens, k === "caption_body_he" ? LIMITS.caption : k.indexOf("title") === 0 ? LIMITS.title : LIMITS.summary);
-    if (r.removed.length) warnings.push(k + ":" + r.removed.join("+"));
-    if (r.value) next[k] = r.value;
+    var v = cleanField(k, patch[k]);
+    if (v) next[k] = v;
   });
-  // asked to change the caption but none came back → say so (the bot tells Miri instead of pretending)
-  if (/כיתוב|טקסט|caption|תקצר|לקצר|קצר יותר|ארוך יותר|להאריך את|תשכתב|לשכתב|תכתוב מחדש|תנסח/i.test(spoken) && patch.caption_body_he == null) warnings.push("caption_not_changed");
-  next.hashtags = normalizeTags(Array.isArray(patch.hashtags) ? patch.hashtags : next.hashtags, next.service, next.city);
+  // "shorter" must really shorten (≤ 80% of the old length): else ONE focused retry, else say so.
+  var wantsShorter = /תקצר|לקצר|תקצרו|קצר יותר|יותר קצר|קצרצר|פחות ארוך|פחות מילים|shorter|shorten|less text/i.test(spoken);
+  var shortEnough = function (b) { return !!b && !!oldBody && b.length <= Math.floor(oldBody.length * SHORTER_RATIO); };
+  if (wantsShorter && oldBody) {
+    if (!shortEnough(next.caption_body_he)) {
+      var retry = await shortenCaption(oldBody, Math.max(60, Math.floor(oldBody.length * 0.6)), opts);
+      var v = retry ? cleanField("caption_body_he", retry) : null;
+      if (shortEnough(v)) { next.caption_body_he = v; warnings.push("caption_retried"); }
+      else { next.caption_body_he = oldBody; warnings.push("caption_not_changed"); }
+    }
+  } else if (/כיתוב|טקסט|caption|ארוך יותר|להאריך את|תשכתב|לשכתב|תכתוב מחדש|תנסח/i.test(spoken) && patch.caption_body_he == null) {
+    // asked to change the caption but none came back → say so (the bot tells Miri instead of pretending)
+    warnings.push("caption_not_changed");
+  }
+  next.stated_claims = stated;
+  next.hashtags = normalizeTags(Array.isArray(patch.hashtags) ? patch.hashtags : next.hashtags, next.service, next.city, banned);
   next.caption_he = next.caption_body_he ? composeCaption(next.caption_body_he, next.hashtags) : null;
   next.missing = (next.missing || []).filter(function (m) { return !(m === "city" && next.city); });
   if (!next.city && next.missing.indexOf("city") === -1) next.missing.unshift("city");
@@ -493,8 +581,22 @@ async function applyMediaCorrection(analysis, input, opts) {
   return next;
 }
 
+// The focused retry for "shorter": one call, only the caption, with an explicit length budget.
+async function shortenCaption(body, maxChars, opts) {
+  await useQuota(opts);
+  var prompt = [
+    "Shorten this Hebrew social-media caption to AT MOST " + maxChars + " characters (it is " + body.length + " now). Keep the facts, drop the rest; 2 sentences at most; at most one emoji.",
+    "Caption:\n«" + body + "»",
+    "Same voice and rules:\n" + BRAND_VOICE,
+    RULES
+  ].join("\n\n");
+  var r = await gemini("shorten", [{ text: prompt }], { type: "OBJECT", properties: { caption_body_he: S }, required: ["caption_body_he"] }, opts);
+  return r && typeof r.caption_body_he === "string" ? r.caption_body_he : null;
+}
+
 module.exports = {
   analyzeProject, applyMediaCorrection, prepareForAi, MediaAiError,
-  SERVICES, ROLES, PRIVACY_TYPES, CTA_HE, BRAND_VOICE,
-  _internal: { sanitize, forbiddenIn, sensitiveTokens, acceptCity, validPairs, fallbackPairing, normalizeTags, composeCaption, shape, flagsToDb }
+  SERVICES, ROLES, PRIVACY_TYPES, CTA_HE, BRAND_VOICE, MAX_IMAGES,
+  _internal: { sanitize, forbiddenIn, sensitiveTokens, acceptCity, validPairs, fallbackPairing, normalizeTags, composeCaption, shape, flagsToDb,
+    tone, capSentences, statedClaims, bannedClaims, FREE_RE, CLAIMS }
 };

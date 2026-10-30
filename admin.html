@@ -44,6 +44,8 @@
   <!-- Shared quote template (WO_CSS + buildDoc + logo): the same file the server PDF renderer uses -->
   <script src="shared/quote-template.js"></script>
   <script src="shared/burst-schedule.js"></script>
+  <script src="shared/media-client.js"></script>
+  <script src="shared/projects-panel.js"></script>
 
   <!-- Business expenses accountant export: ExcelJS builds the .xlsx client-side (supports embedding the logo image, unlike SheetJS's free build) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js" integrity="sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz" crossorigin="anonymous"></script>
@@ -725,12 +727,147 @@
     .an-plan-table th, .an-plan-table td { padding:10px 12px; text-align:right; border-block-end:1px solid var(--marble-200); }
     .an-plan-table th { color:var(--ink-500); font-weight:700; font-size:.78rem; }
 
+    /* ===== Tab: Projects (pj-*) — mobile first ===== */
+    .pj-sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+    .pj-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-block-end:10px; }
+    .pj-search { position:relative; flex:1 1 220px; display:flex; align-items:center; }
+    .pj-search span { position:absolute; inset-inline-start:12px; opacity:.6; pointer-events:none; }
+    .pj-search input, .pj-toolbar select { width:100%; min-height:44px; font:inherit; font-size:16px; padding:10px 12px; padding-inline-start:38px;
+      border:1.5px solid var(--marble-200); border-radius:var(--radius); background:var(--white); color:var(--char-900); }
+    .pj-toolbar select { width:auto; flex:0 1 180px; padding-inline-start:12px; }
+    .pj-toolbar .btn { min-height:44px; }
+    .pj-count { color:var(--ink-500); font-size:.85rem; margin-block-end:10px; }
+    .pj-grid { display:grid; grid-template-columns:1fr; gap:14px; list-style:none; padding:0; margin:0; }
+    .pj-card { all:unset; box-sizing:border-box; display:flex; flex-direction:column; width:100%; cursor:pointer; background:var(--white);
+      border:1px solid var(--marble-200); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-sm); transition:transform .2s, box-shadow .2s; }
+    .pj-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-md); }
+    .pj-card:focus-visible { outline:3px solid var(--gold-500); outline-offset:2px; }
+    .pj-card-img { position:relative; display:block; aspect-ratio:4/3; background:var(--marble-100); }
+    .pj-card-img img { width:100%; height:100%; object-fit:cover; display:block; }
+    .pj-card-noimg { display:grid; place-items:center; width:100%; height:100%; font-size:2.2rem; opacity:.5; }
+    .pj-card-body { display:flex; flex-direction:column; gap:4px; padding:12px 14px 14px; }
+    .pj-card-title { color:var(--char-900); font-size:1rem; }
+    .pj-card-meta { color:var(--ink-500); font-size:.84rem; }
+    .pj-card-warn { color:oklch(0.5 0.17 30); font-size:.82rem; font-weight:700; }
+    .pj-card-note { color:var(--ink-500); font-size:.8rem; }
+    .pj-status { position:absolute; inset-block-start:10px; inset-inline-start:10px; padding:4px 10px; border-radius:99px; font-size:.75rem; font-weight:800;
+      background:var(--white); color:var(--char-900); box-shadow:var(--shadow-sm); }
+    .pj-ed-head .pj-status { position:static; }
+    .pj-status-ready { background:oklch(0.93 0.07 150); color:oklch(0.35 0.1 150); }
+    .pj-status-published { background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); color:var(--char-950); }
+    .pj-status-collecting, .pj-status-draft { background:var(--marble-100); }
+    .pj-chips { display:flex; flex-wrap:wrap; gap:6px; margin-block-start:4px; }
+    .pj-chip { font-size:.75rem; font-weight:700; padding:3px 9px; border-radius:99px; background:var(--marble-100); color:var(--char-800); }
+    .pj-chip-warn { background:oklch(0.95 0.06 80); color:oklch(0.45 0.12 70); }
+    .pj-empty { padding:28px 18px; text-align:center; color:var(--ink-500); background:var(--white); border:1px dashed var(--marble-200); border-radius:var(--radius-lg); }
+    .pj-ed-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-block-end:10px; }
+    .pj-ed-title { font-size:1.2rem; color:var(--char-900); margin-block-end:12px; }
+    .pj-ed-title:focus { outline:none; }
+    .pj-sec { background:var(--white); border:1px solid var(--marble-200); border-radius:var(--radius-lg); padding:16px; margin-block-end:14px; box-shadow:var(--shadow-sm); }
+    .pj-sec h4 { font-size:1rem; color:var(--char-900); margin-block-end:10px; }
+    .pj-muted { color:var(--ink-500); font-size:.86rem; margin-block:4px 10px; }
+    .pj-drop { display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; padding:22px 14px; border:2px dashed var(--gold-500);
+      border-radius:var(--radius-lg); background:var(--marble-50); cursor:pointer; color:var(--char-800); }
+    .pj-drop span:last-child { font-size:.8rem; color:var(--ink-500); }
+    .pj-drop.over, .pj-drop:hover { background:oklch(0.97 0.03 85); }
+    .pj-drop-ic { font-size:1.6rem; }
+    .pj-file { position:absolute; width:1px; height:1px; opacity:0; }
+    .pj-file:focus-visible + .pj-uploads, .pj-file:focus-visible { outline:none; }
+    .pj-drop:focus-within, .pj-file:focus-visible ~ * { outline:none; }
+    .pj-uploads { list-style:none; padding:0; margin:10px 0 0; display:grid; gap:6px; }
+    .pj-up { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:center; font-size:.84rem; padding:8px 10px; background:var(--marble-50); border-radius:10px; }
+    .pj-up-name { grid-column:1 / -1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .pj-up-bar { display:block; height:8px; border-radius:99px; background:var(--marble-200); overflow:hidden; }
+    .pj-up-bar i { display:block; height:100%; background:linear-gradient(90deg,var(--gold-600),var(--gold-400)); transition:inline-size .2s; }
+    .pj-up-error .pj-up-state { color:oklch(0.5 0.17 30); font-weight:700; }
+    .pj-media-grid { list-style:none; padding:0; margin:14px 0 0; display:grid; grid-template-columns:1fr; gap:12px; }
+    .pj-media { display:grid; grid-template-columns:112px 1fr; gap:12px; padding:10px; border:1px solid var(--marble-200); border-radius:14px; background:var(--white); }
+    .pj-media-flag { border-color:oklch(0.65 0.17 30); box-shadow:0 0 0 2px oklch(0.65 0.17 30 / .15); }
+    .pj-media-img { position:relative; border-radius:10px; overflow:hidden; background:var(--marble-100); aspect-ratio:1; }
+    .pj-media-img img { width:100%; height:100%; object-fit:cover; display:block; }
+    .pj-badge { position:absolute; inset-block-end:6px; inset-inline-start:6px; font-size:.7rem; font-weight:800; padding:2px 7px; border-radius:99px; background:oklch(0.15 0.02 264 / .75); color:#fff; }
+    .pj-badge-cover { inset-block-end:auto; inset-block-start:6px; background:var(--gold-500); color:var(--char-950); }
+    .pj-media-body { display:flex; flex-direction:column; gap:8px; min-width:0; }
+    .pj-media-row { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; }
+    .pj-media-row label, .pj-alt label { display:flex; flex-direction:column; gap:3px; font-size:.76rem; font-weight:700; color:var(--char-800); }
+    .pj-media-row select, .pj-media-row input, .pj-alt input { min-height:40px; font:inherit; font-size:16px; padding:6px 8px; border:1.5px solid var(--marble-200); border-radius:10px; background:var(--marble-50); }
+    .pj-media-row input { width:4.5em; }
+    .pj-media-role { font-weight:700; color:var(--char-800); }
+    .pj-alt summary { cursor:pointer; font-size:.8rem; color:var(--ink-500); }
+    .pj-alt label { margin-block-start:6px; }
+    .pj-media-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .pj-icon { min-width:44px; min-height:40px; border:1px solid var(--marble-200); background:var(--marble-50); border-radius:10px; cursor:pointer; font-size:1rem; }
+    .pj-icon:disabled { opacity:.35; cursor:not-allowed; }
+    .pj-icon[aria-pressed=true] { background:var(--gold-500); border-color:var(--gold-600); }
+    .pj-icon-danger { color:oklch(0.5 0.17 30); }
+    .pj-flag { display:flex; flex-direction:column; gap:6px; padding:10px; border-radius:10px; background:oklch(0.96 0.03 30); color:oklch(0.4 0.14 30); font-size:.84rem; }
+    .pj-flag-actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .pj-ok { color:oklch(0.42 0.1 150); font-size:.8rem; font-weight:700; }
+    .pj-btn-danger { background:oklch(0.55 0.18 30); color:#fff; border:0; }
+    .pj-field { display:flex; flex-direction:column; gap:5px; margin-block-end:12px; font-size:.85rem; font-weight:700; color:var(--char-800); }
+    .pj-field input, .pj-field textarea, .pj-field select, .pj-correct input, .pj-when-at input {
+      width:100%; font:inherit; font-size:16px; font-weight:400; padding:10px 12px; border:1.5px solid var(--marble-200); border-radius:var(--radius); background:var(--marble-50); color:var(--char-900); }
+    .pj-field textarea { line-height:1.6; resize:vertical; }
+    .pj-row2 { display:grid; grid-template-columns:1fr; gap:0 12px; }
+    .pj-correct { display:flex; flex-wrap:wrap; gap:8px; }
+    .pj-correct input { flex:1 1 200px; }
+    .pj-note { margin-block-start:10px; padding:10px 12px; border-radius:10px; background:oklch(0.96 0.04 85); color:var(--char-800); font-size:.86rem; }
+    .pj-warn { margin:10px 0 0; padding-inline-start:18px; color:oklch(0.45 0.12 70); font-size:.84rem; }
+    .pj-toggle { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; margin-block-end:8px; background:var(--marble-50); border:1px solid var(--marble-200); border-radius:10px; font-size:.88rem; cursor:pointer; }
+    .pj-toggle input { inline-size:20px; block-size:20px; accent-color:var(--gold-600); flex-shrink:0; margin-block-start:2px; }
+    .pj-dests, .pj-timing { border:0; padding:0; margin:12px 0 0; display:flex; flex-wrap:wrap; gap:8px; }
+    .pj-dests legend, .pj-timing legend { font-weight:800; font-size:.9rem; color:var(--char-900); margin-block-end:8px; }
+    .pj-dest { min-height:44px; padding:8px 14px; border-radius:99px; border:1.5px solid var(--marble-200); background:var(--white); font:inherit; font-weight:700; cursor:pointer; }
+    .pj-dest[aria-pressed=true] { background:linear-gradient(135deg,var(--gold-500),var(--gold-700)); border-color:var(--gold-600); color:var(--char-950); }
+    .pj-timing > label { display:flex; gap:6px; align-items:center; min-height:40px; padding:6px 12px; border:1px solid var(--marble-200); border-radius:10px; font-size:.9rem; }
+    .pj-when-at { display:flex; gap:8px; flex-wrap:wrap; inline-size:100%; }
+    .pj-when-at[hidden] { display:none; }
+    .pj-when-at label { display:flex; flex-direction:column; gap:3px; font-size:.78rem; font-weight:700; flex:1 1 140px; }
+    .pj-timing .pj-muted { inline-size:100%; margin:0; }
+    .pj-gates { list-style:none; padding:0; margin:14px 0 0; display:grid; gap:4px; font-size:.86rem; }
+    .pj-gates .ok { color:oklch(0.42 0.1 150); }
+    .pj-gates .no { color:oklch(0.5 0.17 30); }
+    .pj-soon { margin-block-start:10px; font-size:.86rem; color:var(--char-800); background:var(--marble-50); padding:10px 12px; border-radius:10px; }
+    .pj-danger { border-color:oklch(0.85 0.06 30); }
+    .pj-savebar { position:sticky; inset-block-end:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:10px 14px; padding-block-end:calc(10px + env(safe-area-inset-bottom)); margin-inline:-4px; background:oklch(0.99 0 0 / .94);
+      -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); border:1px solid var(--marble-200); border-radius:14px; box-shadow:var(--shadow-md); }
+    .pj-savebar .btn { min-height:44px; min-width:120px; }
+    .pj-dirty { font-size:.82rem; color:oklch(0.45 0.12 70); font-weight:700; }
+    .pj-toast { position:fixed; inset-inline:16px; inset-block-end:84px; z-index:1100; margin-inline:auto; max-inline-size:420px; padding:12px 16px; border-radius:12px;
+      background:var(--char-900); color:#fff; font-size:.9rem; text-align:center; box-shadow:var(--shadow-lg, 0 20px 50px rgba(0,0,0,.3));
+      opacity:0; transform:translateY(10px); pointer-events:none; transition:opacity .2s, transform .2s; }
+    .pj-toast.show { opacity:1; transform:none; }
+    .pj-toast.bad { background:oklch(0.45 0.16 30); }
+    @media (min-width: 640px) {
+      .pj-grid { grid-template-columns:repeat(2, 1fr); }
+      .pj-row2 { grid-template-columns:1fr 1fr; }
+      .pj-media-grid { grid-template-columns:repeat(2, 1fr); }
+    }
+    @media (min-width: 1100px) { .pj-grid { grid-template-columns:repeat(3, 1fr); } }
+    @media (prefers-reduced-motion: reduce) { .pj-card, .pj-toast, .pj-up-bar i { transition:none; } }
+
+    /* "➕ פוסט חדש" (content tab) */
+    .np-files { list-style:none; padding:0; margin:8px 0 0; display:grid; gap:6px; }
+    .np-files li { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; font-size:.84rem; padding:8px 10px; background:var(--marble-50); border-radius:10px; }
+    .np-type { display:flex; flex-wrap:wrap; gap:8px; border:0; padding:0; margin:0 0 14px; }
+    .np-type legend { font-size:.85rem; font-weight:700; color:var(--char-800); margin-block-end:6px; }
+    .np-type label { display:flex; align-items:center; gap:6px; min-height:40px; padding:6px 12px; border:1px solid var(--marble-200); border-radius:10px; font-size:.9rem; cursor:pointer; }
+    .np-error { color:oklch(0.5 0.17 30); font-weight:700; font-size:.88rem; margin-block:6px; }
+    .np-hint { color:var(--ink-500); font-size:.82rem; }
+
     /* ===== Responsive ===== */
     @media (max-width: 900px) {
       .admin-shell { grid-template-columns: 1fr; }
       .admin-sidebar { position:static; height:auto; flex-direction:column; }
       .admin-nav { flex-direction:row; flex-wrap:wrap; }
       .admin-nav button { flex:1 1 auto; justify-content:center; }
+      /* phones: one scrollable row of tabs instead of a full screen of buttons */
+      .admin-nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch; padding-block-end:2px; }
+      .admin-nav button { flex:0 0 auto; width:auto; white-space:nowrap; padding:10px 14px; }
+      .admin-brand { padding-block-end:10px; margin-block-end:4px; }
+      .admin-sidebar { padding:14px 12px; min-width:0; }
+      .admin-shell { grid-template-columns:minmax(0, 1fr); }
       .of-grid { grid-template-columns:1fr; }
       .order-layout { grid-template-columns:1fr; }
       .calc-card { position:static; }
@@ -762,6 +899,7 @@
         <button data-view="expenses"><span class="ic" aria-hidden="true">💰</span> הוצאות עסק</button>
         <button data-view="social"><span class="ic" aria-hidden="true">📱</span> רשתות חברתיות</button>
         <button data-view="analytics"><span class="ic" aria-hidden="true">📈</span> אנליטיקה</button>
+        <button data-view="projects"><span class="ic" aria-hidden="true">📸</span> פרויקטים</button>
         <button data-view="content"><span class="ic" aria-hidden="true">🗂️</span> ניהול תוכן</button>
         <button data-view="content-calendar"><span class="ic" aria-hidden="true">🗓️</span> לוח תוכן</button>
       </nav>
@@ -1091,9 +1229,16 @@
           </div>
         </section>
 
+        <!-- Tab: Projects (before/after photos + videos → site + social; shared/projects-panel.js) -->
+        <section class="admin-view" id="view-projects">
+          <div class="view-head"><h2>📸 פרויקטים</h2><p>תמונות וסרטונים מהעבודות: העלאה מהטלפון, ניתוח AI, בדיקת פרטיות ובחירת יעדי פרסום.</p></div>
+          <div id="pjRoot"></div>
+        </section>
+
         <!-- Tab 7: Content Management -->
         <section class="admin-view" id="view-content">
-          <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p></div>
+          <div class="view-head"><h2>ניהול תוכן</h2><p>תור התוכן לפרסום ברשתות. שום דבר לא מתפרסם בלי אישור מפורש כאן.</p>
+            <button type="button" class="btn btn-shimmer btn-sm" id="cqNewPostBtn" style="margin-block-start:10px">➕ פוסט חדש</button></div>
 
           <div class="cq-week-planner" id="cqWeekPlanner">
             <div class="cq-week-planner-head">
@@ -1182,6 +1327,43 @@
         </section>
       </div>
     </main>
+  </div>
+
+  <!-- "➕ פוסט חדש": an image / a video / a carousel (≤ 10) → a content_queue row awaiting approval -->
+  <div class="cq-modal" id="cqNewModal" hidden>
+    <div class="cq-modal__overlay" data-np-close></div>
+    <div class="cq-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="cqNewTitle">
+      <button type="button" class="cq-modal__close" data-np-close aria-label="סגירה">&times;</button>
+      <h3 class="cq-modal__title" id="cqNewTitle">➕ פוסט חדש</h3>
+      <form id="cqNewForm" novalidate>
+        <fieldset class="np-type"><legend>סוג</legend>
+          <label><input type="radio" name="npType" value="image" checked /> 🖼️ תמונה</label>
+          <label><input type="radio" name="npType" value="video" /> 🎬 וידאו</label>
+          <label><input type="radio" name="npType" value="carousel" /> 🗂️ קרוסלה (עד 10)</label>
+        </fieldset>
+        <div class="cq-modal-field">
+          <label for="npFiles" id="npFilesLabel">קובץ</label>
+          <input type="file" id="npFiles" accept="image/*" />
+          <ul class="np-files" id="npFileList"></ul>
+          <p class="np-hint" id="npTypeHint"></p>
+        </div>
+        <div class="cq-modal-field"><label for="npTitle">כותרת פנימית</label><input type="text" id="npTitle" maxlength="120" required /></div>
+        <div class="cq-modal-field"><label for="npCaption">כיתוב</label><textarea id="npCaption" maxlength="2200" required></textarea></div>
+        <div class="cq-modal-field"><label for="npPlatform">איפה</label>
+          <select id="npPlatform"><option value="both">פייסבוק + אינסטגרם</option><option value="facebook">פייסבוק</option><option value="instagram">אינסטגרם</option></select></div>
+        <div class="cq-modal-row">
+          <div class="cq-modal-field"><label for="npDate">תאריך</label><input type="date" id="npDate" required /></div>
+          <div class="cq-modal-field"><label for="npTime">שעה</label><input type="time" id="npTime" step="300" required /></div>
+        </div>
+        <p class="np-hint" id="npSlotHint"></p>
+        <p class="np-error" id="npError" role="alert" hidden></p>
+        <div class="cq-modal-actions">
+          <button type="submit" class="btn btn-shimmer btn-sm" id="npSubmit">שליחה לאישור</button>
+          <button type="button" class="btn btn-navy btn-sm" data-np-close>ביטול</button>
+        </div>
+        <p class="np-hint">הפוסט נכנס לתור במצב "ממתין לאישור" — שום דבר לא מתפרסם בלי אישור.</p>
+      </form>
+    </div>
   </div>
 
   <!-- Content preview/edit modal -->
@@ -1503,7 +1685,7 @@
 
       /* ---------- Tab switching ---------- */
       var nav = document.getElementById("adminNav");
-      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", ai: "הצעות מחיר", expenses: "הוצאות עסק", social: "רשתות חברתיות", analytics: "אנליטיקה", content: "ניהול תוכן", "content-calendar": "לוח תוכן" };
+      var titles = { dash: "לוח בקרה ופעילות", leads: "ניהול לידים", ai: "הצעות מחיר", expenses: "הוצאות עסק", social: "רשתות חברתיות", analytics: "אנליטיקה", content: "ניהול תוכן", "content-calendar": "לוח תוכן", projects: "פרויקטים" };
       nav.addEventListener("click", function (e) {
         var btn = e.target.closest("button[data-view]");
         if (!btn) return;
@@ -1517,12 +1699,14 @@
         if (v === "social") loadSocial(); // lazy-load on first open
         if (v === "analytics") loadAnalytics(); // lazy-load on first open
         if (v === "content") loadContentQueue(); // lazy-load on first open
+        if (v === "projects") window.MrpProjectsPanel.init({ sb: sb, supabaseUrl: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY, root: document.getElementById("pjRoot") });
         if (v === "content-calendar") loadContentCalendar(); // lazy-load on first open, shares data with loadContentQueue
       });
 
       /* ---------- Logout ---------- */
       document.getElementById("logoutBtn").addEventListener("click", function () {
         stopQuotesSync();
+        if (window.MrpProjectsPanel) window.MrpProjectsPanel.stop();
         sb.auth.signOut().then(function () { location.replace("login.html"); });
       });
 
@@ -3719,6 +3903,10 @@
           var actionsHtml = "";
           if (syncingIds[r.id]) {
             actionsHtml = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן עם מטא…</span>';
+          } else if ((r.status === "pending_approval" || r.status === "failed") && r.media_type === "carousel") {
+            actionsHtml =
+              '<button type="button" class="btn btn-shimmer btn-sm" disabled title="פרסום קרוסלות יחובר בקרוב">⏳ קרוסלה — בקרוב</button>' +
+              '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ דחה</button>';
           } else if (r.status === "pending_approval" || r.status === "failed") {
             actionsHtml =
               '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>' +
@@ -3921,7 +4109,8 @@
           if (syncingIds[r.id]) {
             actionBtn = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן…</span>';
           } else if (r.status === "pending_approval") {
-            actionBtn = '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>';
+            actionBtn = r.media_type === "carousel" ? '<button type="button" class="btn btn-shimmer btn-sm" disabled title="פרסום קרוסלות יחובר בקרוב">⏳ בקרוב</button>' :
+              '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>';
           } else if (effectiveStatusKey(r) === "approved_ready") {
             // Real gap this closes: rows approved before the real-time trigger existed (or
             // whose attempt only hit the network-failure path) sit here with nothing sent to
@@ -4160,6 +4349,11 @@
           var ids = Object.keys(selectedIds);
           if (!ids.length) return;
           var rows = ids.map(findById).filter(function (r) { return r && (r.status === "pending_approval" || r.status === "failed"); });
+          var carousels = rows.filter(function (r) { return r.media_type === "carousel"; });
+          if (carousels.length) {
+            alert(carousels.length + " קרוסלות לא יאושרו — פרסום קרוסלות יחובר בקרוב.");
+            rows = rows.filter(function (r) { return r.media_type !== "carousel"; });
+          }
           if (!rows.length) { alert("אין בבחירה פוסטים שממתינים לאישור."); return; }
           var past = rows.filter(function (r) { return BS.isPast(r); });
           var future = rows.filter(function (r) { return !BS.isPast(r); });
@@ -4394,6 +4588,7 @@
         }
         function approve(id) {
           var row = findById(id);
+          if (row && row.media_type === "carousel") { alert("פרסום קרוסלות יחובר בקרוב."); return; }
           if (row && BS.isPast(row)) { openPastDialog(id); return; } // burst guard: ask first
           approveAndPublishNow(id);
         }
@@ -4464,6 +4659,132 @@
               return res.data || [];
             });
         }
+
+        /* ---------- "➕ פוסט חדש" (media-projects command 4) ----------
+           Files → shared/media-client.js (images re-encoded in the browser: no EXIF/GPS; TUS upload with
+           the user's session) → the public content-media bucket → ONE content_queue row with status
+           'pending_approval'. The date defaults to the next free publishing slot (burst guard) and can't
+           be in the past; approving later goes through the same guarded Approve as every other post. */
+        var MC = window.MrpMediaClient;
+        var npModal = document.getElementById("cqNewModal");
+        var npForm = document.getElementById("cqNewForm");
+        var npFiles = document.getElementById("npFiles");
+        var npFileList = document.getElementById("npFileList");
+        var npError = document.getElementById("npError");
+        var npSubmit = document.getElementById("npSubmit");
+        var npPicked = [];
+        var NP_LIMITS = { image: [1, 1], video: [1, 1], carousel: [2, 10] };
+        var NP_HINTS = { image: "תמונה אחת (JPG / PNG / HEIC). המידע הנסתר בתמונה (מיקום GPS) מוסר לפני ההעלאה.", video: "סרטון אחד, MP4 / MOV עד 50MB.",
+          carousel: "2–10 תמונות או סרטונים. פרסום קרוסלות יחובר בקרוב — אפשר כבר להכין ולשמור." };
+        function npType() { return (npForm.querySelector("input[name=npType]:checked") || {}).value || "image"; }
+        function npShowError(msg) { npError.textContent = msg || ""; npError.hidden = !msg; }
+        function npRenderFiles(progress) {
+          npFileList.innerHTML = npPicked.map(function (f, i) {
+            var p = progress && progress[i] != null ? Math.round(progress[i] * 100) + "%" : (f.size / 1048576).toFixed(1) + "MB";
+            return "<li><span>" + esc(f.name) + "</span><span>" + esc(p) + "</span></li>";
+          }).join("");
+        }
+        function npSyncType() {
+          var t = npType();
+          npFiles.accept = t === "image" ? "image/*,.heic,.heif" : t === "video" ? "video/mp4,video/quicktime,.mov" : "image/*,video/mp4,video/quicktime,.heic,.heif,.mov";
+          npFiles.multiple = t === "carousel";
+          document.getElementById("npFilesLabel").textContent = t === "carousel" ? "קבצים (עד 10)" : "קובץ";
+          document.getElementById("npTypeHint").textContent = NP_HINTS[t];
+          npPicked = []; npFiles.value = ""; npRenderFiles();
+        }
+        function npSlotHint() {
+          var d = document.getElementById("npDate").value, t = document.getElementById("npTime").value;
+          var hint = document.getElementById("npSlotHint");
+          if (!d || !t) { hint.textContent = ""; return; }
+          var a = d.split("-").map(Number), b = t.split(":").map(Number);
+          var at = BS.israelWallToDate(a[0], a[1], a[2], b[0], b[1]);
+          var clash = queuedRows().some(function (r) { return Math.abs(new Date(r.scheduled_for) - at) < 3600000; });
+          hint.textContent = at <= new Date() ? "⚠️ המועד כבר עבר." : clash ? "⚠️ בשעה הזאת כבר מתוזמן פוסט — עדיף מועד אחר." : "";
+        }
+        function openNewPost() {
+          npForm.reset(); npShowError(""); npSyncType();
+          var slot = BS.nextFreeSlot({ existing: queuedRows() });
+          var p = israelParts(slot.iso);
+          document.getElementById("npDate").value = p.y + "-" + pad2(p.m) + "-" + pad2(p.d);
+          document.getElementById("npTime").value = pad2(p.h) + ":" + pad2(p.min);
+          document.getElementById("npSlotHint").textContent = "המועד הפנוי הבא: יום " + slot.dayLabel + " " + slot.dateLabel + " " + slot.timeLabel;
+          npSubmit.disabled = false;
+          openGuard(npModal, document.getElementById("npTitle"));
+        }
+        function npUpload(file, i, progress) {
+          var isVideo = /^video\//.test(file.type) || /\.(mp4|mov)$/i.test(file.name);
+          var month = new Date().toISOString().slice(0, 7);
+          var id = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + i);
+          var onP = function (f) { progress[i] = f; npRenderFiles(progress); };
+          return sb.auth.getSession().then(function (r) {
+            var token = r && r.data && r.data.session && r.data.session.access_token;
+            if (!token) throw { he: "צריך להתחבר מחדש." };
+            var up = function (path, blob, type, cb) {
+              return MC.tusUpload({ endpoint: SUPABASE_URL + "/storage/v1/upload/resumable", accessToken: token, apikey: SUPABASE_ANON_KEY, bucket: "content-media",
+                path: path, file: blob, contentType: type, onProgress: cb, upsert: false }).then(function () {
+                return SUPABASE_URL + "/storage/v1/object/public/content-media/" + path;
+              });
+            };
+            if (isVideo) {
+              if (file.size > 50 * 1024 * 1024) throw { he: "הסרטון גדול מ-50MB." };
+              var vType = /\.mov$/i.test(file.name) || file.type === "video/quicktime" ? "video/quicktime" : "video/mp4";
+              return MC.captureVideoFrame(file).then(function (fr) { return up("panel/" + month + "/" + id + "-cover.jpg", fr.blob, "image/jpeg"); }).catch(function () { return null; }).then(function (thumb) {
+                return up("panel/" + month + "/" + id + (vType === "video/quicktime" ? ".mov" : ".mp4"), file, vType, onP).then(function (url) { return { url: url, type: "video", thumb: thumb }; });
+              });
+            }
+            return MC.prepareImage(file).then(function (img) {
+              return up("panel/" + month + "/" + id + ".jpg", img.blob, "image/jpeg", onP).then(function (url) { return { url: url, type: "image", thumb: url }; });
+            });
+          });
+        }
+        function submitNewPost(e) {
+          e.preventDefault();
+          npShowError("");
+          var t = npType(), lim = NP_LIMITS[t];
+          var title = document.getElementById("npTitle").value.trim(), caption = document.getElementById("npCaption").value.trim();
+          if (npPicked.length < lim[0] || npPicked.length > lim[1]) return npShowError(t === "carousel" ? "בקרוסלה בוחרים בין 2 ל-10 קבצים." : "בחרו קובץ אחד.");
+          if (t === "image" && npPicked.some(function (f) { return /^video\//.test(f.type); })) return npShowError("בחרתם סרטון — סמנו 'וידאו'.");
+          if (t === "video" && npPicked.some(function (f) { return !/^video\//.test(f.type) && !/\.(mp4|mov)$/i.test(f.name); })) return npShowError("בחרו קובץ וידאו (MP4 / MOV).");
+          if (!title) return npShowError("חסרה כותרת.");
+          if (!caption) return npShowError("חסר כיתוב.");
+          var d = document.getElementById("npDate").value, tm = document.getElementById("npTime").value;
+          if (!d || !tm) return npShowError("בחרו תאריך ושעה.");
+          var a = d.split("-").map(Number), b = tm.split(":").map(Number);
+          var at = BS.israelWallToDate(a[0], a[1], a[2], b[0], b[1]);
+          if (at <= new Date(Date.now() + BS.MIN_LEAD_MS)) return npShowError("המועד חייב להיות לפחות רבע שעה קדימה.");
+          npSubmit.disabled = true; npSubmit.textContent = "מעלה…";
+          var progress = npPicked.map(function () { return 0; });
+          var seq = Promise.resolve([]);
+          npPicked.forEach(function (file, i) { seq = seq.then(function (acc) { return npUpload(file, i, progress).then(function (r) { return acc.concat([r]); }); }); });
+          seq.then(function (items) {
+            var first = items[0];
+            var row = {
+              title: title, caption: caption, platform: document.getElementById("npPlatform").value,
+              media_type: t === "carousel" ? "carousel" : first.type === "video" ? "video" : "image",
+              content_category: t === "video" ? "reel" : "post",
+              media_url: first.url, thumbnail_url: first.thumb || null,
+              media_items: t === "carousel" ? items.map(function (x) { return { url: x.url, type: x.type }; }) : null,
+              scheduled_for: at.toISOString(), status: "pending_approval", notes: "נוצר בפאנל (➕ פוסט חדש)"
+            };
+            return sb.from("content_queue").insert(row).select().then(function (res) {
+              if (res.error || !res.data || !res.data[0]) throw { he: "השמירה בתור נכשלה. נסו שוב." };
+              allContent.push(res.data[0]);
+              renderAll();
+              closeGuard(npModal);
+            });
+          }).catch(function (err) {
+            npShowError((err && err.he) || "ההעלאה נכשלה. נסו שוב.");
+          }).then(function () { npSubmit.disabled = false; npSubmit.textContent = "שליחה לאישור"; });
+        }
+        document.getElementById("cqNewPostBtn").addEventListener("click", openNewPost);
+        npForm.addEventListener("submit", submitNewPost);
+        npForm.addEventListener("change", function (e) {
+          if (e.target.name === "npType") npSyncType();
+          if (e.target.id === "npFiles") { npPicked = Array.prototype.slice.call(npFiles.files || []).slice(0, 10); npRenderFiles(); }
+          if (e.target.id === "npDate" || e.target.id === "npTime") npSlotHint();
+        });
+        npModal.addEventListener("click", function (e) { if (e.target.closest("[data-np-close]")) closeGuard(npModal); });
+        npModal.addEventListener("keydown", function (e) { if (e.key === "Escape") closeGuard(npModal); });
 
         function openPastDialog(id) {
           var row = findById(id);

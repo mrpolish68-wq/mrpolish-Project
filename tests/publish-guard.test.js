@@ -106,6 +106,16 @@ async function drain() { const p = bg; bg = []; await Promise.all(p); }
   check("cron: 3 due → no auto-retry this run (budget used)", res.body.processed === 3 && res.body.retried === 0 && res.body.waiting === 1 &&
     !calls.some(c => c.kind === "rest" && c.method === "PATCH" && /status=eq\.failed/.test(c.qs)));
 
+  // ---- carousel rows fail closed until Phase 12 (panel "➕ פוסט חדש" can create them) ----
+  reset();
+  db.approved = [row({ media_type: "carousel", media_url: "https://x.test/1.jpg", media_items: [{ url: "https://x.test/1.jpg", type: "image" }, { url: "https://x.test/2.jpg", type: "image" }] })];
+  res = mkRes();
+  await cron({ headers: { authorization: "Bearer cron-fake" }, query: {} }, res);
+  await drain();
+  const carPatch = calls.find(c => c.kind === "rest" && c.method === "PATCH" && c.body && c.body.status === "failed");
+  check("carousel: never sent to Meta (no Graph call at all)", !calls.some(c => c.kind === "graph"));
+  check("carousel: marked failed with a clear reason", !!carPatch && /Carousel publishing is not available yet/.test(carPatch.body.publish_error), JSON.stringify(carPatch && carPatch.body));
+
   // ---- publish-now: refuse when 3+ went live in the last 10 minutes ----
   async function callNow(r) {
     db.byId[r.id] = r;

@@ -1,4 +1,4 @@
-// api/media.js — create-upload / process / delete, auth (session or internal secret), validation,
+// api/media.js — create-upload / process / delete / analyze / correct / delete-project, auth (session or internal secret), validation,
 // quota, rate limits. Supabase Auth, REST, Storage and the quota RPC are MOCKED; image processing
 // runs for real (sharp) on a generated photo. Fake values only.
 "use strict";
@@ -6,14 +6,14 @@ const path = require("path");
 const sharp = require("sharp");
 const REPO = path.resolve(__dirname, "..");
 
-Object.assign(process.env, { SUPABASE_SERVICE_ROLE_KEY: "svc-fake", INTERNAL_API_SECRET: "internal-fake-secret" });
+Object.assign(process.env, { SUPABASE_SERVICE_ROLE_KEY: "svc-fake", INTERNAL_API_SECRET: "internal-fake-secret", GOOGLE_AI_API_KEY: "g-fake" });
 const P1 = "11111111-1111-4111-8111-111111111111", P2 = "22222222-2222-4222-8222-222222222222";
 const ST = "https://mmognkxkglkotzkuxzly.supabase.co/storage/v1/object/";
 
-let projects, store, media, calls, quotaLeft, quotaDown;
+let projects, store, media, calls, quotaLeft, quotaDown, queue, geminiReplies, geminiStatus;
 function reset() {
   projects = { [P1]: { id: P1, watermark: true, status: "draft" }, [P2]: { id: P2, watermark: false, status: "draft" } };
-  store = {}; media = {}; calls = []; quotaLeft = 80; quotaDown = false;
+  store = {}; media = {}; calls = []; quotaLeft = 80; quotaDown = false; queue = []; geminiReplies = []; geminiStatus = 200;
 }
 reset();
 function res_(status, body, headers) {
@@ -35,10 +35,39 @@ global.fetch = async function (url, init) {
     if (quotaLeft <= 0) return res_(200, -1);
     return res_(200, --quotaLeft);
   }
-  if ((m = url.match(/\/rest\/v1\/projects\?id=eq\.([^&]+)/))) return res_(200, projects[m[1]] ? [projects[m[1]]] : []);
+  if (url.startsWith("https://generativelanguage.googleapis.com/")) {
+    const body = JSON.parse(init.body);
+    calls.push({ kind: "gemini", body });
+    if (geminiStatus !== 200) return res_(geminiStatus, { error: { status: geminiStatus === 429 ? "RESOURCE_EXHAUSTED" : "INTERNAL" } });
+    return res_(200, { candidates: [{ content: { parts: [{ text: JSON.stringify(geminiReplies.shift() || {}) }] } }] });
+  }
+  if ((m = url.match(/\/rest\/v1\/projects\?id=eq\.([^&]+)/))) {
+    if (method === "PATCH") { const p = JSON.parse(init.body); Object.assign(projects[m[1]], p); calls.push({ kind: "project-patch", patch: p }); return res_(200, [projects[m[1]]]); }
+    if (method === "DELETE") { delete projects[m[1]]; Object.keys(media).forEach(k => { if (media[k].project_id === m[1]) delete media[k]; }); calls.push({ kind: "project-delete", id: m[1] }); return res_(204, null); }
+    return res_(200, projects[m[1]] ? [projects[m[1]]] : []);
+  }
+  if ((m = url.match(/\/rest\/v1\/project_media\?project_id=eq\.([^&]+)(.*)$/))) {
+    let rows = Object.values(media).filter(r => r.project_id === m[1]);
+    if (/kind=eq\.image/.test(m[2])) rows = rows.filter(r => r.kind === "image");
+    return res_(200, rows.sort((a, b) => a.sort - b.sort));
+  }
+  if ((m = url.match(/\/rest\/v1\/content_queue\?(.*)$/))) {
+    const qs = decodeURIComponent(m[1]);
+    if (method === "PATCH") { calls.push({ kind: "cq-patch", qs, patch: JSON.parse(init.body) }); return res_(204, null); }
+    if (/^select=caption/.test(qs)) return res_(200, [{ caption: "השיש חזר לברק ✨\nעוד" }, { caption: "מדרגות כמו חדשות" }]);
+    const pm = qs.match(/project_id=eq\.([^&]+)/);
+    return res_(200, queue.filter(q => q.project_id === pm[1]));
+  }
+  if ((m = url.match(/\/storage\/v1\/object\/list\/([^/]+)$/))) {
+    const prefix = JSON.parse(init.body).prefix;
+    calls.push({ kind: "list", bucket: m[1], prefix });
+    const names = Object.keys(store).filter(k => k.startsWith(m[1] + "/" + prefix)).map(k => k.slice((m[1] + "/" + prefix).length)).filter(n => !n.includes("/"));
+    return res_(200, names.map(n => ({ name: n, id: "obj-" + n })).concat([{ name: "incoming", id: null }]));
+  }
   if (/\/rest\/v1\/project_media$/.test(url) && method === "POST") { const row = JSON.parse(init.body); media[row.id] = row; calls.push({ kind: "insert", row }); return res_(201, [row]); }
   if ((m = url.match(/\/rest\/v1\/project_media\?id=eq\.([^&]+)/))) {
     if (method === "DELETE") { delete media[m[1]]; calls.push({ kind: "row-delete", id: m[1] }); return res_(204, null); }
+    if (method === "PATCH") { const p = JSON.parse(init.body); Object.assign(media[m[1]], p); calls.push({ kind: "media-patch", id: m[1], patch: p }); return res_(204, null); }
     return res_(200, media[m[1]] ? [media[m[1]]] : []);
   }
   if ((m = url.match(/\/storage\/v1\/object\/upload\/sign\/([^/]+)\/(.+)$/))) {
@@ -235,6 +264,68 @@ function gpsEntries(buf) {
   check("deleting again → 404", r.code === 404);
   r = await call("delete", { media_id: "nope" });
   check("a bad media id → 400", r.code === 400);
+
+  // ---- analyze / correct (Gemini mocked; real sharp prep) ----
+  reset();
+  const ph = await sharp({ create: { width: 1600, height: 1200, channels: 3, background: "#8a7a66" } }).jpeg().toBuffer();
+  const M = ["aaaaaaaa-0000-4000-8000-000000000001", "aaaaaaaa-0000-4000-8000-000000000002", "aaaaaaaa-0000-4000-8000-000000000003"];
+  projects[P1] = { id: P1, watermark: true, status: "collecting", service: null, city: "רעננה", title_he: null, ai_meta: { publish_plan: { destinations: ["site"] } } };
+  M.forEach((id, i) => {
+    media[id] = { id, project_id: P1, kind: i === 2 ? "video" : "image", sort: i, role: null, pair_no: null, original_path: P1 + "/" + id + (i === 2 ? ".mp4" : ".jpg"),
+      variants: i === 2 ? null : { w480: { path: P1 + "/" + id + "/w480.webp" }, ig: { path: P1 + "/" + id + "/ig.jpg" } }, flags_ack_at: i === 0 ? "2026-10-31T08:00:00Z" : null };
+    store["project-originals/" + media[id].original_path] = { buf: ph };
+  });
+  const aiReply = { transcript: null, pairing_confidence: 0.9, service: "marble_stone", city: null, title_he: "ליטוש שיש בסלון", title_en: "Marble polishing", summary_he: "רצפת שיש עמומה קיבלה ליטוש.", summary_en: "A dull marble floor was polished.",
+    caption_body_he: "השיש בסלון חזר לברק ✨\nליטוש והברקה בכל השטח. בדיקה ללא עלות!", hashtags: ["#ליטוש_שיש", "#סילר"], missing: [],
+    images: [{ index: 1, role: "before", pair_no: 1, confidence: 0.9, alt_he: "שיש לפני", alt_en: "Marble before", privacy_flags: [{ type: "face", note: "a face" }], quality_flags: ["dark"] },
+      { index: 2, role: "after", pair_no: 1, confidence: 0.9, alt_he: "שיש אחרי", alt_en: "Marble after", privacy_flags: [], quality_flags: [] }] };
+  geminiReplies = [JSON.parse(JSON.stringify(aiReply))];
+  r = await call("analyze", { project_id: P1, text: "ליטוש שיש בסלון" });
+  check("analyze → 200 + the shaped analysis", r.code === 200 && r.body.ok && r.body.analysis.images.length === 2 && r.body.analysis.pairing_source === "ai", JSON.stringify(r.body).slice(0, 200));
+  const gem = calls.filter(c => c.kind === "gemini");
+  check("analyze: ONE Gemini call with only the 2 photos (the video is skipped), recent openings in the prompt", gem.length === 1 &&
+    gem[0].body.contents[0].parts.filter(p => p.inline_data).length === 2 && /השיש חזר לברק/.test(gem[0].body.contents[0].parts[0].text));
+  check("analyze: the private originals are read (not the watermarked public variants)", calls.filter(c => c.kind === "download").every(c => /^[0-9a-f-]{36}\/[0-9a-f-]{36}\.jpg$/.test(c.path)) && calls.filter(c => c.kind === "download").length === 2);
+  check("analyze: one media_ai quota unit", calls.filter(c => c.kind === "quota" && c.body.p_kind === "media_ai").length === 1, JSON.stringify(calls.filter(c => c.kind === "quota")));
+  check("analyze: roles / pairs / alts / flags (+ quality) saved per photo", media[M[0]].role === "before" && media[M[0]].pair_no === 1 && media[M[1]].role === "after" &&
+    media[M[0]].alt_he === "שיש לפני" && media[M[0]].ai_flags.faces === true && media[M[0]].ai_flags.quality.includes("dark"), JSON.stringify(media[M[0]]));
+  check("analyze: an acknowledged photo keeps its 'בדקתי' (flags_ack_at untouched)", media[M[0]].flags_ack_at === "2026-10-31T08:00:00Z" && !calls.some(c => c.kind === "media-patch" && "flags_ack_at" in c.patch));
+  check("analyze: project texts + caption saved; collecting → draft; publish_plan kept", projects[P1].title_he === "ליטוש שיש בסלון" && projects[P1].status === "draft" &&
+    projects[P1].ai_meta.caption_he.includes("052-9534540") && projects[P1].ai_meta.publish_plan.destinations[0] === "site" && projects[P1].ai_meta.needs_review === false);
+  check("analyze: the caption rules apply (no 'free', no unstated #סילר)", !/ללא עלות/.test(projects[P1].ai_meta.caption_he) && !projects[P1].ai_meta.hashtags.includes("#סילר"), projects[P1].ai_meta.caption_he);
+  check("analyze: a city Miri typed is not erased when the AI has none", projects[P1].city === "רעננה");
+  check("analyze: no prompt / caption / key in the logs", !logs.some(l => /g-fake|השיש בסלון|ליטוש שיש בסלון/.test(l)));
+
+  geminiReplies = [{ images: [], caption_body_he: "השיש בסלון חזר לברק ✨" }];
+  projects[P1].title_he = "כותרת שמירי ערכה";
+  r = await call("correct", { project_id: P1, text: "תקצר את הכיתוב" });
+  const corrPrompt = calls.filter(c => c.kind === "gemini").pop().body.contents[0].parts[0].text;
+  check("correct → 200; the CURRENT saved state is corrected (Miri's manual title is in the prompt)", r.code === 200 && /כותרת שמירי ערכה/.test(corrPrompt) && projects[P1].ai_meta.caption_body_he === "השיש בסלון חזר לברק ✨", projects[P1].ai_meta.caption_body_he);
+  check("correct: flags are not touched", !calls.filter(c => c.kind === "media-patch").slice(-2).some(c => "ai_flags" in c.patch));
+  r = await call("correct", { project_id: P1, text: "  " });
+  check("correct: an empty text → 400", r.code === 400 && r.body.code === "empty_correction");
+  geminiStatus = 429;
+  r = await call("analyze", { project_id: P1 });
+  check("analyze: Gemini 429 → 503 ai_busy with a Hebrew message", r.code === 503 && r.body.code === "ai_busy" && /עמוסה/.test(r.body.he));
+  geminiStatus = 200;
+  r = await call("analyze", { project_id: P2 });
+  check("analyze: a project without photos → 400 no_images", r.code === 400 && r.body.code === "no_images");
+  r = await call("analyze", { project_id: P1 }, { headers: {} });
+  check("analyze: no auth → 401 (no Gemini call)", r.code === 401);
+
+  // ---- delete-project ----
+  store["project-originals/" + P1 + "/incoming/raw-left.jpg"] = { buf: ph };
+  store["project-originals/" + P1 + "/orphan.mp4"] = { buf: ph };
+  queue = [{ id: "q-pending", project_id: P1, status: "approved", fb_post_id: null, ig_post_id: null }, { id: "q-done", project_id: P1, status: "published", fb_post_id: "F1", ig_post_id: "I1" }];
+  r = await call("delete-project", { project_id: P1 });
+  check("delete-project → 200, the project row deleted (cascade)", r.code === 200 && !projects[P1] && !Object.values(media).some(m => m.project_id === P1));
+  check("delete-project: public variants + originals + unprocessed leftovers all removed", !Object.keys(store).some(k => k.includes(P1)), Object.keys(store).filter(k => k.includes(P1)).join(", "));
+  check("delete-project: posts not yet published are cancelled (rejected), published ones untouched", calls.some(c => c.kind === "cq-patch" && /id=in\.\(q-pending\)/.test(c.qs) && c.patch.status === "rejected"));
+  check("delete-project: reports the Instagram posts to delete by hand", r.body.instagram_posts === 1 && r.body.facebook_posts === 1 && r.body.cancelled_posts === 1);
+  r = await call("delete-project", { project_id: P1 });
+  check("delete-project: unknown project → 404", r.code === 404);
+  r = await call("delete-project", { project_id: "../etc" });
+  check("delete-project: a bad id → 400", r.code === 400);
 
   // ---- rate limit ----
   let last;

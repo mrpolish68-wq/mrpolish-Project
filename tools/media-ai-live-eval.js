@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // LIVE evaluation of api/_media-ai.js against real Gemini (costs a few calls; NOT part of npm test).
 //   node tools/media-ai-live-eval.js
-// Calls (8, budget ≤ 15): 5 × analyzeProject on the 5 existing gallery projects (assets/gallery,
+// Calls (default 8, hard cap MAX_CALLS): 5 × analyzeProject on the 5 existing gallery projects (assets/gallery,
 // SHUFFLED order + neutral names photo-N.jpg), 1 × analyzeProject on 2 synthetic privacy images (a car
 // with a fake plate, a door with a house number — generated here, nothing real), 2 × applyMediaCorrection.
 // The daily DB quota is NOT used (a fake consumeQuota). GOOGLE_AI_API_KEY is read from .env, never printed.
@@ -22,7 +22,9 @@ const OUT = path.join(ROOT, ".playwright-mcp", "media-ai-eval");
 fs.mkdirSync(OUT, { recursive: true });
 
 let calls = 0;
-const OPTS = { consumeQuota: async () => { calls++; if (calls > 15) throw new Error("live call budget exceeded"); return { ok: true, remaining: 99 }; } };
+// MAX_CALLS (default 15) is a HARD cap: the quota stub refuses any call beyond it (nothing reaches Gemini).
+const MAX_CALLS = Number(process.env.MAX_CALLS || 15);
+const OPTS = { consumeQuota: async () => { if (calls >= MAX_CALLS) throw new Error("live call budget exceeded"); calls++; return { ok: true, remaining: 99 }; } };
 
 // The 5 gallery projects (ground truth from the file names; the owner confirmed the before/after order).
 const PROJECTS = [
@@ -98,8 +100,17 @@ async function privacyImages() {
     privacy = r.images.map(im => ({ id: im.id, flags: im.privacy_flags.map(p => p.type), ai_flags: im.ai_flags, flagged: im.flagged }));
   } catch (e) { privacy = { error: e.code + " " + e.message }; }
   const corrections = [];
+  // SHORTER_ONLY=1 CORRECT_ON=P1 → only the "shorter caption" correction, on that project (1–2 calls)
+  if (process.env.SHORTER_ONLY && !process.env.SKIP_CORRECTIONS) {
+    const t = results.find(r => r.analysis && r.project.startsWith(process.env.CORRECT_ON || "P1"));
+    if (t) try {
+      const c = await AI.applyMediaCorrection(t.analysis, { text: "תקצר את הכיתוב בבקשה" }, OPTS);
+      corrections.push({ ask: "shorter caption (" + t.project + ")", caption_len_before: (t.analysis.caption_body_he || "").length,
+        caption_len_after: (c.caption_body_he || "").length, warnings: c.warnings, caption_he: c.caption_he, ok: !c.warnings.includes("caption_not_changed") });
+    } catch (e) { corrections.push({ error: e.code + " " + e.message }); }
+  }
   const p2 = results.find(r => r.project === "P2 Jerusalem stone" && r.analysis);
-  if (p2 && !process.env.SKIP_CORRECTIONS) {
+  if (p2 && !process.env.SKIP_CORRECTIONS && !process.env.SHORTER_ONLY) {
     try {
       const before = p2.analysis.images.map(i => i.role[0] + (i.pair_no || "-")).join(",");
       const c1 = await AI.applyMediaCorrection(p2.analysis, { text: "התמונה הראשונה זה לא " + (p2.analysis.images[0].role === "before" ? "לפני, זה אחרי" : "אחרי, זה לפני") }, OPTS);
@@ -123,5 +134,5 @@ async function privacyImages() {
   results.forEach(r => { if (!r.error) console.log("\n--- " + r.project + " · alt_he: " + r.alt_he_sample + "\n    alt_en: " + r.alt_en_sample + "\n    title: " + r.title_he + "\n    warnings: " + JSON.stringify(r.warnings)); });
   results.filter(r => !r.error).slice(0, 5).forEach(r => console.log("\n=== caption " + r.project + " ===\n" + r.caption_he));
   const c2 = corrections.find(c => c.caption_he);
-  if (c2) console.log("\n=== caption after correction (P2) ===\n" + c2.caption_he);
+  if (c2) console.log("\n=== caption after correction ===\n" + c2.caption_he);
 })().catch(e => { console.error(e.stack); process.exit(1); });

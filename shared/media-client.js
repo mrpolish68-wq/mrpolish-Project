@@ -8,10 +8,12 @@
    captureVideoFrame(file, {at, maxEdge, quality}) → { blob (JPEG), width, height, duration }
        A cover image taken from the video itself (at ~1 s, or the middle of a short clip).
    readVideoInfo(file) → { duration, width, height }   (what the browser reports — the server re-checks)
-   tusUpload({ endpoint, accessToken, apikey, bucket, path, file, contentType, onProgress, signal })
+   tusUpload({ endpoint, accessToken, apikey, bucket, path, file, contentType, onProgress, signal, upsert })
        → { path }   Resumable upload (TUS 1.0.0) in 6 MB chunks (Supabase's required size), with
        progress, retries (HEAD → resume from the server's offset) and resume after a page reload
-       (the upload URL is remembered in localStorage by bucket/path/size). */
+       (the upload URL is remembered in localStorage by bucket/path/size).
+       upsert: false for buckets where the panel may only INSERT (project-originals, content-media);
+       a 409 on create then means the object is already there (finished before a reload) → done. */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
   else root.MrpMediaClient = factory();
@@ -127,7 +129,8 @@
 
     function create() {
       var meta = ["bucketName " + b64(o.bucket), "objectName " + b64(o.path), "contentType " + b64(o.contentType || o.file.type || "application/octet-stream"), "cacheControl " + b64("3600")].join(",");
-      return xhr("POST", o.endpoint, h({ "Upload-Length": String(total), "Upload-Metadata": meta, "x-upsert": "true" }), undefined, null, o.signal).then(function (x) {
+      return xhr("POST", o.endpoint, h({ "Upload-Length": String(total), "Upload-Metadata": meta, "x-upsert": o.upsert === false ? "false" : "true" }), undefined, null, o.signal).then(function (x) {
+        if (x.status === 409 && o.upsert === false) { location = null; offset = total; return; }   // already uploaded
         if (x.status !== 201) throw mediaError("upload_failed", "ההעלאה נכשלה (" + x.status + ").");
         location = new URL(x.getResponseHeader("Location"), o.endpoint).toString();
         try { localStorage.setItem(key, location); } catch (e) {}

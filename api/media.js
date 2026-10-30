@@ -10,6 +10,15 @@
 //          project_media row; the raw upload is deleted. Video: MP4/MOV metadata via Range reads
 //          (≤ 50 MB, H.264/HEVC, 3 s – 15 min) + an optional cover image → a project_media row.
 //   POST /api/media?action=delete         {media_id} → the row's files (both buckets) + the row.
+//   POST /api/media?action=analyze        {project_id, text?} → Gemini vision (api/_media-ai.js) on the
+//        project's photos (the private originals, ≤ 10): roles, pairs, alt texts, privacy flags, the
+//        service / city / titles / summaries / caption; saved to project_media + projects (ai_meta).
+//        A photo Miri already reviewed ("בדקתי") keeps its acknowledgement (the photo didn't change).
+//   POST /api/media?action=correct        {project_id, text} → a correction in plain words ("תקצר את
+//        הכיתוב", "העיר היא רעננה") on the CURRENT saved state (so manual edits in the panel count).
+//   POST /api/media?action=delete-project {project_id} → every file of the project (both buckets, incl.
+//        unprocessed uploads) + the project (cascades to media + publications). Posts not yet published
+//        are cancelled (rejected); Instagram posts already published must be deleted by hand.
 //
 // Auth: a real Supabase session (the panel) OR X-Internal-Secret = INTERNAL_API_SECRET (the bot,
 // server-to-server). Every action is rate-limited; process also uses the daily `media_file` quota.
@@ -20,6 +29,7 @@ const crypto = require("crypto");
 const { enforce } = require("./_rate-limit.js");
 const { consumeQuota } = require("./_quota.js");
 const MP = require("./_media-process.js");
+const MA = require("./_media-ai.js");
 const VM = require("./_video-meta.js");
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -32,7 +42,7 @@ const IMAGE_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "we
 const VIDEO_TYPES = { "video/mp4": "mp4", "video/quicktime": "mov" };
 const HEIC_TYPES = ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"];
 const MAX_BYTES = 50 * 1024 * 1024;
-const LIMITS = { "create-upload": [60, 60000], process: [30, 60000], delete: [30, 60000] };
+const LIMITS = { "create-upload": [60, 60000], process: [30, 60000], delete: [30, 60000], analyze: [10, 60000], correct: [10, 60000], "delete-project": [10, 60000] };
 var timeoutMs = 20000;
 
 function safeEqual(a, b) {
@@ -71,8 +81,8 @@ async function rest(pathQs, init) {
   if (!res.ok) throw new Error("Supabase REST " + (init.method || "GET") + " " + pathQs.split("?")[0] + " failed: " + res.status);
   return res.status === 204 ? null : res.json();
 }
-async function getProject(id) {
-  var rows = await rest("projects?id=eq." + encodeURIComponent(id) + "&select=id,watermark,status");
+async function getProject(id, fields) {
+  var rows = await rest("projects?id=eq." + encodeURIComponent(id) + "&select=" + (fields || "id,watermark,status"));
   return rows && rows[0] || null;
 }
 async function storageUpload(bucket, objectPath, buffer, contentType, cacheSeconds) {
@@ -107,6 +117,15 @@ async function storageRemove(bucket, paths) {
     headers: svc({ "Content-Type": "application/json" })
   });
   if (!res.ok) throw new Error("storage delete " + bucket + " failed: " + res.status);
+}
+async function storageList(bucket, prefix) {
+  var res = await fetch(SUPABASE_URL + "/storage/v1/object/list/" + bucket, {
+    method: "POST", body: JSON.stringify({ prefix: prefix, limit: 1000, offset: 0 }), signal: AbortSignal.timeout(timeoutMs),
+    headers: svc({ "Content-Type": "application/json" })
+  });
+  if (!res.ok) throw new Error("storage list " + bucket + " failed: " + res.status);
+  var items = await res.json();
+  return (items || []).filter(function (it) { return it && it.id; }).map(function (it) { return prefix + it.name; });   // files only (folders have no id)
 }
 async function signedUpload(bucket, objectPath) {
   var res = await fetch(SUPABASE_URL + "/storage/v1/object/upload/sign/" + bucket + "/" + objectPath, {
@@ -220,13 +239,7 @@ async function deleteAction(body, res) {
   var rows = await rest("project_media?id=eq." + mediaId + "&select=id,project_id,original_path,variants");
   var m = rows && rows[0];
   if (!m) return fail(res, 404, "media_not_found", "הקובץ לא נמצא.");
-  var publicPaths = [], privatePaths = [m.original_path];
-  (function collect(v) {
-    if (!v || typeof v !== "object") return;
-    if (typeof v.path === "string") publicPaths.push(v.path);
-    Object.keys(v).forEach(function (k) { if (v[k] && typeof v[k] === "object") collect(v[k]); });
-  })(m.variants);
-  if (m.variants && typeof m.variants.cover_original === "string") privatePaths.push(m.variants.cover_original);
+  var paths = mediaPaths(m), publicPaths = paths.publicPaths, privatePaths = paths.privatePaths;
   await storageRemove(PUBLIC, publicPaths);
   await storageRemove(ORIGINALS, privatePaths);
   await rest("project_media?id=eq." + mediaId, { method: "DELETE", headers: { Prefer: "return=minimal" } });
@@ -234,7 +247,126 @@ async function deleteAction(body, res) {
   res.status(200).json({ ok: true, deleted: mediaId, files: publicPaths.length + privatePaths.length });
 }
 
-const ACTIONS = { "create-upload": createUpload, process: processAction, delete: deleteAction };
+function mediaPaths(m) {
+  var publicPaths = [], privatePaths = [m.original_path];
+  (function collect(v) {
+    if (!v || typeof v !== "object") return;
+    if (typeof v.path === "string") publicPaths.push(v.path);
+    Object.keys(v).forEach(function (k) { if (v[k] && typeof v[k] === "object") collect(v[k]); });
+  })(m.variants);
+  if (m.variants && typeof m.variants.cover_original === "string") privatePaths.push(m.variants.cover_original);
+  return { publicPaths: publicPaths, privatePaths: privatePaths };
+}
+
+// ---- AI (the panel now; the bot reuses the same actions in Phase 7) ----
+const PROJECT_AI_FIELDS = "id,status,service,city,title_he,title_en,summary_he,summary_en,ai_meta";
+async function projectImages(projectId) {
+  var rows = await rest("project_media?project_id=eq." + projectId + "&kind=eq.image&select=id,sort,role,pair_no,alt_he,alt_en,original_path&order=sort.asc,created_at.asc");
+  return (rows || []).slice(0, MA.MAX_IMAGES);
+}
+// The first lines of the latest captions, so a new caption opens differently (owner: varied openings).
+async function recentOpenings() {
+  try {
+    var rows = await rest("content_queue?select=caption&caption=not.is.null&order=created_at.desc&limit=8");
+    return (rows || []).map(function (r) { return String(r.caption || "").split("\n")[0]; }).filter(Boolean);
+  } catch (e) { return []; }
+}
+async function saveAnalysis(project, result, opts) {
+  for (var i = 0; i < result.images.length; i++) {
+    var im = result.images[i];
+    var patch = { role: im.role, pair_no: im.pair_no, alt_he: im.alt_he, alt_en: im.alt_en };
+    if (opts.flags) patch.ai_flags = Object.assign({}, im.ai_flags, { quality: im.quality_flags || [] });
+    await rest("project_media?id=eq." + encodeURIComponent(im.id), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(patch) });
+  }
+  var meta = Object.assign({}, project.ai_meta || {}, {
+    caption_body_he: result.caption_body_he, caption_he: result.caption_he, hashtags: result.hashtags,
+    pairing_source: result.pairing_source, pairing_confidence: result.pairing_confidence, needs_review: !!result.needs_review,
+    stated_claims: result.stated_claims || [], missing: result.missing || [], warnings: result.warnings || [],
+    analyzed_at: new Date().toISOString()
+  });
+  var p = { ai_meta: meta, service: result.service, title_he: result.title_he, title_en: result.title_en, summary_he: result.summary_he, summary_en: result.summary_en };
+  if (result.city) p.city = result.city;                      // never erase a city Miri typed
+  if (project.status === "collecting") p.status = "draft";
+  Object.keys(p).forEach(function (k) { if (p[k] === null || p[k] === undefined) delete p[k]; });
+  var saved = await rest("projects?id=eq." + project.id, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(p) });
+  return saved && saved[0] || null;
+}
+function publicAnalysis(r) {
+  return {
+    images: r.images.map(function (im) { return { id: im.id, role: im.role, pair_no: im.pair_no, alt_he: im.alt_he, alt_en: im.alt_en, privacy_flags: im.privacy_flags, quality_flags: im.quality_flags, flagged: im.flagged }; }),
+    pairing_source: r.pairing_source, needs_review: r.needs_review, service: r.service, city: r.city, title_he: r.title_he, title_en: r.title_en,
+    summary_he: r.summary_he, summary_en: r.summary_en, caption_he: r.caption_he, hashtags: r.hashtags, missing: r.missing, warnings: r.warnings
+  };
+}
+
+async function analyzeAction(body, res) {
+  var projectId = String(body.project_id || "");
+  if (!UUID_RE.test(projectId)) return fail(res, 400, "bad_project", "פרויקט לא תקין.");
+  var project = await getProject(projectId, PROJECT_AI_FIELDS);
+  if (!project) return fail(res, 404, "project_not_found", "הפרויקט לא נמצא.");
+  var rows = await projectImages(projectId);
+  if (!rows.length) return fail(res, 400, "no_images", "אין עדיין תמונות בפרויקט. העלו תמונות ואז נתחו.");
+  var images = (await Promise.all(rows.map(async function (m, i) {
+    var buf = await storageDownload(ORIGINALS, m.original_path);
+    return buf ? { id: m.id, buffer: buf, order: i } : null;
+  }))).filter(Boolean);
+  if (!images.length) return fail(res, 404, "upload_missing", "קובצי התמונות לא נמצאו. נסו להעלות שוב.");
+  var text = typeof body.text === "string" ? body.text.slice(0, 2000) : "";
+  var result = await MA.analyzeProject({ images: images, text: text || undefined }, { avoidOpenings: await recentOpenings() });
+  var saved = await saveAnalysis(project, result, { flags: true });
+  console.log("[media] analyzed project=" + projectId + " images=" + images.length + " pairing=" + result.pairing_source);
+  res.status(200).json({ ok: true, analysis: publicAnalysis(result), project: saved });
+}
+
+async function correctAction(body, res) {
+  var projectId = String(body.project_id || "");
+  var text = typeof body.text === "string" ? body.text.trim().slice(0, 1000) : "";
+  if (!UUID_RE.test(projectId)) return fail(res, 400, "bad_project", "פרויקט לא תקין.");
+  if (!text) return fail(res, 400, "empty_correction", "מה לתקן?");
+  var project = await getProject(projectId, PROJECT_AI_FIELDS);
+  if (!project) return fail(res, 404, "project_not_found", "הפרויקט לא נמצא.");
+  var rows = await projectImages(projectId);
+  var meta = project.ai_meta || {};
+  // the CURRENT saved state (manual edits in the panel included) is what gets corrected
+  var analysis = {
+    images: rows.map(function (m) { return { id: m.id, role: m.role || "detail", pair_no: m.pair_no, alt_he: m.alt_he, alt_en: m.alt_en, privacy_flags: [], quality_flags: [] }; }),
+    service: project.service || "other", city: project.city || null, title_he: project.title_he, title_en: project.title_en,
+    summary_he: project.summary_he, summary_en: project.summary_en, caption_body_he: meta.caption_body_he || null,
+    hashtags: meta.hashtags || [], stated_claims: meta.stated_claims || [], missing: meta.missing || [],
+    pairing_source: meta.pairing_source || "manual", pairing_confidence: meta.pairing_confidence || 0, needs_review: !!meta.needs_review
+  };
+  var result = await MA.applyMediaCorrection(analysis, { text: text }, {});
+  var saved = await saveAnalysis(project, result, { flags: false });
+  console.log("[media] corrected project=" + projectId + " warnings=" + (result.warnings || []).join(","));
+  res.status(200).json({ ok: true, analysis: publicAnalysis(result), project: saved });
+}
+
+async function deleteProjectAction(body, res) {
+  var projectId = String(body.project_id || "");
+  if (!UUID_RE.test(projectId)) return fail(res, 400, "bad_project", "פרויקט לא תקין.");
+  var project = await getProject(projectId);
+  if (!project) return fail(res, 404, "project_not_found", "הפרויקט לא נמצא.");
+  var rows = (await rest("project_media?project_id=eq." + projectId + "&select=id,original_path,variants")) || [];
+  var pub = [], priv = [];
+  rows.forEach(function (m) { var p = mediaPaths(m); pub = pub.concat(p.publicPaths); priv = priv.concat(p.privatePaths); });
+  // uploads that never got processed (a closed tab, a failed process) live under the project too
+  var leftovers = (await storageList(ORIGINALS, projectId + "/")).concat(await storageList(ORIGINALS, projectId + "/incoming/"));
+  leftovers.forEach(function (p) { if (priv.indexOf(p) === -1) priv.push(p); });
+  var posts = (await rest("content_queue?project_id=eq." + projectId + "&select=id,status,fb_post_id,ig_post_id")) || [];
+  var open = posts.filter(function (p) { return ["pending_approval", "approved", "scheduled", "failed"].indexOf(p.status) !== -1; });
+  if (open.length) {   // their media is about to disappear → never publish them
+    await rest("content_queue?id=in.(" + open.map(function (p) { return p.id; }).join(",") + ")", { method: "PATCH", headers: { Prefer: "return=minimal" },
+      body: JSON.stringify({ status: "rejected", rejected_at: new Date().toISOString() }) });
+  }
+  await storageRemove(PUBLIC, pub);
+  await storageRemove(ORIGINALS, priv);
+  await rest("projects?id=eq." + projectId, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+  console.log("[media] deleted project=" + projectId + " files=" + (pub.length + priv.length));
+  res.status(200).json({ ok: true, deleted: projectId, files: pub.length + priv.length, cancelled_posts: open.length,
+    instagram_posts: posts.filter(function (p) { return p.ig_post_id; }).length, facebook_posts: posts.filter(function (p) { return p.fb_post_id; }).length });
+}
+
+const ACTIONS = { "create-upload": createUpload, process: processAction, delete: deleteAction, analyze: analyzeAction, correct: correctAction, "delete-project": deleteProjectAction };
 
 module.exports = async function handler(req, res) {
   var action = req.query && typeof req.query.action === "string" ? req.query.action : "";
@@ -251,6 +383,10 @@ module.exports = async function handler(req, res) {
     if (err instanceof MP.MediaError || err instanceof VM.VideoError) {
       var status = err.code === "too_large" ? 413 : (err.code === "heic_unsupported" || err.code === "unsupported_type" || err.code === "unsupported_codec" || err.code === "not_mp4") ? 415 : 422;
       return fail(res, status, err.code, err.he);
+    }
+    if (err instanceof MA.MediaAiError) {
+      var aiStatus = { invalid_input: 400, quota: 429, quota_unavailable: 503, ai_busy: 503, ai_failed: 502 }[err.code] || 502;
+      return fail(res, aiStatus, err.code, err.he);
     }
     if (err && err.code === "quota_unavailable") return fail(res, 503, "quota_unavailable", "המערכת עמוסה כרגע. נסו שוב בעוד רגע.");
     console.error("[media] " + action + " failed: " + (err && err.message));
