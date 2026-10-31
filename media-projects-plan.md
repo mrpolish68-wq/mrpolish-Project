@@ -2,7 +2,7 @@
 
 _Branch: `feature/media-projects` · Created 2026-10-30 · Based on the Phase 0 recon (read-only) of 2026-10-30._
 _Update the **Status** column and the **Log** at the end of every phase. `handoff.md` §34 has the progress summary (feature not shipped yet)._
-_**Status (2026-10-31):** commands 1–5 of 7 done on the branch (not merged) + the phone-test fixes (`e0d11e4`). Next: command 6 (the site gallery + project pages). Live: pg_cron scheduler, media-projects schema, projects realtime. Safe now, not applied: `supabase-telegram-parked-media.sql`. At merge: `supabase-lead-alert.sql`. Functions: 8 / 12._
+_**Status (2026-10-31):** commands 1–6 of 7 done on the branch (not merged). Next: command 7 (social publishing: FB multi-photo, IG carousel, video; the weekly summary, comment alerts, the review request). Live: pg_cron scheduler, media-projects schema, projects realtime, telegram_parked_media, the 5 migrated projects (published in the DB). At merge: `supabase-lead-alert.sql`. Functions: 9 / 12._
 
 ## 1. Goal
 Miri manages Ori's project photos and short videos from her phone — in the Telegram bot (@mrpolish_expenses_bot) and in the admin panel (installed PWA):
@@ -177,9 +177,9 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
 | 7 | Bot project mode | Albums + "✅ סיימתי", consent question (D2), album vs receipt split | **Done on branch** (command 5, `24a5f1f`) — + automatic AI, only the open questions, destinations + timing (`publish_plan`), ✅ = ready; live run 20/20; `supabase-telegram-parked-media.sql` (albums outside a mode) SAFE NOW, not applied |
 | 8 | Server processing | sharp: sizes, IG crops, watermark (D4); MP4 metadata; HEIC refusal; ≤ 2560px originals (D5) | **Done on branch** (command 2) — watermark: BADGE, 9.6% width, 85% opacity (owner, command 3) |
 | 9 | AI | Pairing, HE + EN captions/hashtags/alt (D6), privacy flags blocking publish (D3), quota kinds | **Done on branch** (command 3) — live eval: roles 16/18, pairs ≥ 7/9, privacy 2/2 |
-| 10 | Site gallery | DB-driven cards + service filter + slider + load more; HE + EN; responsive images; migrate the 5 static projects (D9); screenshot QA (D12) | Not started |
-| 11 | Project pages | `/projects/<slug>` (D7) with server-rendered OG + JSON-LD; `sitemap-projects.xml`; screenshot QA (D12) | Not started |
-| 12 | Publishing | FB multi-photo, IG carousel, two-phase IG video; destinations + timing + approve in the bot (D1); burst guard + notifications | Not started |
+| 10 | Site gallery | DB-driven cards + service filter + slider + load more; HE + EN; responsive images; migrate the 5 static projects (D9); screenshot QA (D12) | **Done on branch** (command 6, `d111854`) — inline stage on desktop, full-screen dialog on phones; static fallback; the 5 projects migrated + published |
+| 11 | Project pages | `/projects/<slug>` (D7) with server-rendered OG + JSON-LD; `sitemap-projects.xml`; screenshot QA (D12) | **Done on branch** (command 6) — `api/site.js` (9th function), HE + EN, canonical + hreflang, the mobile action bar |
+| 12 | Publishing | FB multi-photo, IG carousel, two-phase IG video; destinations + timing + approve in the bot (D1); burst guard + notifications | **Site part done** (command 6: ready + site → published at its slot; bot, panel, cron). Social (FB / IG) = command 7 |
 | 13 | Extras | Weekly summary (Sun 08:00), comment alerts, "job done → photos" from a quote, WhatsApp review request (D10), video cleanup (D5) | Not started |
 | 14 | Audit + handoff | Security, privacy (Amendment 13, consent records, lead data in Telegram → privacy policy), accessibility, `handoff.md` section | Not started |
 
@@ -243,3 +243,8 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
   - **SQL:** `supabase-telegram-parked-media.sql` — SAFE NOW, **not applied** (owner); without it albums outside a mode stay receipts, as today.
   - **Tests:** `bot-projects` 89, `api-media` 73, `sql-media-projects` 64, `bot-routing` 66 (7 buttons). `npm test` = **1054 checks in 23 suites**.
   - **Live run** (preview `lcin41a5r`, TEST bot, simulated updates, 2 real seeded photos): **20/20**, 1 Gemini unit, everything deleted through the bot and verified (0 rows / 0 files / 0 chat state; seed photos removed; the 19 approved posts byte-identical). The test bot's webhook now points at this branch's alias.
+- **2026-10-31 — Command 6 of 7: the site (Phases 10, 11 + the site part of 12, `d111854`).** Details: `handoff.md` §34.11.
+  - **Applied:** `supabase-telegram-parked-media.sql` (owner-approved, MCP; verified). **Migrated + published:** the 5 static projects (18 photos through the real pipeline, badge watermark, texts written from the photos — 0 AI calls; idempotent tool, re-run = "texts refreshed").
+  - **Built:** `api/site.js` (gallery JSON, `/projects/<slug>`, sitemap, publish action), `api/_site-publish.js` (rules + D7 slugs; used by the bot's ✅, the panel's 💾 and a new cron pass), the homepage gallery (chips, cards with a "before" sliver, load more, the shared slider; inline on desktop, a full-screen dialog on phones), `shared/compare.js`. Panel bugs fixed on the way: the save toast was wiped; "מה עשינו?" text was lost on a realtime refresh.
+  - **Tests:** `npm test` = **1138 checks in 25 suites** (new: api-site 47, site-gallery 34).
+  - **QA (preview, real data, HE + EN × 375 / 768 / 1280 / 1920):** no horizontal scroll, 0 console errors, CLS ≤ 0.013, gallery images on a phone 2,750 KB (production today) → 1,100 KB. Screenshots: `.playwright-mcp/site-gallery/`.

@@ -156,10 +156,11 @@ function compareMarkup(t, first, lang) {
     "</div>";
 }
 function cardMarkup(p, lang, t) {
-  var c = p.cover;
-  return '<li><a class="pcard" href="/projects/' + esc(p.slug) + (lang === "en" ? "?lang=en" : "") + '">' +
-    '<span class="pcard__media"><img src="' + esc(c.s[480]) + '" srcset="' + esc(c.s[480] + " 480w, " + c.s[960] + " 960w") + '" sizes="(min-width: 900px) 360px, 92vw" width="' + c.w + '" height="' + c.h +
-    '" alt="' + esc(c.alt[lang] || "") + '" loading="lazy" decoding="async" /></span>' +
+  var c = p.cover, b = p.coverBefore;
+  return '<li><a class="pcard' + (b ? " pcard--split" : "") + '" href="/projects/' + esc(p.slug) + (lang === "en" ? "?lang=en" : "") + '">' +
+    '<span class="pcard__media"><img class="pcard__after" src="' + esc(c.s[480]) + '" srcset="' + esc(c.s[480] + " 480w, " + c.s[960] + " 960w") + '" sizes="(min-width: 900px) 360px, 92vw" width="' + c.w + '" height="' + c.h +
+    '" alt="' + esc(c.alt[lang] || "") + '" loading="lazy" decoding="async" />' +
+    (b ? '<span class="pcard__before" aria-hidden="true"><img src="' + esc(b.s[480]) + '" width="' + b.w + '" height="' + b.h + '" alt="" loading="lazy" decoding="async" /></span>' : "") + "</span>" +
     '<span class="pcard__body"><span class="pcard__title">' + esc(p.title[lang]) + "</span>" +
     '<span class="pcard__meta">' + (p.city ? '<span class="pcard__city">' + PIN + "<span>" + esc(p.city[lang]) + "</span></span>" : "") +
     '<span class="pcard__chip">' + esc(p.serviceLabel[lang]) + "</span></span></span></a></li>";
