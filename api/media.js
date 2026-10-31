@@ -4,17 +4,20 @@
 //        → where to upload: a path in the private bucket project-originals + a signed upload URL (small
 //          files) and the TUS endpoint (the panel uploads big files resumably with its own session).
 //          Files never pass through this function (Vercel's 4.5 MB body limit).
-//   POST /api/media?action=process        {project_id, path, role?, pair_no?, sort?, cover_path?}
+//   POST /api/media?action=process        {project_id, path, role?, pair_no?, sort?, cover_path?, telegram_file_unique_id?}
 //        → image: the uploaded file → a ≤ 2560px JPEG original (private) + site variants + the 4:5
 //          Instagram JPEG (public bucket project-media), watermarked per the project (D4), a
 //          project_media row; the raw upload is deleted. Video: MP4/MOV metadata via Range reads
 //          (≤ 50 MB, H.264/HEVC, 3 s – 15 min) + an optional cover image → a project_media row.
 //   POST /api/media?action=delete         {media_id} → the row's files (both buckets) + the row.
-//   POST /api/media?action=analyze        {project_id, text?} → Gemini vision (api/_media-ai.js) on the
+//        A telegram_file_unique_id (the bot) that the project already has → 409 `duplicate`, and the
+//        files made for it are removed again (unique (project_id, telegram_file_unique_id)).
+//   POST /api/media?action=analyze        {project_id, text?, audio?, mime_type?} → Gemini vision (api/_media-ai.js) on the
 //        project's photos (the private originals, ≤ 10): roles, pairs, alt texts, privacy flags, the
 //        service / city / titles / summaries / caption; saved to project_media + projects (ai_meta).
 //        A photo Miri already reviewed ("בדקתי") keeps its acknowledgement (the photo didn't change).
-//   POST /api/media?action=correct        {project_id, text} → a correction in plain words ("תקצר את
+//        audio = a voice note from the bot (base64, in memory only — never stored).
+//   POST /api/media?action=correct        {project_id, text | audio + mime_type} → a correction in plain words ("תקצר את
 //        הכיתוב", "העיר היא רעננה") on the CURRENT saved state (so manual edits in the panel count).
 //   POST /api/media?action=delete-project {project_id} → every file of the project (both buckets, incl.
 //        unprocessed uploads) + the project (cascades to media + publications). Posts not yet published
@@ -176,6 +179,7 @@ async function createUpload(body, res) {
 
 const IMAGE_PATH_RE = new RegExp("^(" + UUID + ")/incoming/" + UUID + "\\.(jpg|png|webp)$");
 const VIDEO_PATH_RE = new RegExp("^(" + UUID + ")/" + UUID + "\\.(mp4|mov)$");
+const TG_UNIQUE_RE = /^[A-Za-z0-9_-]{1,100}$/;
 
 async function processImageToRow(project, incomingPath, mediaId, opts) {
   var input = await storageDownload(ORIGINALS, incomingPath);
@@ -211,6 +215,8 @@ async function processAction(body, res) {
   if (pairNo === undefined || sort === undefined) return fail(res, 400, "bad_order", "מספור לא תקין.");
   var coverPath = body.cover_path ? String(body.cover_path) : null;
   if (coverPath && (!IMAGE_PATH_RE.test(coverPath) || coverPath.match(IMAGE_PATH_RE)[1] !== projectId)) return fail(res, 400, "bad_path", "נתיב התמונה לא תקין.");
+  var tgUnique = body.telegram_file_unique_id == null || body.telegram_file_unique_id === "" ? null : String(body.telegram_file_unique_id);
+  if (tgUnique !== null && !TG_UNIQUE_RE.test(tgUnique)) return fail(res, 400, "bad_file_id", "מזהה הקובץ לא תקין.");
 
   var project = await getProject(projectId);
   if (!project) return fail(res, 404, "project_not_found", "הפרויקט לא נמצא.");
@@ -236,7 +242,17 @@ async function processAction(body, res) {
       original_path: objectPath, variants: variants, width: meta.width, height: meta.height, bytes: meta.size,
       duration_s: meta.durationSec, codec: meta.videoCodec };
   }
-  var saved = await rest("project_media", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(row) });
+  if (tgUnique) row.telegram_file_unique_id = tgUnique;
+  var ins = await fetch(SUPABASE_URL + "/rest/v1/project_media", { method: "POST", body: JSON.stringify(row), signal: AbortSignal.timeout(timeoutMs),
+    headers: svc({ "Content-Type": "application/json", Prefer: "return=representation" }) });
+  if (ins.status === 409) {   // the same Telegram file twice (an album redelivered, a photo sent again)
+    var dup = mediaPaths(row);
+    await storageRemove(PUBLIC, dup.publicPaths).catch(function () {});
+    await storageRemove(ORIGINALS, dup.privatePaths).catch(function () {});
+    return fail(res, 409, "duplicate", "הקובץ הזה כבר נמצא בפרויקט.");
+  }
+  if (!ins.ok) throw new Error("Supabase REST POST project_media failed: " + ins.status);
+  var saved = await ins.json();
   console.log("[media] processed project=" + projectId + " media=" + mediaId + " kind=" + row.kind);
   res.status(200).json({ ok: true, media: saved && saved[0] || row, quota_remaining: q.remaining });
 }
@@ -303,8 +319,21 @@ function publicAnalysis(r) {
   return {
     images: r.images.map(function (im) { return { id: im.id, role: im.role, pair_no: im.pair_no, alt_he: im.alt_he, alt_en: im.alt_en, privacy_flags: im.privacy_flags, quality_flags: im.quality_flags, flagged: im.flagged }; }),
     pairing_source: r.pairing_source, needs_review: r.needs_review, service: r.service, city: r.city, title_he: r.title_he, title_en: r.title_en,
-    summary_he: r.summary_he, summary_en: r.summary_en, caption_he: r.caption_he, hashtags: r.hashtags, missing: r.missing, warnings: r.warnings
+    summary_he: r.summary_he, summary_en: r.summary_en, caption_he: r.caption_he, hashtags: r.hashtags, missing: r.missing, warnings: r.warnings,
+    transcript: r.transcript || null   // a voice note's words, for the caller to show once — never saved
   };
+}
+
+// A voice note from the bot: base64 in the body (Telegram voice ≤ 3 min ≈ 1 MB, far under Vercel's
+// 4.5 MB body cap). → { audio: Buffer, mimeType } | null (none) | false (invalid). Never stored.
+const AUDIO_TYPES = ["audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/wav", "audio/webm"];
+const MAX_AUDIO_B64 = 4 * 1024 * 1024;
+function voiceInput(body) {
+  if (body.audio == null || body.audio === "") return null;
+  var mime = String(body.mime_type || "audio/ogg").split(";")[0].trim().toLowerCase();
+  if (typeof body.audio !== "string" || body.audio.length > MAX_AUDIO_B64 || !/^[A-Za-z0-9+/=]+$/.test(body.audio) || AUDIO_TYPES.indexOf(mime) === -1) return false;
+  var buf = Buffer.from(body.audio, "base64");
+  return buf.length ? { audio: buf, mimeType: mime } : false;
 }
 
 async function analyzeAction(body, res) {
@@ -320,7 +349,9 @@ async function analyzeAction(body, res) {
   }))).filter(Boolean);
   if (!images.length) return fail(res, 404, "upload_missing", "קובצי התמונות לא נמצאו. נסו להעלות שוב.");
   var text = typeof body.text === "string" ? body.text.slice(0, 2000) : "";
-  var result = await MA.analyzeProject({ images: images, text: text || undefined }, { avoidOpenings: await recentOpenings() });
+  var voice = voiceInput(body);
+  if (voice === false) return fail(res, 400, "bad_audio", "ההקלטה לא תקינה או ארוכה מדי.");
+  var result = await MA.analyzeProject(Object.assign({ images: images, text: text || undefined }, voice || {}), { avoidOpenings: await recentOpenings() });
   var saved = await saveAnalysis(project, result, { flags: true });
   console.log("[media] analyzed project=" + projectId + " images=" + images.length + " pairing=" + result.pairing_source);
   res.status(200).json({ ok: true, analysis: publicAnalysis(result), project: saved });
@@ -330,7 +361,9 @@ async function correctAction(body, res) {
   var projectId = String(body.project_id || "");
   var text = typeof body.text === "string" ? body.text.trim().slice(0, 1000) : "";
   if (!UUID_RE.test(projectId)) return fail(res, 400, "bad_project", "פרויקט לא תקין.");
-  if (!text) return fail(res, 400, "empty_correction", "מה לתקן?");
+  var voice = voiceInput(body);
+  if (voice === false) return fail(res, 400, "bad_audio", "ההקלטה לא תקינה או ארוכה מדי.");
+  if (!text && !voice) return fail(res, 400, "empty_correction", "מה לתקן?");
   var project = await getProject(projectId, PROJECT_AI_FIELDS);
   if (!project) return fail(res, 404, "project_not_found", "הפרויקט לא נמצא.");
   var rows = await projectImages(projectId);
@@ -343,7 +376,7 @@ async function correctAction(body, res) {
     hashtags: meta.hashtags || [], stated_claims: meta.stated_claims || [], missing: meta.missing || [],
     pairing_source: meta.pairing_source || "manual", pairing_confidence: meta.pairing_confidence || 0, needs_review: !!meta.needs_review
   };
-  var result = await MA.applyMediaCorrection(analysis, { text: text }, {});
+  var result = await MA.applyMediaCorrection(analysis, voice || { text: text }, {});
   var saved = await saveAnalysis(project, result, { flags: false });
   console.log("[media] corrected project=" + projectId + " warnings=" + (result.warnings || []).join(","));
   res.status(200).json({ ok: true, analysis: publicAnalysis(result), project: saved });

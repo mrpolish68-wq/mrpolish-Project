@@ -340,7 +340,9 @@ function readUserInput(input) {
     var mime = String(input.mimeType || "").split(";")[0].trim().toLowerCase();
     var buf = Buffer.isBuffer(input.audio) ? input.audio : Buffer.from(String(input.audio), "base64");
     if (!buf.length || buf.length > 15 * 1024 * 1024) throw new MediaAiError("invalid_input", "bad audio", "ההקלטה ריקה או ארוכה מדי.");
-    return { kind: "audio", part: { inline_data: { mime_type: mime || "audio/ogg", data: buf.toString("base64") } }, text: "" };
+    // the bot may have both: a voice note AND typed text (each is the user's own words)
+    var withText = input && typeof input.text === "string" ? input.text.trim().slice(0, 4000) : "";
+    return { kind: "audio", part: { inline_data: { mime_type: mime || "audio/ogg", data: buf.toString("base64") } }, text: withText ? QX.stripPhones(withText) : "" };
   }
   var text = input && typeof input.text === "string" ? input.text.trim().slice(0, 4000) : "";
   return { kind: text ? "text" : "none", text: text ? QX.stripPhones(text) : "" };
@@ -481,7 +483,8 @@ async function analyzeProject(input, opts) {
     "You help Mr. Polish (Uri Margalit, 30 years of floor polishing and stone restoration in Israel) publish a finished project.",
     "Below are " + prepared.length + " photos of ONE project, numbered in upload order (the order may be shuffled). Today in Israel: " + (input.todayIL || QX.todayIL()) + ".",
     "For each image decide: before (the floor before the work: dull, stained, scratched, dirty, unfinished) / after (finished: clean, shiny, even, sealed) / detail (anything else). Pair each before with the after that shows the SAME spot (same floor, angle and surroundings) using pair_no 1, 2, …; details get pair_no null. 'confidence' (per image) = how sure you are of that image's ROLE. 'pairing_confidence' = how sure you are that each pair shows the same spot (before and after photos are often taken from slightly different angles — that is normal).",
-    user.kind === "audio" ? "The user also sent a voice note (attached last): transcribe it into 'transcript' and use what it says." :
+    user.kind === "audio" ? "The user also sent a voice note (attached last): transcribe it into 'transcript' and use what it says." +
+      (user.text ? " They also wrote (use it too; the voice note and this message are the ONLY sources for the city):\n«" + user.text + "»" : "") :
       user.kind === "text" ? "The user's message (use it; it is the ONLY source for the city):\n«" + user.text + "»" : "The user sent no message.",
     RULES,
     "caption_body_he (Hebrew, for Facebook/Instagram):\n" + BRAND_VOICE +

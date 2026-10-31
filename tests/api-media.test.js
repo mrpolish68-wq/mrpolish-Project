@@ -64,7 +64,12 @@ global.fetch = async function (url, init) {
     const names = Object.keys(store).filter(k => k.startsWith(m[1] + "/" + prefix)).map(k => k.slice((m[1] + "/" + prefix).length)).filter(n => !n.includes("/"));
     return res_(200, names.map(n => ({ name: n, id: "obj-" + n })).concat([{ name: "incoming", id: null }]));
   }
-  if (/\/rest\/v1\/project_media$/.test(url) && method === "POST") { const row = JSON.parse(init.body); media[row.id] = row; calls.push({ kind: "insert", row }); return res_(201, [row]); }
+  if (/\/rest\/v1\/project_media$/.test(url) && method === "POST") {
+    const row = JSON.parse(init.body);
+    // unique (project_id, telegram_file_unique_id), like the DB
+    if (row.telegram_file_unique_id && Object.values(media).some(x => x.project_id === row.project_id && x.telegram_file_unique_id === row.telegram_file_unique_id)) return res_(409, { code: "23505" });
+    media[row.id] = row; calls.push({ kind: "insert", row }); return res_(201, [row]);
+  }
   if ((m = url.match(/\/rest\/v1\/project_media\?id=eq\.([^&]+)/))) {
     if (method === "DELETE") { delete media[m[1]]; calls.push({ kind: "row-delete", id: m[1] }); return res_(204, null); }
     if (method === "PATCH") { const p = JSON.parse(init.body); Object.assign(media[m[1]], p); calls.push({ kind: "media-patch", id: m[1], patch: p }); return res_(204, null); }
@@ -196,6 +201,21 @@ function gpsEntries(buf) {
   check("the raw upload (incoming/) is deleted afterwards", calls.some(c => c.kind === "storage-delete" && c.bucket === "project-originals" && c.prefixes[0] === inc) && !store["project-originals/" + inc]);
   check("one unit of the daily media_file quota used", calls.filter(c => c.kind === "quota").length === 1 && calls.find(c => c.kind === "quota").body.p_kind === "media_file" && r.body.quota_remaining === 79);
 
+  // ---- the bot: telegram_file_unique_id (dedupe) ----
+  const tgInc = (n) => { const p = P1 + "/incoming/bbbbbbbb-bbbb-4bbb-8bbb-00000000000" + n + ".jpg"; store["project-originals/" + p] = { buf: photo }; return p; };
+  r = await call("process", { project_id: P1, path: tgInc(1), sort: 3, telegram_file_unique_id: "AgADtg-1_x" }, { headers: { "x-internal-secret": "internal-fake-secret" } });
+  check("bot: process stores the Telegram file_unique_id on the row", r.code === 200 && media[r.body.media.id].telegram_file_unique_id === "AgADtg-1_x");
+  const before409 = Object.keys(media).length;
+  const filesBefore = Object.keys(store).filter(k => !/\/incoming\//.test(k)).sort().join();
+  calls = [];
+  r = await call("process", { project_id: P1, path: tgInc(2), sort: 4, telegram_file_unique_id: "AgADtg-1_x" }, { headers: { "x-internal-secret": "internal-fake-secret" } });
+  const dupDeletes = calls.filter(c => c.kind === "storage-delete");
+  check("bot: the same Telegram file twice → 409 duplicate (Hebrew), no 2nd row", r.code === 409 && r.body.code === "duplicate" && /כבר נמצא/.test(r.body.he) && Object.keys(media).length === before409);
+  check("bot: …and every file made for the duplicate is removed again (5 public copies + the original)", dupDeletes.some(c => c.bucket === "project-media" && c.prefixes.length === 5) &&
+    dupDeletes.some(c => c.bucket === "project-originals") && Object.keys(store).filter(k => !/\/incoming\//.test(k)).sort().join() === filesBefore);
+  r = await call("process", { project_id: P1, path: tgInc(3), telegram_file_unique_id: "../etc/x" });
+  check("bot: a malformed telegram_file_unique_id → 400 (before any work)", r.code === 400 && r.body.code === "bad_file_id");
+
   // watermark off per project
   const inc2 = P2 + "/incoming/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jpg";
   store["project-originals/" + inc2] = { buf: photo };
@@ -306,6 +326,22 @@ function gpsEntries(buf) {
   check("correct: flags are not touched", !calls.filter(c => c.kind === "media-patch").slice(-2).some(c => "ai_flags" in c.patch));
   r = await call("correct", { project_id: P1, text: "  " });
   check("correct: an empty text → 400", r.code === 400 && r.body.code === "empty_correction");
+
+  // ---- the bot: a voice note (base64, in memory only) ----
+  const voiceB64 = Buffer.from("OggS-fake-voice").toString("base64");
+  geminiReplies = [Object.assign(JSON.parse(JSON.stringify(aiReply)), { transcript: "ליטשנו שיש בסלון ברעננה", city: "רעננה" })];
+  r = await call("analyze", { project_id: P1, text: "גם המדרגות", audio: voiceB64, mime_type: "audio/ogg" }, { headers: { "x-internal-secret": "internal-fake-secret" } });
+  const vparts = calls.filter(c => c.kind === "gemini").pop().body.contents[0].parts;
+  check("bot: analyze with a voice note → the audio goes to Gemini (audio/ogg) AND the typed text is in the prompt", r.code === 200 &&
+    vparts.some(p => p.inline_data && p.inline_data.mime_type === "audio/ogg" && p.inline_data.data === voiceB64) && /גם המדרגות/.test(vparts[0].text));
+  check("bot: the transcript is returned to the caller, never saved", r.body.analysis.transcript === "ליטשנו שיש בסלון ברעננה" && !JSON.stringify(projects[P1]).includes("ליטשנו"));
+  geminiReplies = [{ images: [], transcript: "תקצר", caption_body_he: "שיש מבריק." }];
+  r = await call("correct", { project_id: P1, audio: voiceB64, mime_type: "audio/ogg" });
+  check("bot: correct by voice only (no text) → 200, the audio reaches Gemini", r.code === 200 && calls.filter(c => c.kind === "gemini").pop().body.contents[0].parts.some(p => p.inline_data && p.inline_data.mime_type === "audio/ogg"));
+  r = await call("analyze", { project_id: P1, audio: voiceB64, mime_type: "video/mp4" });
+  check("bot: a non-audio type → 400 bad_audio (no Gemini call)", r.code === 400 && r.body.code === "bad_audio");
+  r = await call("correct", { project_id: P1, audio: "not base64 !!" });
+  check("bot: malformed audio → 400 bad_audio", r.code === 400 && r.body.code === "bad_audio");
   geminiStatus = 429;
   r = await call("analyze", { project_id: P1 });
   check("analyze: Gemini 429 → 503 ai_busy with a Hebrew message", r.code === 503 && r.body.code === "ai_busy" && /עמוסה/.test(r.body.he));

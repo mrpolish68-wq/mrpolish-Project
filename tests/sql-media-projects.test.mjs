@@ -236,10 +236,29 @@ await db.exec(REALTIME); await db.exec(REALTIME);
 const pubTables = (await all("select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1")).map(r => r.tablename);
 check("realtime: projects + project_media added, quotes kept, applied twice without error", JSON.stringify(pubTables) === JSON.stringify(["project_media", "projects", "quotes"]), pubTables.join(","));
 
+// parked album photos for the bot (command 5): service_role only, constraints, retention job; idempotent
+const PARKED = read("supabase-telegram-parked-media.sql");
+await db.exec(PARKED); await db.exec(PARKED);
+check("parked media: applied twice, RLS on, anon/authenticated have no access",
+  (await one("select relrowsecurity r from pg_class where oid = 'public.telegram_parked_media'::regclass")).r === true &&
+  !(await one("select has_table_privilege('anon', 'public.telegram_parked_media', 'select') a")).a &&
+  !(await one("select has_table_privilege('authenticated', 'public.telegram_parked_media', 'insert') a")).a);
+const parkRow = (gid, uid, extra) => db.query("insert into public.telegram_parked_media (chat_id, media_group_id, message_id, kind, file_id, file_unique_id" + (extra ? ", created_at" : "") +
+  ") values (600, $1, 5, 'photo', 'AgACfake', $2" + (extra ? ", now() - interval '25 hours'" : "") + ")", [gid, uid]);
+await parkRow("1351234567890", "AQADuniq1");
+check("parked media: the same file twice in one album → refused (unique)", /duplicate key/.test(await errOf(() => parkRow("1351234567890", "AQADuniq1"))));
+check("parked media: a bad media_group_id / file_unique_id / kind → refused (checks)",
+  !!(await errOf(() => parkRow("a b;drop", "AQADuniq2"))) && !!(await errOf(() => parkRow("135", "../x"))) &&
+  !!(await errOf(() => db.query("insert into public.telegram_parked_media (chat_id, media_group_id, message_id, kind, file_id, file_unique_id) values (600,'g',1,'audio','f','u')"))));
+check("parked media: ONE nightly retention job (applied twice)", (await all("select schedule from cron.job where jobname = 'telegram-parked-media-retention'")).length === 1);
+await parkRow("old-album", "AQADold", true);
+await runJob("telegram-parked-media-retention");
+check("parked media: the job deletes rows older than 24 h, keeps fresh ones", (await all("select media_group_id from public.telegram_parked_media order by 1")).map(r => r.media_group_id).join() === "1351234567890");
+
 // files: status lines present
 check("files say their status (scheduler: SAFE NOW, lead alert: AT MERGE, schema: SAFE NOW)",
   /STATUS: SAFE TO APPLY NOW/.test(SCHED) && /STATUS: APPLY AT MERGE/.test(LEAD) && /STATUS: SAFE TO APPLY NOW/.test(MEDIA) && /SAFE TO APPLY NOW/.test(REALTIME));
-check("files have VERIFY + ROLLBACK sections", [SCHED, LEAD, MEDIA, REALTIME].every(s => /VERIFY/.test(s) && /ROLLBACK/.test(s)));
+check("files have VERIFY + ROLLBACK sections", [SCHED, LEAD, MEDIA, REALTIME, PARKED].every(s => /VERIFY/.test(s) && /ROLLBACK/.test(s)) && /STATUS: SAFE TO APPLY NOW/.test(PARKED));
 
 console.log("\n" + pass + "/" + (pass + fail) + " passed");
 process.exitCode = fail ? 1 : 0;

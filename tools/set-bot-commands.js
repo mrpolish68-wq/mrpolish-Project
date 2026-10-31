@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Sets the bot's command menu (setMyCommands): /start, /quote, /help, in Hebrew.
+// Sets the bot's command menu (setMyCommands): /start, /quote, /project, /help, in Hebrew.
 //
 // Usage:
 //   node tools/set-bot-commands.js test          # the TEST bot (TELEGRAM_TEST_BOT_TOKEN)
@@ -16,6 +16,7 @@ const path = require("path");
 const COMMANDS = [
   { command: "start", description: "תפריט ראשי" },
   { command: "quote", description: "הצעת מחיר חדשה" },
+  { command: "project", description: "פרויקט חדש" },
   { command: "help", description: "עזרה" }
 ];
 

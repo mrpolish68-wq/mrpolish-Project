@@ -49,7 +49,12 @@
 // waitUntil; callbacks are answered immediately. A message is routed: menu label/command ->
 // pending edit (receipt or quote draft, newest wins) -> photo/document = receipt -> voice or
 // text with a quote keyword = quote -> otherwise "unclear" + a "🧾 להכין הצעת מחיר?" button.
-// Separate per-chat rate limits per flow (receipt / quote / menu). See routeMessage().
+// Separate per-chat rate limits per flow (receipt / quote / menu / project). See routeMessage().
+//
+// 📸 projects (media-projects command 5, api/_bot-projects.js): "📸 פרויקט חדש" puts the chat in
+// collecting_project (photos / videos / description → api/media.js), "✅ סיימתי" runs the AI and walks
+// through the open questions. An album outside a mode asks "📷 קבלות או 📸 פרויקט חדש?"; a photo the
+// receipt scanner finds nothing in asks whether to open a project with it. Receipts otherwise as before.
 //
 // Data flow (deliberately mirrors admin.html's "AI suggests, human confirms" scanner):
 //   photo/PDF in -> download from Telegram -> Gemini extraction -> upload original to the
@@ -69,6 +74,7 @@ const QX = require("./_quote-extract.js");
 const { estimateDescriptionFits } = require("../shared/quote-template.js");
 const { callGemini, normalizeExtraction, ALLOWED_MIME_TYPES, CATEGORIES } = require("./parse-receipt.js");
 const { telegramConfig } = require("./_telegram.js");
+const BP = require("./_bot-projects.js"); // 📸 פרויקט חדש (media-projects command 5); init() at the bottom
 
 // Constant-time comparison for the webhook secret — a plain !== short-circuits on the
 // first mismatched byte, which is the textbook timing side-channel for secret
@@ -194,7 +200,8 @@ var RETENTION = [
   ["telegram_pending_quotes", "created_at", 24 * 60 * 60 * 1000],      // drafts + transcripts
   ["telegram_chat_state", "state_since", 24 * 60 * 60 * 1000],
   ["telegram_processed_updates", "created_at", 7 * 24 * 60 * 60 * 1000],
-  ["telegram_daily_usage", "day", 30 * 24 * 60 * 60 * 1000]
+  ["telegram_daily_usage", "day", 30 * 24 * 60 * 60 * 1000],
+  ["telegram_parked_media", "created_at", 24 * 60 * 60 * 1000]       // album file ids awaiting "📷 / 📸?"
 ];
 var lastSweepAt = 0;
 
@@ -243,6 +250,8 @@ async function sweepRetention() {
       console.error("[telegram-webhook] retention sweep failed for " + table + ": " + err.message);
     }
   }
+  // 📸: empty "collecting" projects older than 24 h (opened, nothing sent) — bot or panel
+  await BP.sweepStaleProjects().catch(function (err) { console.error("[telegram-webhook] stale project sweep failed: " + err.message); });
 }
 
 // Dedupe: insert the update_id FIRST. A redelivery (Telegram retries when our reply was
@@ -706,6 +715,15 @@ async function processReceiptMessage(message, chatId) {
     return;
   }
 
+  // A photo with no amount AND no vendor is probably not a receipt (a job photo?): keep the scan as a
+  // pending receipt, but ask first. The photo's Telegram ids ride along so "כן" opens a project with it
+  // (no re-scan, no 2nd receipt-quota unit). The confirm path inserts named fields only, never _tg_photo.
+  var notReceipt = BP.looksLikeNoReceipt(message, extracted);
+  if (notReceipt) {
+    var bestPhoto = message.photo[message.photo.length - 1];
+    extracted = Object.assign({}, extracted, { _tg_photo: { file_id: bestPhoto.file_id, file_unique_id: bestPhoto.file_unique_id, file_size: bestPhoto.file_size || 0 } });
+  }
+
   var pending;
   try {
     pending = await supabaseInsert("telegram_pending_receipts", {
@@ -720,7 +738,9 @@ async function processReceiptMessage(message, chatId) {
     return;
   }
 
-  var initialPayload = await buildSummaryPayload(extracted, pending.id);
+  var initialPayload = notReceipt
+    ? { text: "זה לא נראה כמו קבלה. להתחיל פרויקט חדש עם התמונה הזו?", keyboard: BP.notReceiptKeyboard(pending.id) }
+    : await buildSummaryPayload(extracted, pending.id);
   var sent = await tgCallSafe("sendMessage", {
     chat_id: chatId,
     text: initialPayload.text,
@@ -789,7 +809,7 @@ async function processEditReply(pending, text, chatId) {
 // Callback query handling — Ori tapped one of the inline-keyboard buttons
 // ---------------------------------------------------------------------------
 
-var KNOWN_ACTIONS = ["confirm", "cancel", "editdate", "editamount", "cyclecat", "newquote"];
+var KNOWN_ACTIONS = ["confirm", "cancel", "editdate", "editamount", "cyclecat", "newquote", "nrproj", "nrkeep"];
 
 // Every callback is answered immediately in the handler (stops the button's spinner), and a
 // callback can be answered only once, so anything the user must read is sent as a message.
@@ -804,6 +824,7 @@ var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function processCallbackQuery(query, chatId) {
   var data = query.data || "";
   if (data.indexOf("q:") === 0) return processQuoteCallback(query, chatId);
+  if (data.indexOf("p:") === 0) return BP.processCallback(query, chatId);
   var sep = data.indexOf(":");
   var action = sep === -1 ? data : data.slice(0, sep);
   var pendingId = sep === -1 ? "" : data.slice(sep + 1);
@@ -832,6 +853,23 @@ async function processCallbackQuery(query, chatId) {
   if (!pending || String(pending.chat_id) !== String(chatId)) {
     await cbNotice(chatId, "הבקשה כבר טופלה או שפג תוקפה.");
     if (messageId) await tgCallSafe("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: { inline_keyboard: [] } });
+    return;
+  }
+
+  // "זה לא נראה כמו קבלה. להתחיל פרויקט חדש עם התמונה הזו?" (the photo was scanned once; no re-scan)
+  if (action === "nrkeep") {
+    var keepPayload = await buildSummaryPayload(pending.extracted, pendingId);
+    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: keepPayload.text, reply_markup: keepPayload.keyboard });
+    else await tgCallSafe("sendMessage", { chat_id: chatId, text: keepPayload.text, reply_markup: keepPayload.keyboard });
+    return;
+  }
+  if (action === "nrproj") {
+    var claimedNr;
+    try { claimedNr = await claimPendingRow(pendingId); } catch (err) { await cbNotice(chatId, "שגיאה זמנית. נסו שוב."); return; }
+    if (!claimedNr) return;
+    await discardPendingReceipt(pendingId, claimedNr.receipt_path);
+    if (messageId) await tgCallSafe("editMessageText", { chat_id: chatId, message_id: messageId, text: "📸 פותח פרויקט חדש עם התמונה…" });
+    await BP.receiptToProject(chatId, claimedNr);
     return;
   }
 
@@ -1904,14 +1942,16 @@ var MENU = {
   RECENT: "📜 הצעות אחרונות",
   SEARCH: "🔍 חיפוש הצעה",
   SUMMARY: "💰 סיכום הוצאות החודש",
-  HELP: "❓ עזרה"
+  HELP: "❓ עזרה",
+  PROJECT: "📸 פרויקט חדש"
 };
 
 var MAIN_KEYBOARD = {
   keyboard: [
     [{ text: MENU.NEW_QUOTE }, { text: MENU.RECEIPT }],
     [{ text: MENU.RECENT }, { text: MENU.SEARCH }],
-    [{ text: MENU.SUMMARY }, { text: MENU.HELP }]
+    [{ text: MENU.SUMMARY }, { text: MENU.HELP }],
+    [{ text: MENU.PROJECT }]
   ],
   resize_keyboard: true,
   is_persistent: true
@@ -1925,7 +1965,8 @@ LABEL_ACTIONS[MENU.RECENT] = "recent";
 LABEL_ACTIONS[MENU.SEARCH] = "search";
 LABEL_ACTIONS[MENU.SUMMARY] = "summary";
 LABEL_ACTIONS[MENU.HELP] = "help";
-var COMMAND_ACTIONS = { "/start": "start", "/help": "help", "/quote": "quote" };
+LABEL_ACTIONS[MENU.PROJECT] = "project";
+var COMMAND_ACTIONS = { "/start": "start", "/help": "help", "/quote": "quote", "/project": "project" };
 
 function menuAction(text) {
   if (!text) return null;
@@ -1944,6 +1985,8 @@ var HELP_TEXT =
   "🧾 הצעת מחיר: לוחצים על 🧾 ושולחים הקלטה קולית או הודעה כתובה עם שם הלקוח, הכתובת, העבודה והמחיר הסופי. " +
   "אני מכין טיוטה, ואפשר לתקן אותה בכפתורים לפני האישור.\n\n" +
   "📜 הצעות אחרונות / 🔍 חיפוש הצעה: רואים הצעות קודמות ושולחים שוב את ה-PDF.\n\n" +
+  "📸 פרויקט חדש: שולחים תמונות וסרטונים של העבודה (לפני ואחרי) ומספרים בקצרה מה עשינו ובאיזו עיר. " +
+  "אני מכין כותרת, תיאור וכיתוב, שואל רק מה שחסר, ואחרי ✅ הפרויקט מוכן לפרסום.\n\n" +
   "💰 סיכום החודש: כמה הוצאנו החודש, לפי קטגוריה.\n\n" +
   "בכל רגע אפשר ללחוץ על כפתור בתפריט למטה כדי להתחיל מחדש.";
 
@@ -2019,7 +2062,10 @@ async function handleMenu(action, chatId) {
   if (action === "recent") return sendRecentQuotes(chatId);
   if (action === "search") return askSearch(chatId);
   if (action === "summary") return sendMonthSummary(chatId);
+  if (action === "project") return BP.startProject(chatId);
   if (action === "receipt") {
+    // receipt mode: an album sent right after 📷 is scanned as receipts without asking
+    await setChatState(chatId, "awaiting_receipt", {}).catch(function (err) { console.error("[telegram-webhook] " + err.message); });
     return tgCallSafe("sendMessage", {
       chat_id: chatId,
       text: "📷 שלחו עכשיו תמונה של הקבלה (מהמצלמה או מהגלריה), או קובץ PDF.",
@@ -2037,7 +2083,8 @@ async function handleMenu(action, chatId) {
 var FLOW_LIMITS = {
   receipt: { max: 10, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לשלוח קבלה נוספת בעוד כמה דקות." },
   quote: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר לנסות שוב בעוד כמה דקות." },
-  menu: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 נסו שוב בעוד רגע." }
+  menu: { max: 30, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 נסו שוב בעוד רגע." },
+  project: { max: 60, windowMs: 10 * 60 * 1000, text: "לאט לאט 🙂 אפשר להמשיך בעוד כמה דקות." }   // albums: one message per file
 };
 
 async function withinFlowLimit(flow, chatId) {
@@ -2057,6 +2104,17 @@ async function routeMessage(msg, chatId) {
     await clearEditState(chatId); // a menu tap starts over
     await handleMenu(action, chatId);
     return;
+  }
+
+  // 📸 projects (command 5): a ✏️ / 🎤 reply for a project, or anything sent while collecting.
+  var projectState = await BP.activeState(chatId);
+  if (projectState && projectState.state === "project_edit" && (text || isVoice)) {
+    if (!(await withinFlowLimit("project", chatId))) return;
+    if (await BP.handleEdit(msg, chatId, projectState)) return;
+  }
+  if (projectState && projectState.state === "collecting_project") {
+    if (!(await withinFlowLimit("project", chatId))) return;
+    if (await BP.handleCollect(msg, chatId, projectState)) return;
   }
 
   if (text || isVoice) {
@@ -2095,7 +2153,14 @@ async function routeMessage(msg, chatId) {
     }
   }
 
-  if ((msg.photo && msg.photo.length) || msg.document) {
+  if ((msg.photo && msg.photo.length) || msg.document || (msg.video && msg.media_group_id)) {
+    // An album outside a mode: parked, and one question "📷 קבלות או 📸 פרויקט חדש?" (after 📷 → receipts).
+    var receiptMode = projectState && projectState.state === "awaiting_receipt";
+    if (msg.media_group_id && !receiptMode) {
+      if (!(await withinFlowLimit("project", chatId))) return;
+      if (await BP.parkAlbumItem(msg, chatId)) return;
+    }
+    if (msg.video) { await sendUnclear(chatId); return; } // parking failed: a video is never a receipt (as today)
     if (!(await withinFlowLimit("receipt", chatId))) return;
     await processReceiptMessage(msg, chatId);
     return;
@@ -2142,6 +2207,12 @@ function isAllowedChat(chatId) {
   if (!allowed.length) return false; // fail closed — see the file header
   return allowed.indexOf(String(chatId)) !== -1;
 }
+
+BP.init({
+  fetchT: fetchT, supabaseHeaders: supabaseHeaders, supabaseInsert: supabaseInsert, supabaseSelectOne: supabaseSelectOne,
+  supabasePatch: supabasePatch, supabaseDelete: supabaseDelete, tgCall: tgCall, tgCallSafe: tgCallSafe, tgDownloadFile: tgDownloadFile,
+  setChatState: setChatState, clearChatState: clearChatState, cbNotice: cbNotice, processReceiptMessage: processReceiptMessage
+});
 
 // ---------------------------------------------------------------------------
 // HTTP entry point
