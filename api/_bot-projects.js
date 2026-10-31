@@ -20,6 +20,7 @@
 
 const crypto = require("crypto");
 const BS = require("../shared/burst-schedule.js");
+const RR = require("../shared/review-request.js");   // the review request (command 7)
 const { telegramConfig } = require("./_telegram.js");
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -274,6 +275,87 @@ async function startProject(chatId) {
 }
 
 // A project that starts WITH files (an album, or a photo that wasn't a receipt).
+// ---------------------------------------------------------------------------
+// "✅ העבודה בוצעה" → photos → "⭐ בקשת ביקורת" (command 7), from the quote lists (📜 / 🔍).
+// callback_data "j:<act>:<quote id>": done | rev | revok | revno. job_done_at / review_requested_at live
+// on the quote; the project is linked by projects.quote_id. No phone anywhere: the review request is a
+// wa.me link with no recipient (shared/review-request.js).
+// ---------------------------------------------------------------------------
+function pad3(n) { return String(n == null ? "" : n).padStart(3, "0"); }
+function ddmm(iso) { var q = BS.israelParts(iso); return String(q.d).padStart(2, "0") + "." + String(q.m).padStart(2, "0"); }
+async function loadQuoteJob(id) {
+  return (await restGet("quotes?id=eq." + enc(id) + "&select=id,number,client_name,address,description,job_done_at,review_requested_at,review_request_count"))[0] || null;
+}
+async function patchQuote(filter, body) {
+  var res = await D.fetchT(SUPABASE_URL + "/rest/v1/quotes?" + filter, { method: "PATCH",
+    headers: Object.assign({}, D.supabaseHeaders(), { "Content-Type": "application/json", Prefer: "return=representation" }), body: JSON.stringify(body) });
+  if (!res.ok) throw new Error("Supabase PATCH quotes failed: " + res.status);
+  return res.json();
+}
+function reviewButton(q) { return { inline_keyboard: [[{ text: "⭐ בקשת ביקורת", callback_data: "j:rev:" + q.id }]] }; }
+
+async function jobDone(chatId, q) {
+  var already = !!q.job_done_at;
+  if (!already) {
+    var won = await patchQuote("id=eq." + enc(q.id) + "&job_done_at=is.null", { job_done_at: new Date().toISOString() });
+    already = !(won && won.length);   // a double tap: the other tap already marked it
+  }
+  var existing = (await restGet("projects?quote_id=eq." + enc(q.id) + "&select=id,status&order=created_at.desc&limit=1").catch(function () { return []; }))[0];
+  await send(chatId, (already ? "ℹ️ העבודה כבר סומנה כבוצעה" + (q.job_done_at ? " (" + ddmm(q.job_done_at) + ")" : "") : "✅ סומן: העבודה בוצעה") +
+    " · הצעה מס׳ " + pad3(q.number) + "\nכשהלקוח מרוצה – אפשר לשלוח לו בקשה לביקורת בגוגל:", reviewButton(q));
+  if (existing) {
+    if (existing.status === "collecting" || existing.status === "draft") {
+      await send(chatId, "📸 כבר נפתח פרויקט לעבודה הזו.", { inline_keyboard: [[{ text: "↩️ להמשיך בפרויקט", callback_data: "p:cont:" + existing.id }]] });
+    }
+    return;
+  }
+  await startProjectFromQuote(chatId, q);
+}
+
+// The "📸 פרויקט חדש" flow, pre-filled with the quote's service + city and linked to the quote.
+async function startProjectFromQuote(chatId, q) {
+  var service = RR.serviceFromText(q.description), city = RR.cityFromAddress(q.address);
+  var p;
+  try {
+    p = await D.supabaseInsert("projects", { status: "collecting", source: "telegram", telegram_chat_id: chatId, quote_id: q.id,
+      service: service || null, city: city || null, ai_meta: { from_quote: { number: q.number } } });
+  } catch (err) {
+    console.error("[bot-projects] project insert failed: " + err.message);
+    await send(chatId, "שגיאה זמנית. נסי שוב בעוד רגע.");
+    return;
+  }
+  var known = [service ? SERVICE_HE[service] : null, city].filter(Boolean).join(" · ");
+  await beginCollecting(chatId, p, "📸 פרויקט חדש להצעה מס׳ " + pad3(q.number) + (known ? " (" + known + ")" : "") + "\n" +
+    "שלחי את התמונות והסרטונים מהעבודה (אפשר כמה ביחד), ובהקלטה או בטקסט ספרי בקצרה מה עשינו. כשמסיימים – ✅ סיימתי");
+}
+
+async function reviewRequest(chatId, q, confirmed) {
+  if (!q.job_done_at) { await D.cbNotice(chatId, "קודם מסמנים ✅ העבודה בוצעה."); return; }
+  if (q.review_requested_at && !confirmed) {
+    await send(chatId, "⚠️ כבר נשלחה בקשת ביקורת ללקוח של הצעה מס׳ " + pad3(q.number) + " (" + ddmm(q.review_requested_at) + "). לשלוח שוב?",
+      { inline_keyboard: [[{ text: "כן, לשלוח שוב", callback_data: "j:revok:" + q.id }, { text: "ביטול", callback_data: "j:revno:" + q.id }]] });
+    return;
+  }
+  var text = RR.reviewMessage(q.client_name);
+  await patchQuote("id=eq." + enc(q.id), { review_requested_at: new Date().toISOString(), review_request_count: (q.review_request_count || 0) + 1 });
+  await send(chatId, "⭐ בקשת ביקורת · הצעה מס׳ " + pad3(q.number) + "\nלחיצה על הכפתור פותחת את וואטסאפ עם ההודעה מוכנה – בוחרים את הלקוח ושולחים.\n" +
+    "━━━━━━━━━━\n" + text, { inline_keyboard: [[{ text: "💬 פתיחה בוואטסאפ", url: RR.waUrl(text) }]] });
+}
+
+async function processJobCallback(query, chatId) {
+  var parts = String(query.data || "").split(":");
+  var act = parts[1], id = parts[2] || "";
+  var mid = query.message && query.message.message_id;
+  if (parts.length !== 3 || !UUID_RE.test(id)) return;
+  if (act === "revno") { await dropButtons(chatId, mid); return; }
+  var q;
+  try { q = await loadQuoteJob(id); } catch (err) { console.error("[bot-projects] quote lookup failed: " + err.message); await D.cbNotice(chatId, "שגיאה זמנית. נסי שוב."); return; }
+  if (!q) { await D.cbNotice(chatId, "ההצעה לא נמצאה."); return; }
+  if (act === "done") { await jobDone(chatId, q); return; }
+  if (act === "rev") { await reviewRequest(chatId, q, false); return; }
+  if (act === "revok") { await dropButtons(chatId, mid); await reviewRequest(chatId, q, true); return; }
+}
+
 async function startProjectWithFiles(chatId, refs) {
   var p;
   try { p = await createProject(chatId); } catch (err) {
@@ -807,16 +889,40 @@ async function processCallback(query, chatId) {
     var smid = p.ai_meta && p.ai_meta.bot && p.ai_meta.bot.summary_mid;
     if (smid) await dropButtons(chatId, smid);
     var lines = ["נשמר ✔"];
-    if (plan.destinations.indexOf("site") !== -1) {   // the site: now (or at its slot, by the publish cron)
-      var sp = await internalApi("/api/site?action=publish", { project_id: p.id }, 30000);
-      if (sp.status === 200 && sp.body.published || sp.body.already) lines.push("🌐 עלה לאתר: " + sp.body.url);
-      else if (sp.status === 200 && sp.body.scheduled) lines.push("🌐 יעלה לאתר במועד שנבחר.");
+    var wantsSite = plan.destinations.indexOf("site") !== -1;
+    var wantsSocial = plan.destinations.some(function (d) { return d !== "site"; });
+    // One call: the site now (or at its slot, by the publish cron) + the approval of the social posts
+    // (api/_social-queue.js queues them into content_queue; the scheduler publishes them).
+    var sp = await internalApi("/api/site?action=publish", wantsSocial ? { project_id: p.id, social: true } : { project_id: p.id }, 30000);
+    var b = sp.body || {};
+    if (wantsSite) {
+      if (sp.status === 200 && (b.published || b.already) && b.url) lines.push("🌐 עלה לאתר: " + b.url);
+      else if (sp.status === 200 && b.scheduled) lines.push("🌐 יעלה לאתר במועד שנבחר.");
       else lines.push("🌐 האתר: יעלה בסבב הפרסום הבא (תוך כ-10 דקות).");
     }
-    if (plan.destinations.some(function (d) { return d !== "site"; })) lines.push("📣 הרשתות – הפרסום יופעל בשלב הבא.");
+    if (wantsSocial) lines = lines.concat(socialLines(b.social));
     await send(chatId, lines.join("\n"));
     return;
   }
+}
+
+// The reply lines for the social part of ✅ אשר — one line per queued post, Israel time.
+const SOCIAL_KIND_HE = { carousel: "📣 פוסט תמונות", image: "📣 פוסט תמונה", reel: "🎬 סרטון", video: "🎬 סרטון", story: "⭕ סטורי" };
+function socialWhen(iso) {
+  var t = new Date(iso);
+  if (isNaN(t) || t.getTime() <= Date.now() + 60000) return "בסבב הפרסום הבא (תוך כ-10 דקות)";
+  var q = BS.israelParts(t), dow = new Date(Date.UTC(q.y, q.m - 1, q.d)).getUTCDay();
+  return "יום " + BS.DOW_HE[dow] + " " + q.d + "." + q.m + " · " + String(q.h).padStart(2, "0") + ":" + String(q.min).padStart(2, "0");
+}
+function socialLines(s) {
+  if (s && (s.queued || s.already) && Array.isArray(s.rows) && s.rows.length) {
+    return s.rows.map(function (r) { return (SOCIAL_KIND_HE[r.media_type] || "📣 פוסט") + ": " + socialWhen(r.scheduled_for); })
+      .concat(["תקבלי הודעה כשכל פוסט עולה."]);
+  }
+  if (s && s.reason === "no_caption") return ["⚠️ הרשתות: חסר כיתוב לפוסט. אפשר ✏️ כיתוב ואז ✅ אשר שוב."];
+  if (s && s.reason === "no_media") return ["⚠️ הרשתות: אין תמונה או סרטון שאפשר לפרסם."];
+  if (s && (s.reason === "flags" || s.reason === "guard" || s.reason === "no_consent")) return ["⚠️ הרשתות: הפרסום נעצר בבדיקת ההסכמה / הפרטיות."];
+  return ["📣 הרשתות: נשמר לפרסום – ייכנס ללוח בסבב הבא (תוך כ-10 דקות)."];
 }
 
 async function askTimingSlots(chatId, p, editMid) {
@@ -918,6 +1024,6 @@ async function sweepStaleProjects() {
 
 module.exports = {
   init, activeState, startProject, handleCollect, handleEdit, processCallback, parkAlbumItem, sweepStaleProjects,
-  looksLikeNoReceipt, notReceiptKeyboard, receiptToProject,
+  looksLikeNoReceipt, notReceiptKeyboard, receiptToProject, processJobCallback, startProjectFromQuote,
   _internal: { TIMING, statusView, summaryView, pairsOf, cityFrom, validSlot, freeSlots, groupClaimId, refFromMessage, DONE_RE, START_TEXT, DOC_HINT }
 };

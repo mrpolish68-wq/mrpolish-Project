@@ -310,6 +310,7 @@ async function saveAnalysis(project, result, opts) {
   });
   var p = { ai_meta: meta, service: result.service, title_he: result.title_he, title_en: result.title_en, summary_he: result.summary_he, summary_en: result.summary_en };
   if (result.city) p.city = result.city;                      // never erase a city Miri typed
+  if (result.service === "other" && project.service && project.service !== "other") delete p.service;   // a known service (e.g. from the quote) beats "other"
   if (project.status === "collecting") p.status = "draft";
   Object.keys(p).forEach(function (k) { if (p[k] === null || p[k] === undefined) delete p[k]; });
   var saved = await rest("projects?id=eq." + project.id, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(p) });

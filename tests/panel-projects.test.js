@@ -163,7 +163,9 @@ async function setup(browser, viewport, label) {
     const req = route.request(), body = req.postDataJSON() || {};
     ctx.site.push({ body, auth: req.headers().authorization });
     await page.evaluate((id) => { const p = window.__sb.tables.projects.find(x => x.id === id); if (p && p.status === "ready") Object.assign(p, { status: "published", slug: "litush-shayish-ve-even-raanana" }); }, body.project_id);
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, published: true, slug: "litush-shayish-ve-even-raanana", url: "https://mr-polishes.com/projects/litush-shayish-ve-even-raanana" }) });
+    var out = { ok: true, published: true, slug: "litush-shayish-ve-even-raanana", url: "https://mr-polishes.com/projects/litush-shayish-ve-even-raanana" };
+    if (body.social === true) out.social = { ok: true, queued: 1, rows: [{ id: "cq-x", media_type: "carousel", scheduled_for: new Date(Date.now() + 864e5).toISOString() }] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(out) });
   });
 
   // /api/media
@@ -367,7 +369,16 @@ async function unnamedButtons(page, scope) {
     check("save + ready + the site → POST /api/site?action=publish with the session → 'עלה לאתר'", D.site.length === 1 && D.site[0].body.project_id === pid && D.site[0].auth === "Bearer fake-access-token" &&
       /עלה לאתר/.test(saveToast), JSON.stringify(D.site) + " toast=" + saveToast);
     check("the editor then shows the live page link (status published)", (await page.getAttribute(".pj-live a", "href")) === "/projects/litush-shayish-ve-even-raanana" && /פורסם/.test(await page.textContent(".pj-status")));
-    check("social publishing still says 'בקרוב' (command 7)", /יחובר בקרוב/.test(await page.textContent(".pj-soon")));
+    // command 7: 💾 never publishes to the networks; only the explicit "📣 אישור פרסום ברשתות" does
+    check("social (command 7): 💾 did NOT approve the networks (no social flag on the save's publish call)", D.site.length === 1 && D.site[0].body.social === undefined);
+    await page.waitForSelector("#pjSocialGo", { timeout: 5000 }).catch(() => {});
+    check("social: a ready/published project with Instagram chosen shows '📣 אישור פרסום ברשתות'", /אישור פרסום ברשתות/.test(await page.textContent("#pjSocial")));
+    const dlgBefore = D.dialogs.length;
+    await page.click("#pjSocialGo");
+    await page.waitForFunction(() => /לוח הפרסום/.test(document.getElementById("pjToast").textContent), null, { timeout: 5000 }).catch(() => {});
+    check("social: the button asks first, then POSTs {project_id, social: true} with the session → 'נכנסו ללוח הפרסום'",
+      D.dialogs.length === dlgBefore + 1 && /לאשר פרסום ברשתות/.test(D.dialogs[D.dialogs.length - 1]) && D.site.length === 2 && D.site[1].body.social === true &&
+      D.site[1].body.project_id === pid && D.site[1].auth === "Bearer fake-access-token" && /נכנסו ללוח הפרסום/.test(await page.textContent("#pjToast")), JSON.stringify(D.site[1]));
 
     // ---- corrections ----
     await page.click("#pjShorter");
@@ -426,7 +437,7 @@ async function unnamedButtons(page, scope) {
       D.tus.posts.slice(tusBefore).map(p => Buffer.concat(D.tus.bytes[p.id])).every(b => gpsEntries(b) === -1) && ins.row.media_items.every(i => /\/storage\/v1\/object\/public\/content-media\/panel\//.test(i.url)));
     check("new post: scheduled in the future (the chosen slot)", new Date(ins.row.scheduled_for) > new Date());
     const card = await page.evaluate((id) => { const b = document.querySelector('#cqGrid [data-cq-reject="' + id + '"]'); let el = b; while (el && el.parentElement && el.parentElement.id !== "cqGrid") el = el.parentElement; return el ? el.textContent : document.getElementById("cqGrid").textContent.slice(0, 400); }, ins.row.id);
-    check("carousel card: no Approve — 'קרוסלה — בקרוב' (publisher also fails closed)", /קרוסלה — בקרוב/.test(card) && !(await page.$('[data-cq-approve="' + ins.row.id + '"]')));
+    check("carousel card (command 7): can be approved like any post — no 'בקרוב' any more", !/בקרוב/.test(card) && !!(await page.$('[data-cq-approve="' + ins.row.id + '"]')));
     check("desktop: no console errors", D.errors.length === 0, D.errors.slice(0, 3).join(" | "));
     check("desktop: nothing reached Supabase except mocked uploads/thumbnails", D.supabaseOther.length === 0, D.supabaseOther.slice(0, 2).join(" | "));
     await page.context().close();

@@ -61,6 +61,9 @@ function friendlyReason(error) {
   if (/did not finish processing|poll window/i.test(e)) return "אינסטגרם לא סיים לעבד את הסרטון בזמן";
   if (/Media ID is not available/i.test(e)) return "אינסטגרם עוד לא היה מוכן לפרסום";
   if (/media processing failed/i.test(e)) return "אינסטגרם לא הצליח לעבד את הקובץ";
+  if (/container expired|EXPIRED/.test(e)) return "אינסטגרם לא סיים לעבד את הסרטון בזמן";
+  if (/fewer than 2 usable photos|at least 2 photos/i.test(e)) return "חסרות תמונות לפוסט מרובה תמונות";
+  if (/could not sign the video|unsupported media reference/i.test(e)) return "קובץ הסרטון לא נמצא באחסון";
   if (/META_IG_USER_ID/.test(e)) return "חסרה הגדרת אינסטגרם בשרת";
   if (/Story row has media_type/.test(e)) return "סוג המדיה לא מתאים לסטורי";
   if (/Stories cannot be scheduled|video Stories/i.test(e)) return "סטורי בפייסבוק לא נתמך בצורה הזו";

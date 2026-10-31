@@ -14,7 +14,7 @@ Object.assign(process.env, {
 delete process.env.VERCEL_ENV;
 
 let calls, db, recentCount, recentFails, authOk;
-function reset() { calls = []; db = { approved: [], failed: [], byId: {} }; recentCount = 0; recentFails = false; authOk = true; }
+function reset() { calls = []; db = { approved: [], failed: [], containers: [], byId: {} }; recentCount = 0; recentFails = false; authOk = true; }
 reset();
 function json(status, body) { return { ok: status >= 200 && status < 300, status, json: async () => body }; }
 
@@ -28,7 +28,8 @@ global.fetch = async function (url, init) {
   if (url.startsWith("https://graph.facebook.com/")) {
     const p = url.replace(/^https:\/\/graph\.facebook\.com\/v[\d.]+\//, "").split("?")[0];
     calls.push({ kind: "graph", method, path: p, body });
-    if (method === "POST" && p === "PAGE1/photos") return json(200, { id: "PH", post_id: "PAGE1_" + calls.length });
+    if (method === "POST" && p === "PAGE1/photos") return json(200, { id: "PH" + calls.length, post_id: "PAGE1_" + calls.length });
+    if (method === "POST" && p === "PAGE1/feed") return json(200, { id: "PAGE1_F" + calls.length });
     if (method === "POST" && p === "IGU1/media") return json(200, { id: "C" + calls.length });
     if (method === "POST" && p === "IGU1/media_publish") return json(200, { id: "IG" + calls.length });
     if (/fields=status_code/.test(url)) return json(200, { status_code: "FINISHED" });
@@ -48,6 +49,7 @@ global.fetch = async function (url, init) {
       if (recentFails) return json(500, {});
       return json(200, Array.from({ length: recentCount }, (_, i) => ({ id: "p" + i })));
     }
+    if (/ig_container_id=not\.is\.null/.test(qs)) return json(200, db.containers);   // open Instagram video containers (command 7)
     if (/status=eq\.approved/.test(qs)) return json(200, db.approved);
     if (/status=eq\.failed/.test(qs)) return json(200, db.failed);
     if (/status=eq\.scheduled/.test(qs)) return json(200, []);
@@ -61,6 +63,9 @@ const origLog = console.log;
 console.log = () => {}; console.error = () => {};
 
 const cron = require(REPO + "/api/publish-scheduled-content.js");
+// the scheduler's command-7 housekeeping is tested in its own suite (tests/command7.test.js)
+const noop = { maybeSend: async () => ({ skipped: "test" }), maybeRun: async () => ({ skipped: "test" }), queuePending: async () => ({ checked: 0 }) };
+cron._setTasks({ weeklySummary: noop, commentAlerts: noop, videoRetention: noop, socialQueue: noop });
 const publishNow = require(REPO + "/api/_publish-now.js");
 
 let passed = 0, total = 0;
@@ -106,15 +111,26 @@ async function drain() { const p = bg; bg = []; await Promise.all(p); }
   check("cron: 3 due → no auto-retry this run (budget used)", res.body.processed === 3 && res.body.retried === 0 && res.body.waiting === 1 &&
     !calls.some(c => c.kind === "rest" && c.method === "PATCH" && /status=eq\.failed/.test(c.qs)));
 
-  // ---- carousel rows fail closed until Phase 12 (panel "➕ פוסט חדש" can create them) ----
+  // ---- carousels (command 7): 2+ photos publish (FB multi-photo + IG carousel); anything else fails closed ----
   reset();
   db.approved = [row({ media_type: "carousel", media_url: "https://x.test/1.jpg", media_items: [{ url: "https://x.test/1.jpg", type: "image" }, { url: "https://x.test/2.jpg", type: "image" }] })];
   res = mkRes();
   await cron({ headers: { authorization: "Bearer cron-fake" }, query: {} }, res);
   await drain();
-  const carPatch = calls.find(c => c.kind === "rest" && c.method === "PATCH" && c.body && c.body.status === "failed");
-  check("carousel: never sent to Meta (no Graph call at all)", !calls.some(c => c.kind === "graph"));
-  check("carousel: marked failed with a clear reason", !!carPatch && /Carousel publishing is not available yet/.test(carPatch.body.publish_error), JSON.stringify(carPatch && carPatch.body));
+  check("carousel (2 photos): published in one run, counted once by the burst guard", res.body.processed === 1 && publishedIds() === 1, JSON.stringify(res.body.results));
+  for (const bad of [
+    { name: "1 photo", items: [{ url: "https://x.test/1.jpg", type: "image" }] },
+    { name: "a video inside", items: [{ url: "https://x.test/1.jpg", type: "image" }, { url: "https://x.test/2.mp4", type: "video" }] }
+  ]) {
+    reset();
+    db.approved = [row({ media_type: "carousel", media_url: "https://x.test/1.jpg", media_items: bad.items })];
+    res = mkRes();
+    await cron({ headers: { authorization: "Bearer cron-fake" }, query: {} }, res);
+    await drain();
+    const carPatch = calls.find(c => c.kind === "rest" && c.method === "PATCH" && c.body && c.body.status === "failed");
+    check("carousel (" + bad.name + "): never sent to Meta, marked failed with a clear reason",
+      !calls.some(c => c.kind === "graph") && !!carPatch && /fewer than 2 usable photos, or contains a video/.test(carPatch.body.publish_error), JSON.stringify(carPatch && carPatch.body));
+  }
 
   // ---- publish-now: refuse when 3+ went live in the last 10 minutes ----
   async function callNow(r) {

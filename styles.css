@@ -1011,7 +1011,15 @@ html.pg-locked { overflow: hidden; }
 /* =========================================================
    PROJECT PAGE (/projects/<slug>, server-rendered by api/site.js)
    ========================================================= */
-.pp-header { background: oklch(0.99 0 0 / 0.94); border-block-end-color: var(--marble-200); box-shadow: var(--shadow-sm); }
+/* Project pages have no hero and no "scrolled" class: the header is frosted from the start. Two classes,
+   so the later `.site-header { background: transparent }` can't win (it did — photos showed through). */
+.site-header.pp-header {
+  background: oklch(0.99 0 0 / 0.96);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-block-end-color: var(--marble-200);
+  box-shadow: var(--shadow-sm);
+}
 .pp-header .header-actions { display: flex; align-items: center; gap: 10px; }
 .pp-header .lang-switch { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
 .pp-main { padding-block: clamp(18px, 3vw, 34px) clamp(40px, 6vw, 72px); background: var(--marble-50); }

@@ -187,6 +187,16 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
       await B.page.waitForTimeout(400);
       const r2 = await barClear(B.page);
       check("project page " + w + ": the footer links (accessibility, privacy) sit above the action bar", r2.ok, JSON.stringify(r2));
+      // command 7: the sticky header is frosted + near-opaque on project pages (it was transparent: photos showed through)
+      for (const url of ["/projects/proj-1", "/projects/proj-1?lang=en"]) {
+        await B.page.goto(base + url, { waitUntil: "load" });
+        await B.page.evaluate(() => window.scrollTo(0, 600));
+        await B.page.waitForTimeout(150);
+        const hd = await B.page.evaluate(() => { const s = getComputedStyle(document.querySelector(".pp-header")); return { bg: s.backgroundColor, blur: s.backdropFilter || s.webkitBackdropFilter, pos: s.position }; });
+        const alpha = (() => { const m = hd.bg.match(/[\d.]+(?=\)$)/); return /rgba|oklch|\//.test(hd.bg) && m ? parseFloat(m[0]) : 1; })();
+        check("project page " + w + (url.includes("en") ? " EN" : " HE") + ": sticky header is ≥ 95% opaque + frosted (photos don't show through)",
+          hd.pos === "sticky" && alpha >= 0.95 && /blur\(12px\)/.test(hd.blur), JSON.stringify(hd));
+      }
       await B.ctx.close();
     }
 

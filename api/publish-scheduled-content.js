@@ -40,6 +40,7 @@
 const crypto = require("crypto");
 const notify = require("./_publish-notify.js");
 const SITE_PUBLISH = require("./_site-publish.js"); // projects → the site at their slot (command 6)
+const MM = require("./_meta-media.js");             // multi-photo, carousel, two-phase Instagram video (command 7)
 
 const GRAPH_VERSION = "v20.0";
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -101,9 +102,10 @@ function supabaseHeaders() {
 
 async function fetchDueApproved() {
   var nowIso = new Date().toISOString();
+  // A row with an open Instagram video container is finished by pollIgContainers(), not re-published here.
   var url = SUPABASE_URL + "/rest/v1/content_queue" +
     "?status=eq.approved&scheduled_for=lte." + encodeURIComponent(nowIso) +
-    "&order=scheduled_for.asc";
+    "&ig_container_id=is.null&order=scheduled_for.asc";
   var res = await fetch(url, { headers: supabaseHeaders() });
   if (!res.ok) throw new Error("Supabase query failed: " + res.status);
   return res.json();
@@ -296,6 +298,9 @@ async function publishFacebook(row, token, pageId, scheduledForDate) {
   if (row.media_type === "story") {
     return publishFacebookStory(row, token, pageId, scheduledForDate);
   }
+  if (row.media_type === "carousel") {
+    return MM.publishFacebookMulti(row, token, pageId, scheduledForDate);
+  }
   var scheduleParams = {};
   if (scheduledForDate) {
     scheduleParams.published = false;
@@ -330,6 +335,7 @@ async function publishFacebook(row, token, pageId, scheduledForDate) {
 var SITE_URL = "https://mr-polishes.com";
 
 async function publishInstagram(row, token, igUserId) {
+  if (row.media_type === "carousel") return MM.publishInstagramCarousel(row, token, igUserId);
   var mediaType = row.media_type === "story" ? "STORIES" : row.media_type === "video" || row.media_type === "reel" ? "REELS" : null;
   var containerParams = { caption: row.caption, access_token: token };
   if (mediaType) containerParams.media_type = mediaType;
@@ -340,6 +346,9 @@ async function publishInstagram(row, token, igUserId) {
     (row.media_type === "story" && isVideoAsset(row.media_url));
   if (isVideoUpload) containerParams.video_url = row.media_url;
   else containerParams.image_url = row.media_url;
+  // A project photo post carries its Instagram-safe 1080×1350 copy (4:5) next to the full-ratio one.
+  var first = Array.isArray(row.media_items) && row.media_items[0];
+  if (row.media_type === "image" && first && typeof first.ig_url === "string" && /^https:\/\//.test(first.ig_url)) containerParams.image_url = first.ig_url;
   // Stories have no caption/bio-link surface of their own — the link sticker is the only
   // way to drive traffic from one, so this is unconditional rather than opt-in per row.
   if (mediaType === "STORIES") containerParams.link = row.link_url || SITE_URL;
@@ -412,11 +421,18 @@ async function publishOneCore(row, ctx) {
     return { id: row.id, ok: false, error: mismatchErr };
   }
 
-  // Carousels (media_type='carousel', the panel's "➕ פוסט חדש") are publishable only once the
-  // multi-photo flow ships (media-projects plan, Phase 12). Until then: fail closed, never fall
-  // through to the single video branch below with the first item only.
-  if (row.media_type === "carousel") {
-    var carouselErr = "Carousel publishing is not available yet — the row was not sent to Meta.";
+  // An Instagram video container is already open for this row: pollIgContainers() finishes it on a
+  // later run. Never start a second upload (it would publish the video twice).
+  if (row.ig_container_id) {
+    return { id: row.id, ok: true, skipped: true, reason: "Instagram is still processing this video — the scheduler publishes it when it is ready." };
+  }
+
+  // Carousels (Facebook multi-photo + Instagram carousel) need 2–10 photos in media_items. Fail
+  // closed otherwise — never fall through to a single-photo or video branch with part of the post.
+  var carouselBad = row.media_type === "carousel" &&
+    (MM.carouselItems(row).length < 2 || MM.carouselItems(row).length !== (Array.isArray(row.media_items) ? row.media_items.length : 0));
+  if (carouselBad) {
+    var carouselErr = "Carousel has fewer than 2 usable photos, or contains a video (photos only) — the row was not sent to Meta.";
     await updateRow(row.id, {
       status: "failed", publish_error: carouselErr,
       trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1,
@@ -477,7 +493,9 @@ async function publishOneCore(row, ctx) {
   // see above) doesn't get overwritten back to null by this attempt's patch.
   var fbPostId = row.fb_post_id || null, igPostId = row.ig_post_id || null;
   try {
-    if (hasFacebook) fbPostId = await publishFacebook(row, ctx.token, ctx.pageId, isFuture ? scheduledFor : null);
+    // A private project video ("storage://…") becomes a signed URL for Meta, for this attempt only.
+    var metaRow = MM.isStorageRef(row.media_url) ? Object.assign({}, row, { media_url: await MM.resolveMediaUrl(row.media_url) }) : row;
+    if (hasFacebook) fbPostId = await publishFacebook(metaRow, ctx.token, ctx.pageId, isFuture ? scheduledFor : null);
     if (igConfigMissing) {
       // Thrown after any Facebook post so fbPostId is preserved by the catch (a 'both' row
       // where Facebook already went out stays recorded and won't be re-posted on retry).
@@ -485,7 +503,22 @@ async function publishOneCore(row, ctx) {
         (fbPostId ? "Facebook succeeded (post " + fbPostId + "); " : "") +
         "row marked 'failed' rather than falsely reported as 'published'. Set META_IG_USER_ID and re-approve.");
     }
-    if (hasInstagram) igPostId = await publishInstagram(row, ctx.token, ctx.igUserId); // only reached when !isFuture (see guard above)
+    // Instagram video (REELS), two-phase: create the container now and return — no waiting inside
+    // this run. pollIgContainers() checks it on later runs and publishes it once FINISHED. The row
+    // stays 'approved' (with Facebook's id, if Facebook went out) and publish_attempts is counted
+    // once, when the video is finally published or fails.
+    if (hasInstagram && (row.media_type === "video" || row.media_type === "reel")) {
+      var containerId = await MM.createReelContainer(metaRow, metaRow.media_url, ctx.token, ctx.igUserId);
+      var openedAt = new Date().toISOString();
+      await updateRow(row.id, {
+        fb_post_id: fbPostId, ig_container_id: containerId, ig_container_status: "IN_PROGRESS",
+        ig_container_created_at: openedAt, ig_container_checked_at: null, publish_error: null,
+        trigger_source: ctx.triggerSource, last_publish_attempt_at: openedAt
+      });
+      return { id: row.id, ok: true, deferred: true, pending: true, fbPostId: fbPostId,
+        reason: "Instagram is processing the video — it is published on a later scheduler run." };
+    }
+    if (hasInstagram) igPostId = await publishInstagram(metaRow, ctx.token, ctx.igUserId); // only reached when !isFuture (see guard above)
 
     var newStatus = isFuture ? "scheduled" : "published"; // isFuture here only ever means "Facebook-only, future"
     var patch = {
@@ -516,6 +549,104 @@ async function publishOneCore(row, ctx) {
     // fbPostId/igPostId tell the notification which side (if any) did go out in this attempt.
     return { id: row.id, ok: false, error: error, fbPostId: fbPostId, igPostId: igPostId };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Instagram video, phase 2: every scheduler run checks each open container ONCE (no waiting):
+//   FINISHED → media_publish → 'published' (+ the ✅ notification), counts against the run's budget
+//   ERROR / EXPIRED / still not done after 24 h → 'failed' with a clear reason, container cleared so
+//     the normal auto-retry (publish_attempts < 3) uploads a fresh one; Facebook keeps its id, so it
+//     is never posted twice
+//   IN_PROGRESS (or a transient read error) → only the status / check time is recorded
+// ---------------------------------------------------------------------------
+async function fetchOpenContainers() {
+  var url = SUPABASE_URL + "/rest/v1/content_queue?status=eq.approved&ig_container_id=not.is.null" +
+    "&order=ig_container_created_at.asc&limit=20";
+  var res = await fetch(url, { headers: supabaseHeaders() });
+  if (!res.ok) throw new Error("Supabase query failed: " + res.status);
+  return res.json();
+}
+
+// For the notification: Facebook counts as "went out in this approval" when no earlier attempt
+// was recorded (phase 1 doesn't count an attempt, so attempts = 0 means this approval posted it).
+function containerNotifyView(row) {
+  var fbNow = !!row.fb_post_id && !(row.publish_attempts > 0);
+  return { row: fbNow ? Object.assign({}, row, { fb_post_id: null }) : row, fbPostId: fbNow ? row.fb_post_id : null };
+}
+
+async function pollIgContainers(ctx, budget) {
+  var out = { checked: 0, published: 0, failed: 0, processing: 0, results: [] };
+  var rows = await fetchOpenContainers();
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (!(await claimRow(row))) continue;   // another run is on it (or checked it < 5 min ago)
+    out.checked++;
+    var nowIso = new Date().toISOString();
+    var st;
+    try {
+      st = await MM.containerStatus(row.ig_container_id, ctx.token);
+    } catch (err) {
+      st = { code: MM.containerTooOld(row.ig_container_created_at) ? "EXPIRED" : null, readError: err.message };
+    }
+    if (st.code !== "FINISHED" && st.code !== "ERROR" && st.code !== "EXPIRED" && MM.containerTooOld(row.ig_container_created_at)) st.code = "EXPIRED";
+    var view = containerNotifyView(row);
+
+    if (st.code === "PUBLISHED") {
+      // Already live (an earlier run published it but crashed before recording it). Record it as
+      // published — never fail it, or the auto-retry would upload the video a second time.
+      await updateRow(row.id, {
+        status: "published", published_at: nowIso, publish_error: null, ig_container_id: null, ig_container_status: "PUBLISHED",
+        ig_container_checked_at: nowIso, publish_attempts: (row.publish_attempts || 0) + 1, last_publish_attempt_at: nowIso
+      });
+      out.published++;
+      out.results.push({ id: row.id, status: "published", recovered: true });
+      continue;
+    }
+    if (st.code === "FINISHED") {
+      if (budget - out.published <= 0) { out.processing++; continue; }   // the next run publishes it (the lease lapses)
+      var result;
+      try {
+        var igId = await MM.publishContainer(row.ig_container_id, ctx.token, ctx.igUserId);
+        await updateRow(row.id, {
+          status: "published", published_at: new Date().toISOString(), ig_post_id: igId, publish_error: null,
+          ig_container_id: null, ig_container_status: "PUBLISHED", ig_container_checked_at: nowIso,
+          trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1, last_publish_attempt_at: nowIso
+        });
+        out.published++;
+        result = { id: row.id, ok: true, status: "published", fbPostId: view.fbPostId, igPostId: igId };
+      } catch (err) {
+        // media_publish refused a FINISHED container (e.g. a rate limit): fail this attempt, auto-retry later
+        await failContainer(row, ctx, "Instagram: " + err.message.replace(/^Instagram:\s*/, ""), "ERROR", nowIso);
+        out.failed++;
+        result = { id: row.id, ok: false, error: err.message, fbPostId: view.fbPostId, igPostId: null };
+      }
+      notify.notifyPublishResult(view.row, result, Object.assign({}, ctx, { maxAttempts: MAX_AUTO_RETRY_ATTEMPTS }));
+      out.results.push({ id: row.id, status: result.ok ? "published" : "failed" });
+      continue;
+    }
+    if (st.code === "ERROR" || st.code === "EXPIRED") {
+      var reason = st.code === "EXPIRED"
+        ? "Instagram: the video container expired before it finished processing (EXPIRED) — a new upload will be tried automatically."
+        : "Instagram: media processing failed (ERROR" + (st.detail ? ": " + st.detail : "") + ") — check the video format; a new upload will be tried automatically.";
+      await failContainer(row, ctx, reason, st.code, nowIso);
+      out.failed++;
+      notify.notifyPublishResult(view.row, { id: row.id, ok: false, error: reason, fbPostId: view.fbPostId, igPostId: null },
+        Object.assign({}, ctx, { maxAttempts: MAX_AUTO_RETRY_ATTEMPTS }));
+      out.results.push({ id: row.id, status: "failed", code: st.code });
+      continue;
+    }
+    await updateRow(row.id, { ig_container_status: st.code || row.ig_container_status || "IN_PROGRESS", ig_container_checked_at: nowIso });
+    out.processing++;
+    out.results.push({ id: row.id, status: "processing" });
+  }
+  return out;
+}
+
+async function failContainer(row, ctx, reason, code, nowIso) {
+  await updateRow(row.id, {
+    status: "failed", publish_error: reason, ig_container_id: null, ig_container_status: code, ig_container_checked_at: nowIso,
+    trigger_source: ctx.triggerSource, publish_attempts: (row.publish_attempts || 0) + 1, last_publish_attempt_at: nowIso
+  });
 }
 
 // Confirms whether a natively-scheduled Facebook post is actually live yet, via the Graph
@@ -643,6 +774,13 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  var startedAt = Date.now();
+  var ctx = { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "cron" };
+
+  // The weekly summary first (Sunday 08:00–08:09 Israel time, once per week): its window is one
+  // pg_cron run wide, so it must not wait behind a slow publishing pass. Isolated + time-boxed.
+  var weekly = await isolated("weekly-summary", function () { return TASKS.weeklySummary.maybeSend({ token: token }); });
+
   var due;
   try {
     due = await fetchDueApproved();
@@ -652,18 +790,30 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  // Instagram videos waiting on Meta (two-phase): one status check each; a publish here uses the
+  // same per-run budget as everything below.
+  var containers = { checked: 0, published: 0 };
+  if (igUserId) {
+    try {
+      containers = await pollIgContainers(ctx, MAX_PUBLISH_PER_RUN);
+      if (containers.checked) console.log("[cron] ig containers " + JSON.stringify({ checked: containers.checked, published: containers.published, failed: containers.failed, processing: containers.processing }));
+    } catch (err) {
+      console.log("[cron] ig container poll failed: " + err.message);
+    }
+  }
+  var runBudget = MAX_PUBLISH_PER_RUN - (containers.published || 0);
+
   // Burst guard: at most MAX_PUBLISH_PER_RUN rows per run (fetchDueApproved is oldest first).
-  var waiting = Math.max(0, due.length - MAX_PUBLISH_PER_RUN);
-  due = due.slice(0, MAX_PUBLISH_PER_RUN);
+  var waiting = Math.max(0, due.length - runBudget);
+  due = due.slice(0, runBudget);
   console.log("[cron] " + due.length + " due row(s) this run" + (waiting ? ", " + waiting + " waiting for the next run" : ""));
-  var ctx = { token: token, pageId: pageId, igUserId: igUserId, triggerSource: "cron" };
   var results = [];
   for (var i = 0; i < due.length; i++) {
     var result = await publishOne(due[i], ctx);
     console.log("[cron] row=" + due[i].id + " " + JSON.stringify(result));
     results.push(result);
   }
-  var retryBudget = MAX_PUBLISH_PER_RUN - due.length;
+  var retryBudget = runBudget - due.length;
 
   // Auto-retry pass: rows a previous run marked 'failed' (e.g. the IG poll-timeout, which
   // explicitly says "safe to retry") used to require a human to notice and re-click "אשר" in
@@ -722,12 +872,49 @@ module.exports = async function handler(req, res) {
     console.log("[cron] site publishing failed: " + err.message);
   }
 
+  // Fourth pass (command 7): projects approved for Facebook / Instagram / story whose posts were not
+  // queued yet (the bot's ✅ / the panel's button queue them at once; this is the safety net).
+  var social = await isolated("social-queue", function () { return TASKS.socialQueue.queuePending(); });
+
+  // Housekeeping, only while time is left in this run (the next run catches up otherwise).
+  var comments = null, retention = null;
+  if (Date.now() - startedAt < EXTRA_TASKS_BEFORE_MS) {
+    comments = await isolated("comment-alerts", function () { return TASKS.commentAlerts.maybeRun({ token: token, pageId: pageId, igUserId: igUserId }); });
+  }
+  if (Date.now() - startedAt < EXTRA_TASKS_BEFORE_MS) {
+    retention = await isolated("video-retention", function () { return TASKS.videoRetention.maybeRun(); });
+  }
+
   res.status(200).json({
     processed: results.length, results: results,
     retried: retryResults.length, retryResults: retryResults, waiting: waiting,
-    statusChecks: checkResults.length, statusCheckResults: checkResults, site: site
+    statusChecks: checkResults.length, statusCheckResults: checkResults, site: site,
+    igContainers: { checked: containers.checked || 0, published: containers.published || 0 },
+    social: social, weekly: weekly, comments: comments, retention: retention
   });
 };
+
+// The scheduler's extra tasks (command 7). Each one runs isolated: a failure is logged (no PII) and
+// never affects publishing. Required lazily-safe at load; swappable in tests via _setTasks.
+var TASKS = {
+  weeklySummary: require("./_weekly-summary.js"),
+  commentAlerts: require("./_comment-alerts.js"),
+  videoRetention: require("./_video-retention.js"),
+  socialQueue: require("./_social-queue.js")
+};
+// maxDuration is 120 s (vercel.json); the housekeeping starts only before this point.
+const EXTRA_TASKS_BEFORE_MS = 60 * 1000;
+
+async function isolated(name, fn) {
+  try {
+    var r = await fn();
+    if (r && (r.sent || r.alerted || r.deleted || r.queued || r.error)) console.log("[cron] " + name + " " + JSON.stringify(r));
+    return r;
+  } catch (err) {
+    console.log("[cron] " + name + " failed: " + err.message);
+    return { error: true };
+  }
+}
 
 // Exported for api/publish-now.js (the real-time Approve-button trigger) to reuse — see
 // that file's header. Attaching to the exported handler function itself keeps this a
@@ -742,4 +929,6 @@ module.exports.reclaimFailedRow = reclaimFailedRow;
 module.exports.countRecentlyPublished = countRecentlyPublished;
 module.exports.isDueNow = isDueNow;
 module.exports.MAX_PUBLISH_PER_RUN = MAX_PUBLISH_PER_RUN;
+module.exports.pollIgContainers = pollIgContainers;
+module.exports._setTasks = function (t) { Object.assign(TASKS, t); };
 module.exports.RECENT_PUBLISH_LIMIT = RECENT_PUBLISH_LIMIT;

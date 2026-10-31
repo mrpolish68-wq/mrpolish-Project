@@ -825,6 +825,7 @@ async function processCallbackQuery(query, chatId) {
   var data = query.data || "";
   if (data.indexOf("q:") === 0) return processQuoteCallback(query, chatId);
   if (data.indexOf("p:") === 0) return BP.processCallback(query, chatId);
+  if (data.indexOf("j:") === 0) return BP.processJobCallback(query, chatId);   // ✅ העבודה בוצעה / ⭐ בקשת ביקורת (command 7)
   var sep = data.indexOf(":");
   var action = sep === -1 ? data : data.slice(0, sep);
   var pendingId = sep === -1 ? "" : data.slice(sep + 1);
@@ -1691,7 +1692,7 @@ async function finishApprovedQuote(row, chatId) {
 
 // --- 📜 recent / 🔍 search ---
 
-var QUOTE_LIST_COLUMNS = "id,number,client_name,total,quote_date,source";
+var QUOTE_LIST_COLUMNS = "id,number,client_name,total,quote_date,source,job_done_at";
 
 async function sendQuoteList(chatId, title, rows) {
   var lines = rows.map(function (q) {
@@ -1701,7 +1702,11 @@ async function sendQuoteList(chatId, title, rows) {
   await tgCallSafe("sendMessage", {
     chat_id: chatId,
     text: title + "\n\n" + lines.join("\n"),
-    reply_markup: { inline_keyboard: rows.map(function (q) { return [{ text: "📄 שלח PDF מס׳ " + pad3(q.number), callback_data: "q:pdf:" + q.id }]; }) }
+    // per quote: 📄 the PDF + "✅ העבודה בוצעה" (→ photos), or "⭐ בקשת ביקורת" once it is done (command 7)
+    reply_markup: { inline_keyboard: rows.map(function (q) {
+      return [{ text: "📄 PDF מס׳ " + pad3(q.number), callback_data: "q:pdf:" + q.id },
+        q.job_done_at ? { text: "⭐ בקשת ביקורת", callback_data: "j:rev:" + q.id } : { text: "✅ העבודה בוצעה", callback_data: "j:done:" + q.id }];
+    }) }
   });
 }
 

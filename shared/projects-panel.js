@@ -10,7 +10,7 @@
      editable pairs (role, pair, ⇄ swap), texts HE + EN, caption, alt texts, privacy flags ("בדקתי,
      אפשר לפרסם" or remove the photo), quality warnings, consent (required to publish), watermark,
      hide from the site, destinations + timing. Publishing itself is wired in commands 6 (site) and
-     7 (social) — until then the choices are saved and the action says "בקרוב".
+     7 (social): the networks are queued only by the explicit "📣 אישור פרסום ברשתות" (renderSocial).
    - Edit: reorder, set the cover, delete a photo, delete the whole project (all files). */
 (function () {
   "use strict";
@@ -315,7 +315,7 @@
           ? '<p class="pj-live">🌐 פורסם באתר · <a href="/projects/' + esc(p.slug) + '" target="_blank" rel="noopener">לעמוד הפרויקט</a></p>'
           : p.status === "published" && meta.site_hidden ? '<p class="pj-live">🙈 מוסתר מהאתר (הורידו את הסימון כדי להחזיר)</p>'
           : '<p class="pj-live">🌐 האתר: כשכל הסעיפים ✓ ושומרים, הפרויקט עולה לאתר — מיד או במועד שנבחר.</p>') +
-        '<p class="pj-soon">📣 הפרסום לרשתות <b>יחובר בקרוב</b> — הבחירות נשמרות כבר עכשיו.</p>' +
+        '<div class="pj-social" id="pjSocial" aria-live="polite"></div>' +
       "</section>" +
 
       '<section class="pj-sec pj-danger" aria-labelledby="pjSecDel"><h4 id="pjSecDel">מחיקת הפרויקט</h4>' +
@@ -325,6 +325,58 @@
       '<div class="pj-savebar"><span class="pj-dirty" id="pjDirty" aria-live="polite"></span>' +
         '<button type="button" class="btn btn-shimmer btn-sm" id="pjSave">💾 שמירה</button></div>' + chrome();
     updateWhenHint();
+    renderSocial();
+  }
+
+  // Facebook / Instagram / story (command 7). The posts are queued only by an explicit approval —
+  // "📣 אישור פרסום ברשתות" (the panel's saves never publish to the networks by themselves). Once
+  // queued, this shows each post with its time and status (they are managed in ניהול תוכן).
+  var SOCIAL_DESTS = ["facebook", "instagram", "ig_story"];
+  var SOCIAL_KIND = { carousel: "פוסט תמונות", image: "פוסט תמונה", reel: "סרטון", video: "סרטון", story: "סטורי" };
+  var QUEUE_STATUS = { approved: "מתוזמן", scheduled: "מתוזמן בפייסבוק", published: "פורסם ✓", failed: "נכשל — לבדוק בניהול תוכן", pending_approval: "ממתין", rejected: "בוטל" };
+  function israelLabel(iso) {
+    var q = S.BS.israelParts(iso);
+    return pad2(q.d) + "." + pad2(q.m) + " · " + pad2(q.h) + ":" + pad2(q.min);
+  }
+  function renderSocial() {
+    var box = $("#pjSocial");
+    if (!box || !S.current) return;
+    var p = S.current.project, plan = (p.ai_meta && p.ai_meta.publish_plan) || {};
+    var wanted = (plan.destinations || []).filter(function (d) { return SOCIAL_DESTS.indexOf(d) !== -1; });
+    db(S.sb.from("content_queue").select("id,media_type,status,scheduled_for,published_at").eq("project_id", p.id).order("scheduled_for"), "")
+      .catch(function () { return null; }).then(function (rows) {
+        var el = $("#pjSocial");
+        if (!el || !S.current || S.current.project.id !== p.id) return;
+        rows = (rows || []).filter(function (r) { return r.status !== "rejected"; });
+        if (rows.length) {
+          el.innerHTML = '<p class="pj-live">📣 ברשתות:</p><ul class="pj-social-list">' + rows.map(function (r) {
+            return "<li>" + esc(SOCIAL_KIND[r.media_type] || "פוסט") + " · " + esc(israelLabel(r.published_at || r.scheduled_for)) + " · " + esc(QUEUE_STATUS[r.status] || r.status) + "</li>";
+          }).join("") + "</ul>";
+          return;
+        }
+        if (!wanted.length) { el.innerHTML = ""; return; }
+        var can = p.consent === "yes" && (p.status === "ready" || p.status === "published");
+        el.innerHTML = can
+          ? '<button type="button" class="btn btn-gold btn-sm" id="pjSocialGo">📣 אישור פרסום ברשתות</button>' +
+            '<p class="pj-muted">הפוסטים ייכנסו ללוח הפרסום ויפורסמו אוטומטית במועד שנבחר (עד 3 בכל סבב). תגיע הודעה בטלגרם על כל פוסט.</p>'
+          : '<p class="pj-muted">📣 הרשתות: אפשר לאשר אחרי שכל הסעיפים ✓ ושומרים.</p>';
+      });
+  }
+  function approveSocial() {
+    if (S.dirty) { toast("קודם 💾 שומרים את השינויים.", true); return; }
+    if (!confirm("לאשר פרסום ברשתות?\nהפוסטים ייכנסו ללוח הפרסום ויפורסמו אוטומטית — אי אפשר לבטל פוסט שכבר עלה.")) return;
+    var btn = $("#pjSocialGo"); if (btn) btn.disabled = true;
+    var id = S.current.project.id;
+    return token().then(function (t) {
+      return fetch("/api/site?action=publish", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ project_id: id, social: true })
+      }).then(function (res) { return res.json().catch(function () { return {}; }); });
+    }).then(function (r) {
+      var s = r.social || {};
+      toast(s.queued || s.already ? "📣 הפוסטים נכנסו ללוח הפרסום" : s.reason === "no_caption" ? "חסר כיתוב לרשתות." : s.reason === "no_media" ? "אין תמונה או סרטון לפרסום." :
+        s.reason === "flags" || s.reason === "guard" || s.reason === "no_consent" ? "הפרסום נעצר בבדיקת ההסכמה / הפרטיות." : "נשמר — ייכנס ללוח בסבב הבא.", !(s.queued || s.already || s.busy));
+      renderSocial();
+    }).catch(function () { toast("הפעולה נכשלה. נסו שוב.", true); var b = $("#pjSocialGo"); if (b) b.disabled = false; });
   }
   function warningsHtml(list) {
     var items = (list || []).map(function (w) { return WARN_HE[w]; }).filter(Boolean);
@@ -622,6 +674,7 @@
       }
       if (t.id === "pjSave") return saveProject().catch(function () {});
       if (t.id === "pjDelete") return deleteProject();
+      if (t.id === "pjSocialGo") return approveSocial();
       if (t.id === "pjAnalyze") {
         var hasText = S.current.project.title_he || (S.current.project.ai_meta || {}).caption_he;
         if (hasText && !confirm("הניתוח יחליף את הכותרת, התיאורים והכיתוב הקיימים. להמשיך?")) return;
@@ -709,9 +762,27 @@
         .subscribe();
     } catch (e) { /* realtime is a bonus: the tab also refreshes on open / focus */ }
     S.root.innerHTML = '<div class="pj-empty">טוען פרויקטים…</div>';
-    return refreshList();
+    S.loading = refreshList();
+    return S.loading;
   }
   function stop() { if (S && S.channel) { try { S.sb.removeChannel(S.channel); } catch (e) {} } }
 
-  window.MrpProjectsPanel = { init: init, stop: stop, _splitCaption: splitCaption };
+  // "✅ העבודה בוצעה" in the quotes tab (command 7): a new project pre-filled with the quote's service +
+  // city and linked to it (projects.quote_id) — or the quote's existing project. q: { id, number, service, city }.
+  function newFromQuote(opts, q) {
+    if (!S) init(opts);
+    return (S.loading || Promise.resolve()).then(function () {
+      return db(S.sb.from("projects").select("id").eq("quote_id", q.id).order("created_at", { ascending: false }).limit(1), "");
+    }).then(function (found) {
+      if (found && found[0]) { announce("לעבודה הזו כבר יש פרויקט — הוא נפתח."); return openProject(found[0].id); }
+      return db(S.sb.from("projects").insert({ status: "collecting", source: "panel", quote_id: q.id, service: q.service || null, city: q.city || null,
+        ai_meta: { from_quote: { number: q.number } } }).select(), "לא הצלחנו ליצור פרויקט. נסו שוב.").then(function (rows) {
+        var p = rows && rows[0];
+        S.list.unshift(p); S.media[p.id] = [];
+        return openProject(p.id, { fresh: true });
+      });
+    }).catch(function (e) { toast(e.he || "שגיאה", true); });
+  }
+
+  window.MrpProjectsPanel = { init: init, stop: stop, newFromQuote: newFromQuote, _splitCaption: splitCaption };
 })();

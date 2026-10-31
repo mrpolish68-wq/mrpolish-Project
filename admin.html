@@ -44,6 +44,7 @@
   <!-- Shared quote template (WO_CSS + buildDoc + logo): the same file the server PDF renderer uses -->
   <script src="shared/quote-template.js"></script>
   <script src="shared/burst-schedule.js"></script>
+  <script src="shared/review-request.js"></script>
   <script src="shared/media-client.js"></script>
   <script src="shared/projects-panel.js"></script>
 
@@ -827,7 +828,9 @@
     .pj-gates { list-style:none; padding:0; margin:14px 0 0; display:grid; gap:4px; font-size:.86rem; }
     .pj-gates .ok { color:oklch(0.42 0.1 150); }
     .pj-gates .no { color:oklch(0.5 0.17 30); }
-    .pj-soon { margin-block-start:10px; font-size:.86rem; color:var(--char-800); background:var(--marble-50); padding:10px 12px; border-radius:10px; }
+    .pj-social { margin-block-start:10px; }
+    .pj-social-list { margin:4px 0 0; padding-inline-start:20px; font-size:.86rem; color:var(--char-800); }
+    .pj-social-list li { margin-block:2px; }
     .pj-live { margin-block-start:10px; font-size:.9rem; color:var(--char-900); }
     .pj-live a { color:var(--navy-700); font-weight:700; }
     .pj-danger { border-color:oklch(0.85 0.06 30); }
@@ -1959,7 +1962,7 @@
       var editingQuoteId = null;     // non-null while the form is editing a saved quote instead of a new one
       var allQuotes = [];            // full quote history, fetched from Supabase (lazy-loaded, kept live)
       var quotesLoaded = false;
-      var QUOTE_COLUMNS = "id, number, quote_date, client_name, address, description, total, source, pdf_path";
+      var QUOTE_COLUMNS = "id, number, quote_date, client_name, address, description, total, source, pdf_path, job_done_at, review_requested_at, review_request_count";
 
       function pad3(n) { return String(n).padStart(3, "0"); }
       // Today in Israel as DD.MM.YYYY (zero-padded), the same as the PDF and the Telegram bot.
@@ -2288,9 +2291,50 @@
             '<td class="qh-actions">' +
               '<button type="button" class="btn btn-navy btn-sm" data-qh-edit="' + esc(r.id) + '">✏️ ערוך</button>' +
               '<button type="button" class="btn btn-navy btn-sm" data-qh-view="' + esc(r.id) + '">📄 צפה / הורדה</button>' +
+              // command 7: job done → a project with the photos; then the WhatsApp review request
+              (r.job_done_at
+                ? '<button type="button" class="btn btn-gold btn-sm" data-qh-review="' + esc(r.id) + '">⭐ בקשת ביקורת</button>' +
+                  (r.review_requested_at ? '<span class="qh-src" title="בקשת ביקורת נשלחה">⭐ ' + esc(fmtShortDate(r.review_requested_at)) + "</span>" : "")
+                : '<button type="button" class="btn btn-shimmer btn-sm" data-qh-done="' + esc(r.id) + '">✅ העבודה בוצעה</button>') +
             "</td>" +
             "</tr>";
         }).join("");
+      }
+
+      function fmtShortDate(iso) {
+        var d = new Date(iso);
+        return isNaN(d) ? "" : d.toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem", day: "2-digit", month: "2-digit" });
+      }
+
+      // "✅ העבודה בוצעה": job_done_at (only while empty), then the 📸 tab opens a new project for the photos,
+      // pre-filled with the quote's service + city and linked to the quote.
+      function markJobDone(row, btn) {
+        btn.disabled = true;
+        var now = new Date().toISOString();
+        sb.from("quotes").update({ job_done_at: now }).eq("id", row.id).is("job_done_at", null).select(QUOTE_COLUMNS).then(function (res) {
+          if (res.error) throw res.error;
+          if (res.data && res.data[0]) Object.assign(row, res.data[0]); else row.job_done_at = row.job_done_at || now;
+          renderQuoteHistory();
+          var R = window.MrpReview;
+          var navBtn = nav.querySelector('button[data-view="projects"]');
+          if (navBtn) navBtn.click();
+          return window.MrpProjectsPanel.newFromQuote({ sb: sb, supabaseUrl: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY, root: document.getElementById("pjRoot") },
+            { id: row.id, number: row.number, service: R.serviceFromText(row.description), city: R.cityFromAddress(row.address) });
+        }).catch(function () { btn.disabled = false; alert("השמירה נכשלה. נסו שוב."); });
+      }
+
+      // "⭐ בקשת ביקורת": WhatsApp opens with the message ready and NO recipient (Miri picks the contact);
+      // no phone is asked for or stored. A second request for the same quote asks first.
+      function requestReview(row, btn) {
+        if (row.review_requested_at && !confirm("כבר נשלחה בקשת ביקורת ללקוח הזה (" + fmtShortDate(row.review_requested_at) + "). לשלוח שוב?")) return;
+        var R = window.MrpReview;
+        window.open(R.waUrl(R.reviewMessage(row.client_name)), "_blank", "noopener");   // inside the click (no popup block)
+        btn.disabled = true;
+        sb.from("quotes").update({ review_requested_at: new Date().toISOString(), review_request_count: (row.review_request_count || 0) + 1 })
+          .eq("id", row.id).select(QUOTE_COLUMNS).then(function (res) {
+            if (res.data && res.data[0]) Object.assign(row, res.data[0]);
+            renderQuoteHistory();
+          });
       }
 
       function findQuote(id) {
@@ -2339,6 +2383,10 @@
           if (row) enterEditMode(row);
           return;
         }
+        var doneBtn = e.target.closest("[data-qh-done]");
+        if (doneBtn) { var drow = findQuote(doneBtn.getAttribute("data-qh-done")); if (drow) markJobDone(drow, doneBtn); return; }
+        var revBtn = e.target.closest("[data-qh-review]");
+        if (revBtn) { var rrow = findQuote(revBtn.getAttribute("data-qh-review")); if (rrow) requestReview(rrow, revBtn); return; }
         var viewBtn = e.target.closest("[data-qh-view]");
         if (viewBtn) {
           var vrow = findQuote(viewBtn.getAttribute("data-qh-view"));
@@ -3905,10 +3953,6 @@
           var actionsHtml = "";
           if (syncingIds[r.id]) {
             actionsHtml = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן עם מטא…</span>';
-          } else if ((r.status === "pending_approval" || r.status === "failed") && r.media_type === "carousel") {
-            actionsHtml =
-              '<button type="button" class="btn btn-shimmer btn-sm" disabled title="פרסום קרוסלות יחובר בקרוב">⏳ קרוסלה — בקרוב</button>' +
-              '<button type="button" class="btn btn-navy btn-sm" data-cq-reject="' + esc(r.id) + '">✋ דחה</button>';
           } else if (r.status === "pending_approval" || r.status === "failed") {
             actionsHtml =
               '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>' +
@@ -4111,8 +4155,7 @@
           if (syncingIds[r.id]) {
             actionBtn = '<span class="cq-syncing"><span class="cq-syncing-spinner"></span>מסנכרן…</span>';
           } else if (r.status === "pending_approval") {
-            actionBtn = r.media_type === "carousel" ? '<button type="button" class="btn btn-shimmer btn-sm" disabled title="פרסום קרוסלות יחובר בקרוב">⏳ בקרוב</button>' :
-              '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>';
+            actionBtn = '<button type="button" class="btn btn-shimmer btn-sm" data-cq-approve="' + esc(r.id) + '">✅ אשר</button>';
           } else if (effectiveStatusKey(r) === "approved_ready") {
             // Real gap this closes: rows approved before the real-time trigger existed (or
             // whose attempt only hit the network-failure path) sit here with nothing sent to
@@ -4351,11 +4394,6 @@
           var ids = Object.keys(selectedIds);
           if (!ids.length) return;
           var rows = ids.map(findById).filter(function (r) { return r && (r.status === "pending_approval" || r.status === "failed"); });
-          var carousels = rows.filter(function (r) { return r.media_type === "carousel"; });
-          if (carousels.length) {
-            alert(carousels.length + " קרוסלות לא יאושרו — פרסום קרוסלות יחובר בקרוב.");
-            rows = rows.filter(function (r) { return r.media_type !== "carousel"; });
-          }
           if (!rows.length) { alert("אין בבחירה פוסטים שממתינים לאישור."); return; }
           var past = rows.filter(function (r) { return BS.isPast(r); });
           var future = rows.filter(function (r) { return !BS.isPast(r); });
@@ -4590,7 +4628,6 @@
         }
         function approve(id) {
           var row = findById(id);
-          if (row && row.media_type === "carousel") { alert("פרסום קרוסלות יחובר בקרוב."); return; }
           if (row && BS.isPast(row)) { openPastDialog(id); return; } // burst guard: ask first
           approveAndPublishNow(id);
         }
@@ -4677,7 +4714,7 @@
         var npPicked = [];
         var NP_LIMITS = { image: [1, 1], video: [1, 1], carousel: [2, 10] };
         var NP_HINTS = { image: "תמונה אחת (JPG / PNG / HEIC). המידע הנסתר בתמונה (מיקום GPS) מוסר לפני ההעלאה.", video: "סרטון אחד, MP4 / MOV עד 50MB.",
-          carousel: "2–10 תמונות או סרטונים. פרסום קרוסלות יחובר בקרוב — אפשר כבר להכין ולשמור." };
+          carousel: "2–10 תמונות (בלי סרטונים). בפייסבוק: פוסט עם כמה תמונות; באינסטגרם: קרוסלה." };
         function npType() { return (npForm.querySelector("input[name=npType]:checked") || {}).value || "image"; }
         function npShowError(msg) { npError.textContent = msg || ""; npError.hidden = !msg; }
         function npRenderFiles(progress) {
@@ -4745,6 +4782,7 @@
           var t = npType(), lim = NP_LIMITS[t];
           var title = document.getElementById("npTitle").value.trim(), caption = document.getElementById("npCaption").value.trim();
           if (npPicked.length < lim[0] || npPicked.length > lim[1]) return npShowError(t === "carousel" ? "בקרוסלה בוחרים בין 2 ל-10 קבצים." : "בחרו קובץ אחד.");
+          if (t === "carousel" && npPicked.some(function (f) { return /^video\//.test(f.type) || /\.(mp4|mov)$/i.test(f.name); })) return npShowError("קרוסלה היא תמונות בלבד. סרטון מפרסמים כ'וידאו'.");
           if (t === "image" && npPicked.some(function (f) { return /^video\//.test(f.type); })) return npShowError("בחרתם סרטון — סמנו 'וידאו'.");
           if (t === "video" && npPicked.some(function (f) { return !/^video\//.test(f.type) && !/\.(mp4|mov)$/i.test(f.name); })) return npShowError("בחרו קובץ וידאו (MP4 / MOV).");
           if (!title) return npShowError("חסרה כותרת.");

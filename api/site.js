@@ -3,8 +3,9 @@
 //   GET  /api/site?r=gallery              → the gallery JSON for the homepage (CDN-cached)
 //   GET  /projects/<slug>[?lang=en]       → (vercel.json rewrite → ?r=page&slug=) a server-rendered project page
 //   GET  /sitemap-projects.xml            → (rewrite → ?r=sitemap) every published project page + its images
-//   POST /api/site?action=publish {project_id} → publish a ready project on the site now, if it's due
+//   POST /api/site?action=publish {project_id, social?} → publish a ready project on the site now, if it's due
 //        (the panel's 💾 with a session, the bot's ✅ אשר with X-Internal-Secret). See api/_site-publish.js.
+//        social: true also approves + queues its Facebook / Instagram / story posts (api/_social-queue.js).
 //
 // Public reads use the ANON key, so RLS applies (anon sees only published + consented projects), AND the
 // code checks again: status 'published', consent 'yes', a slug, not hidden (ai_meta.site_hidden). Only the
@@ -13,6 +14,7 @@
 
 const { enforce } = require("./_rate-limit.js");
 const SP = require("./_site-publish.js");
+const SQ = require("./_social-queue.js");   // command 7: Facebook / Instagram / story posts for a project
 
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tb2dua3hrZ2xrb3R6a3V4emx5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNDMwOTIsImV4cCI6MjA5NzcxOTA5Mn0.dZlQnKYZWv2rod-22fYh8Ou20-F6Ic1VVqZhi1anyMA";
@@ -276,6 +278,14 @@ module.exports = async function handler(req, res) {
     res.setHeader("Cache-Control", "no-store");
     try {
       var out = await SP.publishProject(id, {});
+      // {social: true} = the approval for Facebook / Instagram / story (the bot's ✅ אשר, the panel's
+      // "📣 אישור פרסום ברשתות"): queue the posts now (api/_social-queue.js). The site part may say
+      // no_site (not chosen) — that is fine when the request is about the networks.
+      if ((req.body || {}).social === true) {
+        out.social = await SQ.approveAndQueue(id, who === "internal" ? "telegram" : "panel");
+        var siteOk = out.ok || out.reason === "no_site";
+        return res.status(siteOk && (out.social.ok || out.social.busy) ? 200 : out.reason === "not_found" ? 404 : 409).json(out);
+      }
       return res.status(out.ok ? 200 : out.reason === "not_found" ? 404 : 409).json(out);
     } catch (err) {
       console.error("[site] publish failed: " + err.message);

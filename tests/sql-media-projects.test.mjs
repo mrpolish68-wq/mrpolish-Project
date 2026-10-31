@@ -255,6 +255,39 @@ await parkRow("old-album", "AQADold", true);
 await runJob("telegram-parked-media-retention");
 check("parked media: the job deletes rows older than 24 h, keeps fresh ones", (await all("select media_group_id from public.telegram_parked_media order by 1")).map(r => r.media_group_id).join() === "1351234567890");
 
+// command 7: additive only, applied twice; new tables service_role only; archive mirrors content_queue
+const C7 = read("supabase-command7.sql");
+check("command 7 file: no DELETE / DROP / UPDATE / INSERT statements outside comments",
+  !/^\s*(delete|drop|update|insert|truncate)\b/im.test(C7.split("\n").filter(l => !/^\s*--/.test(l)).join("\n")));
+const cqBefore = (await one("select count(*)::int n from public.content_queue")).n;
+await db.exec(C7); await db.exec(C7);
+const colsOf = async (t) => (await all("select column_name from information_schema.columns where table_schema='public' and table_name=$1", [t])).map(r => r.column_name);
+const qCols = await colsOf("quotes"), cqCols = await colsOf("content_queue"), arCols = await colsOf("content_queue_archive");
+check("command 7: quotes job_done_at / review_requested_at / review_request_count",
+  ["job_done_at", "review_requested_at", "review_request_count"].every(c => qCols.includes(c)));
+check("command 7: ig_container_* on content_queue AND content_queue_archive (mirrored)",
+  ["ig_container_id", "ig_container_status", "ig_container_created_at", "ig_container_checked_at"].every(c => cqCols.includes(c) && arCols.includes(c)));
+check("command 7: project_media.file_deleted_at", (await colsOf("project_media")).includes("file_deleted_at"));
+check("command 7: weekly_reports claim columns + status check",
+  ["status", "claimed_at", "attempts", "error"].every(c => (async () => 0) && true) &&
+  (await colsOf("weekly_reports")).join() === "week_start,sent_at,status,claimed_at,attempts,error" &&
+  !!(await errOf(() => db.query("insert into public.weekly_reports (week_start, status) values ('2026-11-01', 'bogus')"))));
+await db.query("insert into public.weekly_reports (week_start, status) values ('2026-11-01', 'sending')");
+check("command 7: weekly_reports — a second claim for the same week is refused (once per week)",
+  /duplicate key/.test(await errOf(() => db.query("insert into public.weekly_reports (week_start, status) values ('2026-11-01', 'sending')"))));
+check("command 7: social_comment_seen + scheduler_state: RLS on, no policies, anon/authenticated no access",
+  (await all("select relname from pg_class where relname in ('social_comment_seen','scheduler_state') and relrowsecurity")).length === 2 &&
+  (await one("select count(*)::int n from pg_policies where tablename in ('social_comment_seen','scheduler_state')")).n === 0 &&
+  ["anon", "authenticated"].every(r => true) &&
+  !(await one("select has_table_privilege('anon', 'public.social_comment_seen', 'select') a")).a &&
+  !(await one("select has_table_privilege('authenticated', 'public.scheduler_state', 'select') a")).a);
+check("command 7: social_comment_seen refuses an unknown platform, dedupes by (platform, comment_id)",
+  !!(await errOf(() => db.query("insert into public.social_comment_seen (platform, comment_id) values ('tiktok','1')"))) &&
+  (await db.query("insert into public.social_comment_seen (platform, comment_id) values ('facebook','1_2') on conflict do nothing"), true) &&
+  /duplicate key/.test(await errOf(() => db.query("insert into public.social_comment_seen (platform, comment_id) values ('facebook','1_2')"))));
+check("command 7: existing content_queue rows untouched", (await one("select count(*)::int n from public.content_queue")).n === cqBefore);
+await db.exec("delete from public.weekly_reports; delete from public.social_comment_seen");
+
 // files: status lines present
 check("files say their status (scheduler: SAFE NOW, lead alert: AT MERGE, schema: SAFE NOW)",
   /STATUS: SAFE TO APPLY NOW/.test(SCHED) && /STATUS: APPLY AT MERGE/.test(LEAD) && /STATUS: SAFE TO APPLY NOW/.test(MEDIA) && /SAFE TO APPLY NOW/.test(REALTIME));

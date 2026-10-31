@@ -146,7 +146,10 @@ global.fetch = async function (url, init) {
     const sp = db.projects.find(p => p.id === body.project_id);
     if (!sp || sp.status !== "ready") return res(409, { ok: false, reason: "not_ready" });
     Object.assign(sp, { status: "published", slug: "litush-shayish-ve-even-raanana" });
-    return res(200, { ok: true, published: true, slug: sp.slug, url: "https://mr-polishes.com/projects/" + sp.slug });
+    var out = { ok: true, published: true, slug: sp.slug, url: "https://mr-polishes.com/projects/" + sp.slug };
+    // command 7: social: true → the posts queued by api/_social-queue.js (the real queue is tested in tests/command7.test.js)
+    if (body.social === true) out.social = { ok: true, queued: 1, rows: [{ id: "cq-x", media_type: "carousel", scheduled_for: new Date(Date.now() - 1000).toISOString() }] };
+    return res(200, out);
   }
   if ((m = url.match(/\/storage\/v1\/object\/upload\/sign\/project-originals\/(.+)\?token=/))) {
     calls.push({ kind: "put", path: m[1], method, upsert: headers["x-upsert"], bytes: Buffer.from(init.body || []).toString() });
@@ -408,8 +411,9 @@ function noReceiptExtraction() { geminiExtraction = { vendor_name: null, date: n
     P = db.projects.find(p => p.id === P.id);
     check("✅ אשר → ready, then the site goes live now (api/site.js publish, internal secret) → the reply has the link", calls.filter(c => c.kind === "site").length === 1 &&
       calls.find(c => c.kind === "site").body.project_id === P.id && calls.find(c => c.kind === "site").secret === "int-secret-fake" && P.status === "published" &&
-      texts().includes("נשמר ✔\n🌐 עלה לאתר: https://mr-polishes.com/projects/litush-shayish-ve-even-raanana\n📣 הרשתות – הפרסום יופעל בשלב הבא."), texts().slice(-1)[0]);
-    check("✅ אשר publishes NOTHING to Meta (no content_queue row)", db.content_queue.length === 1 && !calls.some(c => c.table === "content_queue" && c.method !== "GET"));
+      texts().includes("נשמר ✔\n🌐 עלה לאתר: https://mr-polishes.com/projects/litush-shayish-ve-even-raanana\n📣 פוסט תמונות: בסבב הפרסום הבא (תוך כ-10 דקות)\nתקבלי הודעה כשכל פוסט עולה."), texts().slice(-1)[0]);
+    check("✅ אשר with a social destination = the approval: the same call carries social: true (the queue is server-side)", calls.find(c => c.kind === "site").body.social === true);
+    check("✅ אשר never calls Meta itself and writes no content_queue row from the bot", db.content_queue.length === 1 && !calls.some(c => c.table === "content_queue" && c.method !== "GET") && !calls.some(c => /graph\.facebook\.com/.test(c.url || "")));
     check("the state is cleared after ✅", !stateOf(A));
 
     // ================================================================== consent no + ai busy + delete

@@ -10,7 +10,7 @@
     }
   ],
   "functions": {
-    "api/publish-scheduled-content.js": { "maxDuration": 60 },
+    "api/publish-scheduled-content.js": { "maxDuration": 120 },
     "api/panel.js": { "maxDuration": 60 },
     "api/media.js": { "maxDuration": 120, "includeFiles": "assets/watermark/**" },
     "api/site.js": { "maxDuration": 20 },

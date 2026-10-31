@@ -40,6 +40,14 @@ const STUB = `(() => {
       if (has("insert")) return Promise.resolve({ data: null, error: { message: "insert must not be used" } });
       return Promise.resolve({ data: clone(S.quotes).sort((a, b) => b.number - a.number), error: null });
     }
+    // command 7: "✅ העבודה בוצעה" opens a project in the 📸 tab
+    if (q.table === "projects") {
+      S.projects = S.projects || [];
+      const ins = has("insert");
+      if (ins) { const row = Object.assign({ id: "pj-" + (S.projects.length + 1), status: "collecting", ai_meta: {}, created_at: new Date().toISOString() }, ins[1][0]); S.projects.push(row); return Promise.resolve({ data: [clone(row)], error: null }); }
+      const qid = q.ops.find(o => o[0] === "eq" && o[1][0] === "quote_id");
+      return Promise.resolve({ data: clone(S.projects.filter(p => !qid || p.quote_id === qid[1][1])), error: null });
+    }
     return Promise.resolve({ data: [], error: null, count: 0 });
   }
   function query(table) {
@@ -94,6 +102,8 @@ const STUB = `(() => {
   S.emit = (payload) => S.handler && S.handler(payload);
   // record downloads instead of navigating
   HTMLAnchorElement.prototype.click = function () { rec({ kind: "download", href: this.href, name: this.download }); };
+  // the review request opens WhatsApp in a new tab: record it instead
+  window.open = function (url, target, features) { rec({ kind: "open", url: String(url), target, features }); return null; };
 })();`;
 
 (async () => {
@@ -349,6 +359,39 @@ const STUB = `(() => {
   await page.waitForFunction(() => !document.querySelector('[data-qh-view="q11"]').disabled, null, { timeout: 30000 });
   seg2 = calls.slice(m2);
   check("panel quote 'צפה / הורדה' -> html2canvas path (no signed URL, no server render)", seg2.some(c => c.kind === "html2canvas") && seg2.some(c => c.kind === "pdfSave" && c.name === "הצעת-מחיר-011.pdf") && !seg2.some(c => c.kind === "signedUrl") && renderCalls.length === rcPanel);
+
+  // ===== 7b. command 7: "✅ העבודה בוצעה" → a project for the photos; "⭐ בקשת ביקורת" =====
+  check("quotes not done yet show '✅ העבודה בוצעה' (no ⭐ before the job is done)", !!(await page.$('[data-qh-done="q15"]')) && !(await page.$('[data-qh-review="q15"]')));
+  m2 = calls.length;
+  await page.click('[data-qh-done="q15"]');
+  await page.waitForSelector("#view-projects.active #pjEdTitle", { timeout: 8000 }).catch(() => {});
+  seg2 = calls.slice(m2);
+  const doneUpd = seg2.find(c => c.kind === "query" && c.table === "quotes" && c.ops.includes("update"));
+  const updArg = doneUpd && doneUpd.args.find(o => o[0] === "update")[1][0];
+  check("✅ העבודה בוצעה → quotes.update({job_done_at}) guarded by .is('job_done_at', null)", !!(updArg && updArg.job_done_at) && Object.keys(updArg).length === 1 &&
+    doneUpd.args.some(o => o[0] === "is" && o[1][0] === "job_done_at" && o[1][1] === null) && doneUpd.args.some(o => o[0] === "eq" && o[1][1] === "q15"));
+  const pIns = seg2.find(c => c.kind === "query" && c.table === "projects" && c.ops.includes("insert"));
+  const pArg = pIns && pIns.args.find(o => o[0] === "insert")[1][0];
+  check("…then the 📸 tab opens a NEW project linked to the quote, pre-filled from it (service from the description; no city without a comma — never the street)",
+    !!pArg && pArg.quote_id === "q15" && pArg.service === "floor_polish" && pArg.city === null && pArg.status === "collecting" && !/ויצמן/.test(JSON.stringify(pArg)) &&
+    await page.isVisible("#view-projects.active #pjEdTitle"), JSON.stringify(pArg));
+  await page.click('button[data-view="ai"]');
+  await page.waitForSelector('[data-qh-review="q15"]', { timeout: 5000 }).catch(() => {});
+  check("once done, the row offers '⭐ בקשת ביקורת' instead", !!(await page.$('[data-qh-review="q15"]')) && !(await page.$('[data-qh-done="q15"]')));
+  m2 = calls.length; const alertsBefore = alerts.length;
+  await page.click('[data-qh-review="q15"]'); await wait(300);
+  seg2 = calls.slice(m2);
+  const opened = seg2.find(c => c.kind === "open");
+  const sentText = opened && decodeURIComponent(opened.url.split("?text=")[1] || "");
+  check("⭐ → WhatsApp opens with NO phone (wa.me/?text=…) and the exact message with the first name", opened && /^https:\/\/wa\.me\/\?text=/.test(opened.url) && opened.features === "noopener" &&
+    sentText.startsWith("היי רינה, כאן אורי ממיסטר פוליש 😊\nתודה שבחרתם בנו") && sentText.includes("\nhttps://g.page/r/CRSEpD2_CFoDEBI/review\nתודה רבה! 🙏") && alerts.length === alertsBefore, sentText);
+  const revUpd = seg2.find(c => c.kind === "query" && c.table === "quotes" && c.ops.includes("update"));
+  const revArg = revUpd && revUpd.args.find(o => o[0] === "update")[1][0];
+  check("⭐ → review_requested_at + count 1 recorded; nothing about a phone", revArg && !!revArg.review_requested_at && revArg.review_request_count === 1 && !/phone/.test(JSON.stringify(revArg)));
+  m2 = calls.length;
+  await page.click('[data-qh-review="q15"]'); await wait(300);
+  check("⭐ a second time → warns first ('כבר נשלחה בקשת ביקורת … לשלוח שוב?'), then count 2", /כבר נשלחה בקשת ביקורת/.test(alerts[alerts.length - 1] || "") &&
+    calls.slice(m2).some(c => c.kind === "open") && calls.slice(m2).some(c => c.kind === "query" && c.ops.includes("update") && JSON.stringify(c.args).includes('"review_request_count":2')));
 
   // ===== 8. console + network hygiene, then logout =====
   // Chrome itself logs "Failed to load resource … 422/500" for the two error responses this test

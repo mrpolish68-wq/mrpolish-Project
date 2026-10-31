@@ -288,10 +288,15 @@ for (let n = 6; n <= 13; n++) db.quotes.push({ id: uuid(), number: n, quote_date
   reset(); await post(text(810, "📜 הצעות אחרונות")); c = last();
   const top5 = db.quotes.slice().sort((a, b) => b.number - a.number).slice(0, 5);
   check("📜 -> last 5 by number, with ₪, date, 📱/💻", top5.every(q => txt(c).includes("מס׳ " + String(q.number).padStart(3, "0"))) && /📱 טלגרם/.test(txt(c)) && (txt(c).match(/\n/g) || []).length === 6, txt(c).split("\n")[2]);
-  check("📜 buttons: '📄 שלח PDF מס׳ N' = q:pdf:<quote id> (≤ 64 bytes)", btns(c).length === 5 && btns(c).every((b, i) => b.callback_data === "q:pdf:" + top5[i].id && Buffer.byteLength(b.callback_data) <= 64));
+  const pdfBtns = (x) => btns(x).filter(b => b.callback_data.startsWith("q:pdf:"));
+  const jobBtns = (x) => btns(x).filter(b => b.callback_data.startsWith("j:"));
+  check("📜 buttons: '📄 PDF מס׳ N' = q:pdf:<quote id> (≤ 64 bytes)", pdfBtns(c).length === 5 && pdfBtns(c).every((b, i) => b.callback_data === "q:pdf:" + top5[i].id && Buffer.byteLength(b.callback_data) <= 64));
+  check("📜 buttons (command 7): one job button per quote in the same row — ✅ העבודה בוצעה (j:done) or ⭐ בקשת ביקורת (j:rev) once done",
+    c.body.reply_markup.inline_keyboard.every((row, i) => row.length === 2 && row[1].callback_data === (top5[i].job_done_at ? "j:rev:" : "j:done:") + top5[i].id &&
+      row[1].text === (top5[i].job_done_at ? "⭐ בקשת ביקורת" : "✅ העבודה בוצעה") && Buffer.byteLength(row[1].callback_data) <= 64));
   const panelOld = db.quotes.find(q => q.number === 9);
   const qs = calls.find(x => x.kind === "rest" && x.table === "quotes" && x.method === "GET");
-  check("📜 query selects list columns only (no description/address)", qs && /select=id,number,client_name,total,quote_date,source/.test(qs.qs) && !/description|address/.test(qs.qs));
+  check("📜 query selects list columns only (no description/address)", qs && /select=id,number,client_name,total,quote_date,source,job_done_at(&|$)/.test(qs.qs) && !/description|address/.test(qs.qs));
 
   // ===== 📄 resend =====
   reset(); await post(tap(810, "q:pdf:" + q14.id));
@@ -311,7 +316,7 @@ for (let n = 6; n <= 13; n++) db.quotes.push({ id: uuid(), number: n, quote_date
   reset(); await post(text(811, "כהן"));
   c = last();
   const sq = calls.find(x => x.kind === "rest" && x.table === "quotes" && x.method === "GET");
-  check("search 'כהן' -> ilike.*כהן*, up to 5, newest first, same buttons", /client_name=ilike\.\*כהן\*/.test(decodeURIComponent(sq.qs)) && /limit=5/.test(sq.qs) && btns(c).length === 4 && btns(c).every(b => b.callback_data.startsWith("q:pdf:")) && txt(c).startsWith("🔍 תוצאות החיפוש:"), decodeURIComponent(sq.qs));
+  check("search 'כהן' -> ilike.*כהן*, up to 5, newest first, same buttons", /client_name=ilike\.\*כהן\*/.test(decodeURIComponent(sq.qs)) && /limit=5/.test(sq.qs) && pdfBtns(c).length === 4 && jobBtns(c).length === 4 && txt(c).startsWith("🔍 תוצאות החיפוש:"), decodeURIComponent(sq.qs));
   check("…state cleared after searching", !db.telegram_chat_state.some(s => s.chat_id === 811));
   await post(text(811, "🔍 חיפוש הצעה")); reset(); await post(text(811, "50%_x*"));
   const sq2 = calls.find(x => x.kind === "rest" && x.table === "quotes" && x.method === "GET");
@@ -320,7 +325,7 @@ for (let n = 6; n <= 13; n++) db.quotes.push({ id: uuid(), number: n, quote_date
   db.quotes.push({ id: uuid(), number: 99, quote_date: "1.1.2026", client_name: "אבי 50%_x", total: 1, source: "panel" });
   db.quotes.push({ id: uuid(), number: 98, quote_date: "1.1.2026", client_name: "אבי 50abx", total: 1, source: "panel" });
   await post(text(811, "🔍 חיפוש הצעה")); reset(); await post(text(811, "50%_x"));
-  check("escaped search matches the literal name only (not '50abx')", btns(last()).length === 1 && txt(last()).includes("אבי 50%_x") && !txt(last()).includes("50abx"));
+  check("escaped search matches the literal name only (not '50abx')", pdfBtns(last()).length === 1 && txt(last()).includes("אבי 50%_x") && !txt(last()).includes("50abx"));
   await post(text(811, "🔍 חיפוש הצעה")); reset(); await post(text(811, "א"));
   check("1-letter search -> ask again, still awaiting", /לפחות 2 אותיות/.test(txt(last())) && db.telegram_chat_state.some(s => s.chat_id === 811 && s.state === "awaiting_search"));
   reset(); await post(text(811, "❓ עזרה"));
