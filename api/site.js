@@ -93,6 +93,8 @@ async function loadPublished(opts) {
 // ---------------------------------------------------------------------------
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 function jsonForScript(o) { return JSON.stringify(o).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029"); }
+// a spaced dash never starts a line ("…קרמה – בית החולים" → the dash stays at the end of the line before)
+function glueDash(s) { return String(s).replace(/ ([–—]) /g, " $1 "); }
 function srcset(i) { return i ? i.s[480] + " 480w, " + i.s[960] + " 960w, " + i.s[1600] + " 1600w" : ""; }
 function pageUrl(slug, en) { return SITE + "/projects/" + slug + (en ? "?lang=en" : ""); }
 
@@ -163,7 +165,7 @@ function cardMarkup(p, lang, t) {
     '<span class="pcard__media"><img class="pcard__after" src="' + esc(c.s[480]) + '" srcset="' + esc(c.s[480] + " 480w, " + c.s[960] + " 960w") + '" sizes="(min-width: 1024px) 370px, (min-width: 520px) 46vw, 92vw" width="' + c.w + '" height="' + c.h +
     '" alt="' + esc(c.alt[lang] || "") + '" loading="lazy" decoding="async" />' +
     (b ? '<span class="pcard__before" aria-hidden="true"><img src="' + esc(b.s[480]) + '" width="' + b.w + '" height="' + b.h + '" alt="" loading="lazy" decoding="async" /></span>' : "") + "</span>" +
-    '<span class="pcard__body"><span class="pcard__title">' + esc(p.title[lang]) + "</span>" +
+    '<span class="pcard__body"><span class="pcard__title">' + glueDash(esc(p.title[lang])) + "</span>" +
     '<span class="pcard__meta">' + (p.city ? '<span class="pcard__city">' + PIN + "<span>" + esc(p.city[lang]) + "</span></span>" : "") +
     '<span class="pcard__chip">' + esc(p.serviceLabel[lang]) + "</span></span></span></a></li>";
 }
@@ -208,7 +210,7 @@ function projectPage(p, all, lang) {
     '<main id="main" class="pp-main">\n<div class="container pp-container">\n' +
     '<nav class="pp-crumbs" aria-label="' + (en ? "Breadcrumb" : "פירורי לחם") + '"><ol><li><a href="/' + (en ? "?lang=en" : "") + '">' + t.home + '</a></li><li><a href="/' + (en ? "?lang=en" : "") + '#compare">' + t.gallery +
       '</a></li><li aria-current="page">' + esc(p.title[lang]) + "</li></ol></nav>\n" +
-    '<article class="pp-article">\n<header class="pp-head"><h1 class="pp-title">' + esc(p.title[lang]) + "</h1>" +
+    '<article class="pp-article">\n<header class="pp-head"><h1 class="pp-title">' + glueDash(esc(p.title[lang])) + "</h1>" +
       '<p class="pp-meta">' + (p.city ? '<span class="pcard__city">' + PIN + '<span><span class="sr-only">' + t.city + ": </span>" + esc(p.city[lang]) + "</span></span>" : "") +
       '<span class="pcard__chip"><span class="sr-only">' + t.service + ": </span>" + esc(p.serviceLabel[lang]) + "</span></p>" +
       (p.summary[lang] ? '<p class="pp-summary">' + esc(p.summary[lang]) + "</p>" : "") + "</header>\n" +

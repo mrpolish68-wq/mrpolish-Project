@@ -710,6 +710,7 @@
     var state = { list: STATIC, filter: "all", shown: STEP, cur: 0, angle: 0, booted: false, lastCard: null };
     function lang() { return document.documentElement.lang === "en" ? "en" : "he"; }
     function tx(o) { return o ? (o[lang()] || o.he || "") : ""; }
+    function glueDash(s) { return String(s).replace(/ ([–—]) /g, " $1 "); }   // a spaced dash never starts a line
     function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
     function filtered() {
       return state.list.map(function (p, k) { return { p: p, k: k }; })
@@ -761,7 +762,7 @@
         return '<li><button type="button" class="pcard' + (p.coverBefore ? " pcard--split" : "") + '" data-k="' + x.k + '"' + (x.k === state.cur ? ' aria-current="true"' : "") + ">" +
           '<span class="pcard__media">' + imgTag(p.cover, "pcard__after", tx(p.cover && p.cover.alt) || tx(p.title), CARD_SIZES) +
             (p.coverBefore ? '<span class="pcard__before" aria-hidden="true">' + imgTag(p.coverBefore, "", "", "120px") + "</span>" : "") + "</span>" +
-          '<span class="pcard__body"><span class="pcard__title">' + esc(tx(p.title)) + '</span><span class="pcard__meta">' + metaHtml(p) + "</span></span></button></li>";
+          '<span class="pcard__body"><span class="pcard__title">' + glueDash(esc(tx(p.title))) + '</span><span class="pcard__meta">' + metaHtml(p) + "</span></span></button></li>";
       }).join("");
       var left = items.length - shown.length;
       moreBtn.hidden = left <= 0;
@@ -804,7 +805,7 @@
       ctrl.show(state.list[state.cur].angles[state.angle], lang(), L[lang()]);
     });
     function renderCaption(p) {
-      titleEl.textContent = tx(p.title);
+      titleEl.textContent = glueDash(tx(p.title));
       metaEl.innerHTML = metaHtml(p);
       summaryEl.textContent = tx(p.summary);
       summaryEl.hidden = !tx(p.summary);
