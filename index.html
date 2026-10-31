@@ -1295,7 +1295,9 @@
     </a>
   </nav>
 
-  <script src="shared/compare.js"></script>
   <script src="main.js"></script>
+  <!-- after main.js (deferred): a blocking request before it delayed the EN switch past the first paint
+       (a sideways hero shift); the gallery mounts the slider when it boots -->
+  <script src="shared/compare.js" defer></script>
 </body>
 </html>

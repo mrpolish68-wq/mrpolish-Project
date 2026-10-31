@@ -657,7 +657,7 @@
        and closing returns to the same card). */
     var w = document.getElementById("compareWidget");
     var section = document.getElementById("compare");
-    if (!w || !section || !window.MrpCompare) return;
+    if (!w || !section) return;
     var stage = document.getElementById("pgStage"), slot = document.getElementById("pgStageSlot");
     var titleEl = document.getElementById("pgTitle"), metaEl = document.getElementById("pgMeta");
     var summaryEl = document.getElementById("pgSummary"), linkEl = document.getElementById("pgLink");
@@ -665,7 +665,7 @@
     var gridEl = document.getElementById("pgGrid"), moreBtn = document.getElementById("pgMore"), liveEl = document.getElementById("pgLive");
     var dialog = document.getElementById("pgDialog"), dialogBody = document.getElementById("pgDialogBody"), closeBtn = document.getElementById("pgClose");
     var handle = w.querySelector(".compare__handle");
-    var ctrl = window.MrpCompare.mount(w);
+    var ctrl = null;   // shared/compare.js loads deferred, after this file; mounted in boot()
     var phone = window.matchMedia("(max-width: 899px)");
     var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var STEP = 8;
@@ -850,7 +850,7 @@
       var p = state.list[state.cur];
       if (p) { renderCaption(p); renderDots(p); ctrl.show(p.angles[state.angle] || p.angles[0], lang(), L[lang()]); }
     }
-    document.addEventListener("mrp:lang", function () { if (state.booted) renderAll(); });
+    document.addEventListener("mrp:lang", function () { if (state.booted && ctrl) renderAll(); });
 
     /* ----- Boot: the data is fetched only when the section is about to scroll into view ----- */
     function load() {
@@ -862,10 +862,16 @@
         .catch(function () { return STATIC; })
         .then(function (list) { clearTimeout(timer); return list; });
     }
+    // shared/compare.js is deferred: it has run by DOMContentLoaded at the latest
+    function whenCompare(cb) {
+      if (window.MrpCompare) return cb();
+      document.addEventListener("DOMContentLoaded", function () { if (window.MrpCompare) cb(); });
+    }
     function boot() {
       if (state.booted) return;
       state.booted = true;
-      load().then(function (list) {
+      Promise.all([load(), new Promise(function (r) { whenCompare(r); })]).then(function (res) { return res[0]; }).then(function (list) {
+        ctrl = window.MrpCompare.mount(w);
         state.list = list;
         section.setAttribute("data-source", list === STATIC ? "static" : "api");
         state.cur = 0;
