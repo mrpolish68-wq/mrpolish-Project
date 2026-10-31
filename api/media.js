@@ -42,6 +42,9 @@ const IMAGE_TYPES = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "we
 const VIDEO_TYPES = { "video/mp4": "mp4", "video/quicktime": "mov" };
 const HEIC_TYPES = ["image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"];
 const MAX_BYTES = 50 * 1024 * 1024;
+// Public copies: Cache-Control max-age=86400 (owner, 2026-10-31). The CDN keeps serving a cached copy
+// after a delete, so a removed photo must not stay reachable for long (it was 1 year).
+const PUBLIC_CACHE_SECONDS = 86400;
 const LIMITS = { "create-upload": [60, 60000], process: [30, 60000], delete: [30, 60000], analyze: [10, 60000], correct: [10, 60000], "delete-project": [10, 60000] };
 var timeoutMs = 20000;
 
@@ -181,11 +184,11 @@ async function processImageToRow(project, incomingPath, mediaId, opts) {
   for (var i = 0; i < files.length; i++) {
     var v = out.variants[files[i][0]];
     var p = base + "/" + (opts && opts.prefix || "") + files[i][1];
-    await storageUpload(PUBLIC, p, v.buffer, files[i][2], 31536000);   // immutable: the path has the media id
+    await storageUpload(PUBLIC, p, v.buffer, files[i][2], PUBLIC_CACHE_SECONDS);
     variants[files[i][0]] = { path: p, width: v.width, height: v.height };
   }
   var igPath = base + "/" + (opts && opts.prefix || "") + "ig.jpg";
-  await storageUpload(PUBLIC, igPath, out.ig.buffer, "image/jpeg", 31536000);
+  await storageUpload(PUBLIC, igPath, out.ig.buffer, "image/jpeg", PUBLIC_CACHE_SECONDS);
   variants.ig = { path: igPath, width: out.ig.width, height: out.ig.height };
   await storageRemove(ORIGINALS, [incomingPath]).catch(function (err) { console.error("[media] raw cleanup failed: " + err.message); });
   return { originalPath: originalPath, original: out.original, variants: variants };
