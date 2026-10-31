@@ -1364,7 +1364,7 @@ Miri manages Ori's before/after project photos and short videos from her phone �
 - **Watermark = the badge** (`assets/watermark/badge.png`), **9.6 % of the width, 85 % opacity**, bottom-right, ON by default, toggleable per project.
 - **Originals:** only a ≤ 2560 px copy, private, never watermarked; no EXIF / GPS in anything we store or publish. **Videos are deleted 7 days after a successful publish** unless the site uses them (Phase 13).
 - **Caption rules:** never "free" / "ללא עלות" / "חינם"; CTA "📞 לתיאום בדיקה והצעת מחיר: 052-9534540 (גם בוואטסאפ) · mr-polishes.com"; describe **only work Miri stated or that is plainly visible** (no sealer / grout / crystal / anti-slip / crack-repair claims or hashtags unless stated); a **professional, warm 30-year-expert tone**, no slang, no stock opening, 2–3 sentences; a "shorter" request must really shorten (verified, one retry, else it says so). No prices, client names, streets or house numbers anywhere; the city only if Miri said it.
-- **Public copies are cached for 1 day** (`Cache-Control: max-age=86400`) — the CDN keeps serving a cached copy after a delete, so a removed photo disappears within a day (it was a year).
+- **Public copies are cached for 1 day** — served `Cache-Control: public, max-age=86400` (private originals: `private, max-age=3600`). The CDN keeps serving a cached copy after a delete, so a removed photo disappears within a day (it was a year). Until 2026-10-31 the header was sent as a bare `86400` and served as the invalid `public, 86400`; fixed + checked live by `tools/media-cache-check.js <preview>`. (The panel's TUS uploads were always fine: `cacheControl` metadata → `public, max-age=3600`.)
 - **Slugs** `/projects/<transliterated-service-city>`; Miri approves in the bot (no second approval in the panel); alerts go to the production bot's chats; the site must look excellent at 375 / 768 / 1280 / 1920.
 
 ### 34.4 Commands done (on the branch)
@@ -1376,8 +1376,9 @@ Miri manages Ori's before/after project photos and short videos from her phone �
 | 2 | Media processing (sharp), video metadata, `api/media.js` (8th function), browser upload helper | `256d2db` |
 | 3 | Media AI (Gemini vision) + the badge watermark | `564ba17` |
 | 4 | Caption rules, the panel's "📸 פרויקטים" tab, "➕ פוסט חדש" in ניהול תוכן; carousels fail closed in the publisher until command 7 | `94f04ce`, `63a718c`, `4f4c65d` (1-day cache) |
+| — | Phone test by Claude (§34.7) → fixes: a valid Cache-Control (`public, max-age=86400`), no phone-number wrap in the caption editor; `tools/media-cache-check.js` | `e0d11e4` + the docs commit |
 
-`npm test` = **946 checks in 22 suites**, all offline (Chrome for `panel-*` / `site-*`; `SKIP_BROWSER=1` skips them).
+`npm test` = **950 checks in 22 suites**, all offline (Chrome for `panel-*` / `site-*`; `SKIP_BROWSER=1` skips them).
 
 ### 34.5 Already APPLIED live (production DB / secrets)
 - **The pg_cron scheduler** (`supabase-scheduler-pgcron.sql`): job `publish-every-10-min` calls `/api/publish-scheduled-content` with the CRON_SECRET from **Vault `cron_secret`**; GitHub Actions stays as the backup.
@@ -1392,7 +1393,9 @@ Miri manages Ori's before/after project photos and short videos from her phone �
 - The privacy policy must mention that lead details go to the business's Telegram chat (Phase 14).
 
 ### 34.7 Open items
-- **The owner's manual phone test of the 📸 tab** (steps in the command-4 report) — pending.
+- **The 📸 tab phone test (2026-10-31) was run by Claude instead of the owner** — UI: the deployed preview `admin.html` at 390 and 1280 with a **stubbed** session (uploads/API mocked, the real Gemini output replayed), 7/7 steps pass at both widths, screenshots in `.playwright-mcp/phone-test/`; backend: the same flow for real on the preview API via the internal secret (real storage + 2 Gemini calls), DB guards refused scheduling without consent / with an unreviewed flag, then deleted — 0 rows / 0 files left, the 19 approved posts byte-identical. **A run with a real logged-in panel session (real RLS, real TUS from the browser, real realtime) is still needed in the final audit (Phase 14).**
+- **Found by that test, FIXED the same day:** `api/media.js` sent `cache-control: 86400` (a bare number), served as the invalid `public, 86400` — the 1-day cache was not in effect. Now `public, max-age=86400` / `private, max-age=3600` (`e0d11e4`; a live probe confirmed Supabase serves exactly what is sent). **Verified live** on the `e0d11e4` preview (`https://mrpolish-project-az7rqm4jt-polish1.vercel.app`) with `tools/media-cache-check.js`: 11/11 — jpg / w480 / w1600 / ig served `public, max-age=86400`, the original `private, max-age=3600, must-revalidate` (Supabase adds `must-revalidate` on the authenticated read); cleanup 0 rows / 0 files. Also fixed: the caption editor wrapped the phone number at its hyphen on phones ("052-" / "9534540") — the editor shows a non-breaking hyphen (U+2011) in phone numbers and `mr‑polishes.com`, converted back to "-" on save (the stored / published caption is unchanged).
+- **One project in the DB that no test created** — `f2c63992-b0c5-45b3-95f3-cabe9ab7f152`: no title, `collecting`, `source: panel`, 0 media, 0 files, never edited; created 2026-10-30 23:55:26 UTC (01:55 Israel, 11 min after the command-4 commit) by a **real logged-in browser (Edge 156 on Windows)** clicking "➕ פרויקט חדש" on a preview (Supabase edge logs). Not from Claude's automation. **Left in place — owner decides** (it shows as an empty "בהעלאה" card in the 📸 tab).
 - **The Phase 2 logged-in contract check** (`tools/panel-contract-check.js --login`) — needs the owner's panel session.
 - **Pairs must be confirmed by Miri whenever a project has ≥ 2 pairs** (`needs_review`): live, Gemini paired 6 look-alike basalt photos wrongly at 0.9 confidence.
 - The GitHub `schedule` trigger hadn't resumed by 30 Oct (pg_cron covers it).

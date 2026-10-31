@@ -64,7 +64,8 @@ async function listAll(bucket, prefix) {
       check("public " + k + ": served Cache-Control is 'public, max-age=86400'", r.status === 200 && cc === "public, max-age=86400", r.status + " " + JSON.stringify(cc));
     }
     const o = await fetch(SB + "/storage/v1/object/project-originals/" + m.original_path, { headers: svc() });
-    check("private original: served Cache-Control is 'private, max-age=3600'", o.status === 200 && o.headers.get("cache-control") === "private, max-age=3600", o.status + " " + JSON.stringify(o.headers.get("cache-control")));
+    // the authenticated read path appends ", must-revalidate" to the stored value
+    check("private original: served Cache-Control starts with 'private, max-age=3600'", o.status === 200 && /^private, max-age=3600(,|$)/.test(o.headers.get("cache-control") || ""), o.status + " " + JSON.stringify(o.headers.get("cache-control")));
   } catch (e) {
     check("harness", false, e && e.message);
   } finally {
