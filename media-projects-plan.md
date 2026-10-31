@@ -2,7 +2,7 @@
 
 _Branch: `feature/media-projects` · Created 2026-10-30 · Based on the Phase 0 recon (read-only) of 2026-10-30._
 _Update the **Status** column and the **Log** at the end of every phase. `handoff.md` §34 has the progress summary (feature not shipped yet)._
-_**Status (2026-10-31):** commands 1–6 of 7 done on the branch (not merged). Next: command 7 (social publishing: FB multi-photo, IG carousel, video; the weekly summary, comment alerts, the review request). Live: pg_cron scheduler, media-projects schema, projects realtime, telegram_parked_media, the 5 migrated projects (published in the DB). At merge: `supabase-lead-alert.sql`. Functions: 9 / 12._
+_**Status (2026-10-31):** commands 1–7 of 7 done on the branch (not merged). Next: the final audit (Phase 14) + ONE merge, then the one real publish test (`command7-live-publish-test-plan.md`). Live: pg_cron scheduler, media-projects schema, projects realtime, telegram_parked_media, `supabase-command7.sql`, the 5 migrated projects (published in the DB). At merge: `supabase-lead-alert.sql`. Functions: 9 / 12._
 
 ## 1. Goal
 Miri manages Ori's project photos and short videos from her phone — in the Telegram bot (@mrpolish_expenses_bot) and in the admin panel (installed PWA):
@@ -179,8 +179,8 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
 | 9 | AI | Pairing, HE + EN captions/hashtags/alt (D6), privacy flags blocking publish (D3), quota kinds | **Done on branch** (command 3) — live eval: roles 16/18, pairs ≥ 7/9, privacy 2/2 |
 | 10 | Site gallery | DB-driven cards + service filter + slider + load more; HE + EN; responsive images; migrate the 5 static projects (D9); screenshot QA (D12) | **Done on branch** (command 6, `d111854`) — inline stage on desktop, full-screen dialog on phones; static fallback; the 5 projects migrated + published |
 | 11 | Project pages | `/projects/<slug>` (D7) with server-rendered OG + JSON-LD; `sitemap-projects.xml`; screenshot QA (D12) | **Done on branch** (command 6) — `api/site.js` (9th function), HE + EN, canonical + hreflang, the mobile action bar |
-| 12 | Publishing | FB multi-photo, IG carousel, two-phase IG video; destinations + timing + approve in the bot (D1); burst guard + notifications | **Site part done** (command 6: ready + site → published at its slot; bot, panel, cron). Social (FB / IG) = command 7 |
-| 13 | Extras | Weekly summary (Sun 08:00), comment alerts, "job done → photos" from a quote, WhatsApp review request (D10), video cleanup (D5) | Not started |
+| 12 | Publishing | FB multi-photo, IG carousel, two-phase IG video; destinations + timing + approve in the bot (D1); burst guard + notifications | **Done on branch** — site (command 6) + social (command 7: FB multi-photo, IG carousel, two-phase IG video, the project → content_queue queue; bot ✅ / panel button). Real Meta test pending (plan file) |
+| 13 | Extras | Weekly summary (Sun 08:00), comment alerts, "job done → photos" from a quote, WhatsApp review request (D10), video cleanup (D5) | **Done on branch** (command 7) — `supabase-command7.sql` APPLIED |
 | 14 | Audit + handoff | Security, privacy (Amendment 13, consent records, lead data in Telegram → privacy policy), accessibility, `handoff.md` section | Not started |
 
 ## 7. Risks
@@ -248,3 +248,9 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
   - **Built:** `api/site.js` (gallery JSON, `/projects/<slug>`, sitemap, publish action), `api/_site-publish.js` (rules + D7 slugs; used by the bot's ✅, the panel's 💾 and a new cron pass), the homepage gallery (chips, cards with a "before" sliver, load more, the shared slider; inline on desktop, a full-screen dialog on phones), `shared/compare.js`. Panel bugs fixed on the way: the save toast was wiped; "מה עשינו?" text was lost on a realtime refresh.
   - **Tests:** `npm test` = **1140 checks in 25 suites** (new: api-site 47, site-gallery 36).
   - **QA (preview, real data, HE + EN × 375 / 768 / 1280 / 1920):** no horizontal scroll, 0 console errors, CLS ≤ 0.013, gallery images on a phone 2,750 KB (production today) → 880 KB. Fixed during QA: a layout shift while the gallery data loads (placeholders + reserved heights; a slow-API test). Found, pre-existing (A/B with `main`): an occasional EN hero shift at load → for the audit. Screenshots: `.playwright-mcp/site-gallery/`.
+- **2026-10-31 — Command 7 of 7 (Phases 12 social + 13; `6600e69`, `777410d`, `980f3d6`).** Details: `handoff.md` §34.14.
+  - **SQL:** `supabase-command7.sql` (additive) APPLIED with the owner's approval via `execute_sql`; VERIFY a–h passed, existing data byte-identical.
+  - **Meta:** debug_token — every needed permission present (nothing to grant); data access until 2027-01-28.
+  - **Built:** FB multi-photo + IG carousel; IG REELS two-phase (container now, poll + publish on later runs, ERROR/EXPIRED → failed with a reason); the project → content_queue social queue (exactly once, bot ✅ / panel "📣 אישור פרסום ברשתות" / cron safety net); video retention 7 days (D5); weekly summary Sun 08:00 Israel (counts only + token expiry); comment alerts (ids only stored, grouped > 5); ✅ העבודה בוצעה → pre-filled linked project → ⭐ בקשת ביקורת (wa.me, no phone) in the bot and the panel; the project-page header made opaque.
+  - **Tests:** `npm test` = 1,258 / 26 (new `command7.test.js` 84). **Live (preview + TEST bot, "[בדיקה]" rows, social rows dated 2027, no Meta write):** all passed after 2 fixes found live (a multi-row insert with different keys; a count on a table without `id`). 0 console errors.
+  - **Pending:** the owner's OK to remove the test rows; the final audit; the merge; the one real publish test.
