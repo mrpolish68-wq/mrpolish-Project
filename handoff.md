@@ -1418,7 +1418,7 @@ Details:
 **For the final audit (Phase 14) — the short list:**
 - **A logged-in panel run** (real RLS, real TUS from the browser, real realtime) — so far only stubbed sessions + the internal secret were used. And **the Phase 2 contract check with a session** (`tools/panel-contract-check.js --login`, needs the owner).
 - **`privacy.html` must say that lead details (name, phone, message) are sent to the business's Telegram chat** (the lead alert, `supabase-lead-alert.sql`).
-- **One unexplained flaky test run:** on 2026-10-31 (command-4 close-out) one suite failed once in a full `npm test` and never again (2 full runs + 15 suite repeats green). Re-check in the audit.
+- ~~**One unexplained flaky test run**~~ → **explained + fixed in command 7:** `panel-projects` seeded its queued post at "now + 2 days" (off-slot), so within the hour before a slot hour the pre-filled next slot fell inside the panel's ±60-min clash window and the hint check failed. The stub post is now at 08:00 UTC; the product behaviour was correct (real posts sit on slot hours).
 - **The HE 1280 project-page LCP outlier** (2.6 s once in 5 runs; §34.12).
 - **Miri must confirm the pairs whenever a project has 2+ pairs** (`needs_review`; Gemini paired look-alike basalt photos wrongly at 0.9 confidence) — the bot / panel ask; don't remove that.
 - **Miri must read every Gemini caption before ✅** — the code strips forbidden claims, but the AI only suggests (D1: her approval is the approval).

@@ -54,7 +54,7 @@ const STUB = `(() => {
       { id: "m-p2-1", project_id: P2, kind: "image", role: "before", pair_no: 1, sort: 0, variants: { w480: { path: P2 + "/m-p2-1/w480.webp" } }, ai_flags: { faces: true }, flags_ack_at: null, alt_he: null, alt_en: null, created_at: iso(now - 2 * D) }
     ],
     content_queue: [
-      { id: "cq-1", title: "פוסט קיים", caption: "c", platform: "both", media_type: "image", content_category: "post", media_url: "/logo.webp", scheduled_for: iso(now + 2 * D),
+      { id: "cq-1", title: "פוסט קיים", caption: "c", platform: "both", media_type: "image", content_category: "post", media_url: "/logo.webp", scheduled_for: iso(Math.floor((now + 2 * D) / D) * D + 8 * H),   // 08:00 UTC: never < 1 h before the next slot (was now + 2 days: failed within the hour before a slot — the §34.7 "unexplained flaky test")
         status: "approved", publish_attempts: 0, fb_post_id: null, ig_post_id: null, pin_requested: false, created_at: iso(now - 5 * D) }
     ] } };
   const clone = (o) => JSON.parse(JSON.stringify(o));
