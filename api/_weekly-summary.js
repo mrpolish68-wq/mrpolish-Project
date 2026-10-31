@@ -34,9 +34,9 @@ async function rest(pathQs, init) {
   var body = res.status === 204 ? null : await res.json().catch(function () { return null; });
   return { status: res.status, ok: res.ok, body: body, headers: res.headers };
 }
-// An exact row count (Content-Range "0-0/N" or "*/N"), selecting nothing personal.
-async function count(table, filter) {
-  var r = await rest(table + "?select=id&limit=1" + (filter ? "&" + filter : ""), { headers: { Prefer: "count=exact" } });
+// An exact row count (Content-Range "0-0/N" or "*/N"), selecting nothing personal (the key column only).
+async function count(table, filter, keyCol) {
+  var r = await rest(table + "?select=" + (keyCol || "id") + "&limit=1" + (filter ? "&" + filter : ""), { headers: { Prefer: "count=exact" } });
   if (!r.ok) throw new Error("count " + table + " failed: " + r.status);
   var m = String(r.headers.get("content-range") || "").match(/\/(\d+)$/);
   return m ? parseInt(m[1], 10) : 0;
@@ -74,7 +74,7 @@ async function collect(now) {
     instagram: pubRows.filter(function (r) { return !!r.ig_post_id; }).length,
     failed: await count("content_queue", "status=eq.failed&last_publish_attempt_at=gte." + iso(since)),
     upcoming: await count("content_queue", "status=in.(approved,scheduled)&scheduled_for=gt." + iso(now) + "&scheduled_for=lte." + iso(until)),
-    comments: await count("social_comment_seen", "commented_at=gte." + iso(since))
+    comments: await count("social_comment_seen", "commented_at=gte." + iso(since), "comment_id")   // no id column (key: platform + comment_id)
   };
 }
 

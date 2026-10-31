@@ -126,6 +126,9 @@ global.fetch = async function (url, init) {
     calls.push({ kind: "rest", table, method, qs: decodeURIComponent(qs), body });
     const r = rest(table, method, qs, body, prefer);
     if (method === "GET") {
+      // like PostgREST: selecting a column the table doesn't have is a 400 (the key-only tables have no id; found live)
+      const sel = (qs.match(/(?:^|&)select=([^&]*)/) || [])[1];
+      if (sel && PK[table] && sel.split(",").includes("id")) return res(400, { message: "column " + table + ".id does not exist" });
       if (/count=exact/.test(prefer)) return res(200, r.slice(0, 1), { "content-range": "0-0/" + r.length });
       return res(200, r);
     }
@@ -411,8 +414,9 @@ const VIDEO_REF = "storage://project-originals/" + VIDEO_PATH;
     /שלא פורסמו: 1\n/.test(wt) && /לשבוע הקרוב: 1\n/.test(wt) && /תגובות חדשות ברשתות: 1\n/.test(wt), wt);
   check("weekly: one item per line, the publish-notification separator, a warm close; no 'חינם' / 'ללא עלות'", wt.split("\n").length >= 13 && (wt.match(/━━━━━━━━━━/g) || []).length === 2 &&
     /שבוע טוב ומוצלח!/.test(wt) && !/חינם|ללא עלות/.test(wt));
-  check("weekly: counts only — no names, phones or comment text are read (count queries select id only)",
-    calls.filter(c => c.kind === "rest" && ["leads", "quotes"].includes(c.table)).every(c => /select=id&limit=1/.test(c.qs)));
+  check("weekly: counts only — no names, phones or comment text are read (count queries select the key only)",
+    calls.filter(c => c.kind === "rest" && ["leads", "quotes"].includes(c.table)).every(c => /select=id&limit=1/.test(c.qs)) &&
+    calls.some(c => c.kind === "rest" && c.table === "social_comment_seen" && /select=comment_id&limit=1/.test(c.qs)));
   check("weekly: token far from expiry (2027-01-28) → a calm 'בתוקף עד 28.01.2027' line, no warning", /🔐 הרשאת מטא: בתוקף עד 28\.01\.2027/.test(wt) && !/⚠️/.test(wt));
   const w2 = await WS.maybeSend({ token: "tok", now: new Date("2026-11-01T06:08:00Z") });
   check("weekly: a second run the same Sunday → not sent again", w2.skipped === "already_sent" && tgSent.filter(t => t.method === "sendMessage").length === 1);
