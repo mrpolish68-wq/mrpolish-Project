@@ -315,6 +315,7 @@
     compare_eyebrow: "See the difference",
     compare_title: "Before &amp; After",
     compare_intro: "Drag the handle to reveal the result.",
+    gallery_open_page: "Open the project page",
 
     faqtabs_eyebrow: "Got questions?",
     faqtabs_title: "Questions &amp; Answers",
@@ -407,6 +408,8 @@
       btn.setAttribute("aria-label", lang === "en" ? "החלף שפה לעברית" : "Switch language to English");
     }
     try { localStorage.setItem("mrp_lang", lang); } catch (e) {}
+    // dynamic sections (the project gallery) re-render their own texts
+    try { document.dispatchEvent(new CustomEvent("mrp:lang", { detail: { lang: lang } })); } catch (e) {}
   }
 
   var langBtn = document.getElementById("langSwitch");
@@ -416,9 +419,10 @@
       applyLang(next);
     });
   }
-  // Restore saved preference
+  // Restore saved preference; ?lang=en / ?lang=he (links from the project pages) wins.
   try {
-    var saved = localStorage.getItem("mrp_lang");
+    var qLang = (location.search.match(/[?&]lang=(en|he)\b/) || [])[1];
+    var saved = qLang || localStorage.getItem("mrp_lang");
     if (saved === "en") applyLang("en");
   } catch (e) {}
 
@@ -644,189 +648,234 @@
      Pointer events cover mouse + touch + pen. Drag the handle
      to scrub; tap/click anywhere jumps; arrows for keyboard.
   --------------------------------------------------------- */
-  (function initCompare() {
+  (function initGallery() {
+    /* The project gallery (media-projects command 6). Data: /api/site?r=gallery (CDN-cached JSON of the
+       published + consented projects, WebP srcset); if that fails, the static set below (the 5 projects
+       the site always had). One before/after slider (shared/compare.js) in a "stage": on desktop a card
+       loads into the stage right above the cards (inline — no overlay, the page keeps its context); on
+       phones the same stage moves into a full-screen <dialog> (the biggest image, no drag-vs-scroll fight,
+       and closing returns to the same card). */
     var w = document.getElementById("compareWidget");
-    if (!w) return;
+    var section = document.getElementById("compare");
+    if (!w || !section || !window.MrpCompare) return;
+    var stage = document.getElementById("pgStage"), slot = document.getElementById("pgStageSlot");
+    var titleEl = document.getElementById("pgTitle"), metaEl = document.getElementById("pgMeta");
+    var summaryEl = document.getElementById("pgSummary"), linkEl = document.getElementById("pgLink");
+    var dotsEl = document.getElementById("galleryDots"), filtersEl = document.getElementById("pgFilters");
+    var gridEl = document.getElementById("pgGrid"), moreBtn = document.getElementById("pgMore"), liveEl = document.getElementById("pgLive");
+    var dialog = document.getElementById("pgDialog"), dialogBody = document.getElementById("pgDialogBody"), closeBtn = document.getElementById("pgClose");
     var handle = w.querySelector(".compare__handle");
-    var beforeImg = document.getElementById("cmpBeforeImg");
-    var afterImg = document.getElementById("cmpAfterImg");
-    var tabsEl = document.getElementById("galleryTabs");
-    var dotsEl = document.getElementById("galleryDots");
-    var dragging = false;
+    var ctrl = window.MrpCompare.mount(w);
+    var phone = window.matchMedia("(max-width: 899px)");
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    var STEP = 8;
 
-    /* ----- Project gallery configuration ----- */
+    var SERVICES = ["floor_polish", "crystal", "marble_stone", "sealer", "concrete", "bomanite", "stairs", "other"];
+    var SERVICE_LABEL = {
+      floor_polish: { he: "ליטוש מרצפות", en: "Floor polishing" }, crystal: { he: "פוליש קריסטל", en: "Crystal polish" },
+      marble_stone: { he: "שיש ואבן", en: "Marble & stone" }, sealer: { he: "סילר הגנה", en: "Protective sealer" },
+      concrete: { he: "בטון", en: "Concrete" }, bomanite: { he: "בומנייט", en: "Bomanite" }, stairs: { he: "מדרגות", en: "Stairs" },
+      other: { he: "ליטוש רצפות", en: "Floor restoration" }
+    };
+    var L = {
+      he: { all: "הכל", more: "עוד פרויקטים", found: " פרויקטים", one: "פרויקט אחד", angle: "זווית", angles: "זוויות נוספות", close: "סגירה",
+        drag: "גררו כדי להשוות בין לפני לאחרי", filter: "סינון לפי סוג עבודה", grid: "פרויקטים", before: "לפני", after: "אחרי", city: "עיר" },
+      en: { all: "All", more: "More projects", found: " projects", one: "1 project", angle: "Angle", angles: "More angles", close: "Close",
+        drag: "Drag to compare before and after", filter: "Filter by type of work", grid: "Projects", before: "Before", after: "After", city: "City" }
+    };
+
+    /* ----- The static fallback (also the data until the API answers) ----- */
     var G = "assets/gallery/";
-    var PROJECTS = [
-      { title: "אבן בזלת שחורה", angles: [
-        { before: G + "project1-before1.jpeg", after: G + "project1-after1.jpeg" },
-        { before: G + "project1-before2.jpeg", after: G + "project1-after2.jpeg" },
-        { before: G + "project1-before3.jpeg", after: G + "project1-after3.jpeg" }
-      ] },
-      { title: "אבן ירושלמית", angles: [
-        { before: G + "project2-before1.jpeg", after: G + "project2-after1.jpeg" },
-        { before: G + "project2-before2.jpeg", after: G + "project2-after2.jpeg" }
-      ] },
-      { title: "רצפת טרצו", angles: [
-        { before: G + "project3-before1.jpeg", after: G + "project3-after1.jpeg" }
-      ] },
-      { title: "חידוש מדרגות חלילה", angles: [
-        { before: G + "project4-before1.jpeg", after: G + "project4-after1.jpeg" },
-        { before: G + "project4-before2.jpeg", after: G + "project4-after2.jpeg" }
-      ] },
-      { title: "שיש קרמה - בית חולים מאיר", angles: [
-        { before: G + "project5-before1.jpeg", after: G + "project5-after1.jpeg" }
-      ] }
+    function sp(p, n, title) {
+      return { before: { src: G + "project" + p + "-before" + n + ".jpeg", alt: { he: title.he + " – לפני הטיפול", en: title.en + " – before" } },
+        after: { src: G + "project" + p + "-after" + n + ".jpeg", alt: { he: title.he + " – אחרי הטיפול", en: title.en + " – after" } } };
+    }
+    function staticProject(p, n, service, he, en, city) {
+      var title = { he: he, en: en }, angles = [];
+      for (var i = 1; i <= n; i++) angles.push(sp(p, i, title));
+      return { slug: null, service: service, title: title, summary: { he: "", en: "" }, city: city || null,
+        serviceLabel: SERVICE_LABEL[service], cover: angles[0].after, coverBefore: angles[0].before, angles: angles };
+    }
+    var STATIC = [
+      staticProject(1, 3, "marble_stone", "אבן בזלת שחורה", "Black basalt"),
+      staticProject(2, 2, "marble_stone", "אבן ירושלמית", "Jerusalem stone"),
+      staticProject(3, 1, "floor_polish", "רצפת טרצו", "Terrazzo floor"),
+      staticProject(4, 2, "stairs", "חידוש מדרגות חלילה", "Spiral staircase restoration"),
+      staticProject(5, 1, "marble_stone", "שיש קרמה - בית חולים מאיר", "Crema marble – Meir Hospital", { he: "כפר סבא", en: "Kfar Saba" })
     ];
-    var curProj = 0, curAngle = 0;
 
-    /* ----- Slider position (drag/keyboard) ----- */
-    function setPos(clientX) {
-      var r = w.getBoundingClientRect();
-      var p = ((clientX - r.left) / r.width) * 100;
-      p = Math.max(0, Math.min(100, p));
-      w.style.setProperty("--pos", p + "%");
-      if (handle) handle.setAttribute("aria-valuenow", Math.round(p));
+    var state = { list: STATIC, filter: "all", shown: STEP, cur: 0, angle: 0, booted: false, lastCard: null };
+    function lang() { return document.documentElement.lang === "en" ? "en" : "he"; }
+    function tx(o) { return o ? (o[lang()] || o.he || "") : ""; }
+    function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+    function filtered() {
+      return state.list.map(function (p, k) { return { p: p, k: k }; })
+        .filter(function (x) { return state.filter === "all" || x.p.service === state.filter; });
     }
-    function endDrag() {
-      if (!dragging) return;
-      dragging = false;
-      w.classList.remove("is-dragging");
+    var CARD_SIZES = "(min-width: 1200px) 270px, (min-width: 900px) 31vw, (min-width: 520px) 46vw, 92vw";
+    function imgTag(im, cls, alt, sizes) {
+      if (!im) return "";
+      var a = ' alt="' + esc(alt) + '" loading="lazy" decoding="async" class="' + cls + '"';
+      if (im.s) return '<img src="' + esc(im.s[480]) + '" srcset="' + esc(im.s[480] + " 480w, " + im.s[960] + " 960w") + '" sizes="' + sizes + '" width="' + im.w + '" height="' + im.h + '"' + a + " />";
+      return '<img src="' + esc(im.src) + '" width="1600" height="1000"' + a + " />";
     }
-
-    /* ----- Dynamic image loading (graceful fallback to gradient) ----- */
-    function loadImg(imgEl, src) {
-      imgEl.style.display = "none"; // hide until confirmed loaded
-      var probe = new Image();
-      probe.onload = function () { imgEl.src = src; imgEl.style.display = ""; };
-      probe.onerror = function () { imgEl.removeAttribute("src"); imgEl.style.display = "none"; };
-      probe.src = src;
-    }
-    function loadPair(angle, projTitle) {
-      w.classList.add("is-swapping");          // fade out
-      setTimeout(function () {
-        loadImg(beforeImg, angle.before);
-        loadImg(afterImg, angle.after);
-        if (projTitle) {
-          beforeImg.alt = projTitle + " - הרצפה לפני הטיפול | מיסטר פוליש";
-          afterImg.alt = projTitle + " - הרצפה אחרי ליטוש והברקה | מיסטר פוליש";
-        }
-        w.style.setProperty("--pos", "50%");   // reset divider on swap
-        if (handle) handle.setAttribute("aria-valuenow", "50");
-        requestAnimationFrame(function () { w.classList.remove("is-swapping"); }); // fade in
-      }, 200);
+    var PIN = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>';
+    function metaHtml(p) {
+      return (p.city ? '<span class="pcard__city">' + PIN + '<span><span class="sr-only">' + L[lang()].city + ": </span>" + esc(tx(p.city)) + "</span></span>" : "") +
+        '<span class="pcard__chip">' + esc(tx(p.serviceLabel)) + "</span>";
     }
 
-    /* ----- Lazy preloading (perf): warm a whole project's angles once ----- */
-    var preloaded = {};
-    function preloadProject(i) {
-      if (preloaded[i]) return;     // each project fetched at most once
-      preloaded[i] = true;
-      PROJECTS[i].angles.forEach(function (a) {
-        var b = new Image(); b.src = a.before;   // warms the browser cache only
-        var f = new Image(); f.src = a.after;
-      });
+    /* ----- Filters ----- */
+    function renderFilters() {
+      var present = SERVICES.filter(function (s) { return state.list.some(function (p) { return p.service === s; }); });
+      filtersEl.setAttribute("aria-label", L[lang()].filter);
+      if (present.length < 2) { filtersEl.innerHTML = ""; filtersEl.hidden = true; return; }
+      filtersEl.hidden = false;
+      filtersEl.innerHTML = ["all"].concat(present).map(function (s) {
+        return '<button type="button" class="gallery-tab" data-filter="' + s + '" aria-pressed="' + (state.filter === s) + '">' +
+          esc(s === "all" ? L[lang()].all : tx(SERVICE_LABEL[s])) + "</button>";
+      }).join("");
     }
-
-    /* ----- Tabs & dots ----- */
-    function renderDots(proj) {
-      dotsEl.innerHTML = "";
-      if (proj.angles.length <= 1) { dotsEl.style.display = "none"; return; }
-      dotsEl.style.display = "flex";
-      proj.angles.forEach(function (a, i) {
-        var d = document.createElement("button");
-        d.type = "button";
-        d.className = "gallery-dot" + (i === curAngle ? " active" : "");
-        d.setAttribute("aria-label", "זווית " + (i + 1));
-        d.addEventListener("click", function () { selectAngle(i); });
-        dotsEl.appendChild(d);
-      });
-    }
-    function selectAngle(i) {
-      curAngle = i;
-      loadPair(PROJECTS[curProj].angles[i], PROJECTS[curProj].title);
-      Array.prototype.forEach.call(dotsEl.children, function (d, idx) {
-        d.classList.toggle("active", idx === i);
-      });
-    }
-    function selectProject(i) {
-      curProj = i; curAngle = 0;
-      preloadProject(i); // ensure this project's images are fetched
-      Array.prototype.forEach.call(tabsEl.children, function (t, idx) {
-        var on = idx === i;
-        t.classList.toggle("active", on);
-        t.setAttribute("aria-selected", on ? "true" : "false");
-      });
-      renderDots(PROJECTS[i]);
-      loadPair(PROJECTS[i].angles[0], PROJECTS[i].title);
-    }
-    function renderTabs() {
-      PROJECTS.forEach(function (p, i) {
-        var b = document.createElement("button");
-        b.type = "button";
-        b.className = "gallery-tab";
-        b.setAttribute("role", "tab");
-        b.textContent = p.title;
-        b.addEventListener("click", function () { selectProject(i); });
-        // Prefetch a deferred project's images on hover/touch/focus → instant swap on click
-        b.addEventListener("pointerenter", function () { preloadProject(i); });
-        b.addEventListener("focus", function () { preloadProject(i); });
-        tabsEl.appendChild(b);
-      });
-    }
-
-    /* ----- Drag starts on the handle (vertical page scroll stays free) ----- */
-    if (handle) {
-      handle.addEventListener("pointerdown", function (e) {
-        dragging = true;
-        w.classList.add("is-dragging");
-        try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-        e.preventDefault();
-      });
-      handle.addEventListener("keydown", function (e) {
-        var cur = parseFloat(w.style.getPropertyValue("--pos")) || 50;
-        if (e.key === "ArrowLeft") cur = Math.max(0, cur - 2);
-        else if (e.key === "ArrowRight") cur = Math.min(100, cur + 2);
-        else if (e.key === "Home") cur = 0;
-        else if (e.key === "End") cur = 100;
-        else return;
-        e.preventDefault();
-        w.style.setProperty("--pos", cur + "%");
-        handle.setAttribute("aria-valuenow", Math.round(cur));
-      });
-    }
-    // Click/tap anywhere on the widget jumps the slider there
-    w.addEventListener("pointerdown", function (e) {
-      if (e.target.closest(".compare__handle")) return;
-      setPos(e.clientX);
+    filtersEl.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-filter]");
+      if (!b || b.getAttribute("data-filter") === state.filter) return;
+      state.filter = b.getAttribute("data-filter");
+      state.shown = STEP;
+      renderFilters();
+      renderGrid(-1);
+      var n = filtered().length;
+      liveEl.textContent = n === 1 ? L[lang()].one : n + L[lang()].found;
     });
-    window.addEventListener("pointermove", function (e) { if (dragging) setPos(e.clientX); });
-    window.addEventListener("pointerup", endDrag);
-    window.addEventListener("pointercancel", endDrag);
 
-    /* ----- Boot -----
-       Perf: the gallery is below the fold and its first project alone is
-       ~2.7MB of images, competing with the preloader/hero video on first
-       visit. Defer fetching until the section is about to scroll into view. */
-    function boot() {
-      renderTabs();
-      selectProject(0);
+    /* ----- Cards + load more ----- */
+    function renderGrid(focusFrom) {
+      var items = filtered(), shown = items.slice(0, state.shown);
+      gridEl.setAttribute("aria-label", L[lang()].grid);
+      gridEl.innerHTML = shown.map(function (x) {
+        var p = x.p;
+        return '<li><button type="button" class="pcard' + (p.coverBefore ? " pcard--split" : "") + '" data-k="' + x.k + '"' + (x.k === state.cur ? ' aria-current="true"' : "") + ">" +
+          '<span class="pcard__media">' + imgTag(p.cover, "pcard__after", tx(p.cover && p.cover.alt) || tx(p.title), CARD_SIZES) +
+            (p.coverBefore ? '<span class="pcard__before" aria-hidden="true">' + imgTag(p.coverBefore, "", "", "120px") + "</span>" : "") + "</span>" +
+          '<span class="pcard__body"><span class="pcard__title">' + esc(tx(p.title)) + '</span><span class="pcard__meta">' + metaHtml(p) + "</span></span></button></li>";
+      }).join("");
+      var left = items.length - shown.length;
+      moreBtn.hidden = left <= 0;
+      moreBtn.textContent = L[lang()].more + " (" + left + ")";
+      if (focusFrom >= 0 && gridEl.children[focusFrom]) gridEl.children[focusFrom].querySelector("button").focus();
     }
-    if (tabsEl && dotsEl && beforeImg && afterImg) {
-      var section = document.getElementById("compare");
-      if (section && "IntersectionObserver" in window) {
-        var compareIO = new IntersectionObserver(function (entries, obs) {
-          entries.forEach(function (entry) {
-            if (entry.isIntersecting) {
-              boot();
-              obs.disconnect();
-            }
-          });
-        }, { rootMargin: "600px 0px" });
-        compareIO.observe(section);
-      } else {
-        boot();
+    moreBtn.addEventListener("click", function () {
+      var from = state.shown;
+      state.shown += STEP;
+      renderGrid(from);   // focus moves to the first new card
+    });
+    gridEl.addEventListener("click", function (e) {
+      var b = e.target.closest(".pcard");
+      if (!b) return;
+      state.lastCard = b;
+      showProject(+b.getAttribute("data-k"));
+      if (phone.matches && dialog && dialog.showModal) openDialog();
+      else {
+        stage.scrollIntoView({ behavior: reduce.matches ? "auto" : "smooth", block: "start" });
+        titleEl.focus({ preventScroll: true });
       }
+      if (typeof gaEvent === "function") gaEvent("project_view", { project: state.list[state.cur].slug || "static" });
+    });
+
+    /* ----- The stage ----- */
+    function renderDots(p) {
+      dotsEl.setAttribute("aria-label", L[lang()].angles);
+      if (p.angles.length <= 1) { dotsEl.innerHTML = ""; dotsEl.style.display = "none"; return; }
+      dotsEl.style.display = "flex";
+      dotsEl.innerHTML = p.angles.map(function (a, i) {
+        return '<button type="button" class="gallery-dot' + (i === state.angle ? " active" : "") + '" data-angle="' + i + '" aria-pressed="' + (i === state.angle) +
+          '" aria-label="' + esc(L[lang()].angle + " " + (i + 1)) + '"></button>';
+      }).join("");
     }
+    dotsEl.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-angle]");
+      if (!b) return;
+      state.angle = +b.getAttribute("data-angle");
+      renderDots(state.list[state.cur]);
+      ctrl.show(state.list[state.cur].angles[state.angle], lang(), L[lang()]);
+    });
+    function renderCaption(p) {
+      titleEl.textContent = tx(p.title);
+      metaEl.innerHTML = metaHtml(p);
+      summaryEl.textContent = tx(p.summary);
+      summaryEl.hidden = !tx(p.summary);
+      if (p.slug) {
+        linkEl.hidden = false;
+        linkEl.href = "/projects/" + encodeURIComponent(p.slug) + (lang() === "en" ? "?lang=en" : "");
+      } else linkEl.hidden = true;
+      if (handle) handle.setAttribute("aria-label", L[lang()].drag);
+    }
+    function showProject(k) {
+      var p = state.list[k];
+      if (!p) return;
+      state.cur = k; state.angle = 0;
+      renderCaption(p);
+      renderDots(p);
+      ctrl.show(p.angles[0], lang(), L[lang()]);
+      Array.prototype.forEach.call(gridEl.querySelectorAll(".pcard"), function (c) {
+        if (+c.getAttribute("data-k") === k) c.setAttribute("aria-current", "true"); else c.removeAttribute("aria-current");
+      });
+    }
+
+    /* ----- Phones: the stage in a full-screen dialog ----- */
+    function openDialog() {
+      slot.style.minHeight = slot.offsetHeight + "px";   // the page behind keeps its height (no jump)
+      dialogBody.appendChild(stage);
+      closeBtn.setAttribute("aria-label", L[lang()].close);
+      document.documentElement.classList.add("pg-locked");
+      dialog.showModal();
+      closeBtn.focus();
+    }
+    if (dialog) {
+      dialog.addEventListener("close", function () {
+        slot.appendChild(stage);
+        slot.style.minHeight = "";
+        document.documentElement.classList.remove("pg-locked");
+        if (state.lastCard && document.contains(state.lastCard)) state.lastCard.focus();
+      });
+      dialog.addEventListener("click", function (e) { if (e.target === dialog) dialog.close(); });   // the backdrop
+      closeBtn.addEventListener("click", function () { dialog.close(); });
+      phone.addEventListener && phone.addEventListener("change", function () { if (!phone.matches && dialog.open) dialog.close(); });
+    }
+
+    function renderAll() {
+      renderFilters();
+      renderGrid(-1);
+      var p = state.list[state.cur];
+      if (p) { renderCaption(p); renderDots(p); ctrl.show(p.angles[state.angle] || p.angles[0], lang(), L[lang()]); }
+    }
+    document.addEventListener("mrp:lang", function () { if (state.booted) renderAll(); });
+
+    /* ----- Boot: the data is fetched only when the section is about to scroll into view ----- */
+    function load() {
+      var ctl = window.AbortController ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 5000);
+      return fetch("/api/site?r=gallery", { signal: ctl ? ctl.signal : undefined, headers: { Accept: "application/json" } })
+        .then(function (res) { if (!res.ok) throw new Error("http " + res.status); return res.json(); })
+        .then(function (data) { if (data && data.projects && data.projects.length) return data.projects; throw new Error("empty"); })
+        .catch(function () { return STATIC; })
+        .then(function (list) { clearTimeout(timer); return list; });
+    }
+    function boot() {
+      if (state.booted) return;
+      state.booted = true;
+      load().then(function (list) {
+        state.list = list;
+        section.setAttribute("data-source", list === STATIC ? "static" : "api");
+        state.cur = 0;
+        renderAll();
+      });
+    }
+    if ("IntersectionObserver" in window) {
+      var io = new IntersectionObserver(function (entries, obs) {
+        if (entries.some(function (e) { return e.isIntersecting; })) { boot(); obs.disconnect(); }
+      }, { rootMargin: "600px 0px" });
+      io.observe(section);
+    } else boot();
   })();
 
   /* ---------------------------------------------------------

@@ -141,6 +141,13 @@ global.fetch = async function (url, init) {
   const body = typeof init.body === "string" ? (() => { try { return JSON.parse(init.body); } catch (e) { return init.body; } })() : init.body;
   let m;
   if ((m = url.match(/^https:\/\/preview\.example\/api\/media\?action=([\w-]+)$/))) return mediaApi(m[1], body, headers);
+  if (/^https:\/\/preview\.example\/api\/site\?action=publish$/.test(url)) {   // command 6: the site, now
+    calls.push({ kind: "site", body, secret: headers["X-Internal-Secret"], bypass: headers["x-vercel-protection-bypass"] });
+    const sp = db.projects.find(p => p.id === body.project_id);
+    if (!sp || sp.status !== "ready") return res(409, { ok: false, reason: "not_ready" });
+    Object.assign(sp, { status: "published", slug: "litush-shayish-ve-even-raanana" });
+    return res(200, { ok: true, published: true, slug: sp.slug, url: "https://mr-polishes.com/projects/" + sp.slug });
+  }
   if ((m = url.match(/\/storage\/v1\/object\/upload\/sign\/project-originals\/(.+)\?token=/))) {
     calls.push({ kind: "put", path: m[1], method, upsert: headers["x-upsert"], bytes: Buffer.from(init.body || []).toString() });
     uploaded[m[1]] = true; return res(200, {});
@@ -399,8 +406,10 @@ function noReceiptExtraction() { geminiExtraction = { vendor_name: null, date: n
     check("then the final check: destinations + when + ✅ אשר", /הכול מוכן/.test(lastText()) && /📣 יעדים: 🌐 אתר, 📸 אינסטגרם/.test(lastText()) && /🕐 מתי: יום שישי/.test(lastText()) && button(/^✅ אשר$/) === "p:ok:" + P.id);
     reset(); await post(tap(A, "p:ok:" + P.id, 79));
     P = db.projects.find(p => p.id === P.id);
-    check("✅ אשר → status ready + 'נשמר ✔ – הפרסום יופעל בשלב הבא'", P.status === "ready" && texts().includes("נשמר ✔ – הפרסום יופעל בשלב הבא"));
-    check("✅ אשר publishes NOTHING (no content_queue row, no publish call)", db.content_queue.length === 1 && !calls.some(c => /publish/.test(c.action || c.qs || "")));
+    check("✅ אשר → ready, then the site goes live now (api/site.js publish, internal secret) → the reply has the link", calls.filter(c => c.kind === "site").length === 1 &&
+      calls.find(c => c.kind === "site").body.project_id === P.id && calls.find(c => c.kind === "site").secret === "int-secret-fake" && P.status === "published" &&
+      texts().includes("נשמר ✔\n🌐 עלה לאתר: https://mr-polishes.com/projects/litush-shayish-ve-even-raanana\n📣 הרשתות – הפרסום יופעל בשלב הבא."), texts().slice(-1)[0]);
+    check("✅ אשר publishes NOTHING to Meta (no content_queue row)", db.content_queue.length === 1 && !calls.some(c => c.table === "content_queue" && c.method !== "GET"));
     check("the state is cleared after ✅", !stateOf(A));
 
     // ================================================================== consent no + ai busy + delete

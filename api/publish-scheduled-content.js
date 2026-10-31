@@ -39,6 +39,7 @@
 
 const crypto = require("crypto");
 const notify = require("./_publish-notify.js");
+const SITE_PUBLISH = require("./_site-publish.js"); // projects → the site at their slot (command 6)
 
 const GRAPH_VERSION = "v20.0";
 const SUPABASE_URL = "https://mmognkxkglkotzkuxzly.supabase.co";
@@ -710,10 +711,21 @@ module.exports = async function handler(req, res) {
     checkResults.push(checkResult);
   }
 
+  // Third pass (media-projects command 6): projects whose "site" slot has come → published on the
+  // site (api/_site-publish.js). Isolated: a failure here never affects the Meta publishing above.
+  var site;
+  try {
+    site = await SITE_PUBLISH.publishDue();
+    if (site.published || site.failed) console.log("[cron] site " + JSON.stringify(site));
+  } catch (err) {
+    site = { error: true };
+    console.log("[cron] site publishing failed: " + err.message);
+  }
+
   res.status(200).json({
     processed: results.length, results: results,
     retried: retryResults.length, retryResults: retryResults, waiting: waiting,
-    statusChecks: checkResults.length, statusCheckResults: checkResults
+    statusChecks: checkResults.length, statusCheckResults: checkResults, site: site
   });
 };
 

@@ -88,3 +88,4 @@ Disallow: /login.html
 Disallow: /thankyou.html
 
 Sitemap: https://mr-polishes.com/sitemap.xml
+Sitemap: https://mr-polishes.com/sitemap-projects.xml

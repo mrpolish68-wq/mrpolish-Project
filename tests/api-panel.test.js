@@ -125,8 +125,8 @@ const same = (a, b) => a.code === b.code && JSON.stringify(a.body) === JSON.stri
   check("vercel.json: api/panel.js has maxDuration 60", vj.functions["api/panel.js"] && vj.functions["api/panel.js"].maxDuration === 60);
   check("the old function files are gone (no route would shadow the rewrites)", OLD.every(n => !fs.existsSync(path.join(REPO, "api", n + ".js"))));
   const fns = fs.readdirSync(path.join(REPO, "api")).filter(f => f.endsWith(".js") && !f.startsWith("_")).sort();
-  check("functions: exactly 8 (≤ 12 on Hobby)", fns.length === 8, fns.join(", "));
-  check("functions: the expected 8", JSON.stringify(fns) === JSON.stringify(["analytics-agent.js", "csp-report.js", "media.js", "panel.js", "parse-receipt.js", "publish-scheduled-content.js", "render-quote-pdf.js", "telegram-webhook.js"]), fns.join(", "));
+  check("functions: exactly 9 (≤ 12 on Hobby; api/site.js = command 6)", fns.length === 9, fns.join(", "));
+  check("functions: the expected 9", JSON.stringify(fns) === JSON.stringify(["analytics-agent.js", "csp-report.js", "media.js", "panel.js", "parse-receipt.js", "publish-scheduled-content.js", "render-quote-pdf.js", "site.js", "telegram-webhook.js"]), fns.join(", "));
 
   out("\n" + passed + "/" + total + " passed");
   process.exitCode = passed === total ? 0 : 1;

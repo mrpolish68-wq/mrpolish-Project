@@ -13,6 +13,7 @@
     "api/publish-scheduled-content.js": { "maxDuration": 60 },
     "api/panel.js": { "maxDuration": 60 },
     "api/media.js": { "maxDuration": 120, "includeFiles": "assets/watermark/**" },
+    "api/site.js": { "maxDuration": 20 },
     "api/analytics-agent.js": { "maxDuration": 60 },
     "api/parse-receipt.js": { "maxDuration": 30 },
     "api/telegram-webhook.js": { "maxDuration": 180 },
@@ -26,7 +27,9 @@
     { "source": "/api/check-publish-status", "destination": "/api/panel?action=check-publish-status" },
     { "source": "/api/check-pin-status", "destination": "/api/panel?action=check-pin-status" },
     { "source": "/api/social-snapshot", "destination": "/api/panel?action=social-snapshot" },
-    { "source": "/api/analytics-refresh", "destination": "/api/panel?action=analytics-refresh" }
+    { "source": "/api/analytics-refresh", "destination": "/api/panel?action=analytics-refresh" },
+    { "source": "/projects/:slug", "destination": "/api/site?r=page&slug=:slug" },
+    { "source": "/sitemap-projects.xml", "destination": "/api/site?r=sitemap" }
   ],
   "headers": [
     {

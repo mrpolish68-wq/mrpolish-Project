@@ -157,6 +157,15 @@ async function setup(browser, viewport, label) {
   await page.route(/\/storage\/v1\/object\/public\//, (route) => route.fulfill({ status: 200, contentType: "image/webp", body: thumb, headers: { "access-control-allow-origin": "*" } }));
   await page.route(/supabase\.co\/(?!storage\/v1\/(upload\/resumable|object\/public))/, (route) => { ctx.supabaseOther.push(route.request().url()); route.abort(); });
 
+  // /api/site?action=publish (command 6): the site goes live after 💾 when the project is ready
+  ctx.site = [];
+  await page.route(/\/api\/site\?action=publish/, async (route) => {
+    const req = route.request(), body = req.postDataJSON() || {};
+    ctx.site.push({ body, auth: req.headers().authorization });
+    await page.evaluate((id) => { const p = window.__sb.tables.projects.find(x => x.id === id); if (p && p.status === "ready") Object.assign(p, { status: "published", slug: "litush-shayish-ve-even-raanana" }); }, body.project_id);
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, published: true, slug: "litush-shayish-ve-even-raanana", url: "https://mr-polishes.com/projects/litush-shayish-ve-even-raanana" }) });
+  });
+
   // /api/media
   ctx.aiMode = "ok";
   await page.route(/\/api\/media\?action=/, async (route) => {
@@ -282,10 +291,13 @@ async function unnamedButtons(page, scope) {
 
     // ---- ✨ AI ----
     await page.fill("#pjAiText", "ליטוש והברקה לשיש בסלון");
+    await page.evaluate((id) => window.__sb.emit("projects", { eventType: "UPDATE", new: { id: id } }), pid);   // a realtime refresh re-renders the editor
+    await page.waitForTimeout(900);
+    check("the typed 'מה עשינו?' text survives a re-render (realtime / an upload finishing)", (await page.inputValue("#pjAiText")) === "ליטוש והברקה לשיש בסלון");
     await page.click("#pjAnalyze");
     await page.waitForFunction(() => document.querySelector("#pjTitleHe") && document.querySelector("#pjTitleHe").value === "ליטוש שיש בסלון", null, { timeout: 10000 }).catch(() => {});
     const an = D.api.find(a => a.action === "analyze");
-    check("AI: analyze called with the project + Miri's text", an && an.body.project_id === pid && an.body.text === "ליטוש והברקה לשיש בסלון");
+    check("AI: analyze called with the project + Miri's text", an && an.body.project_id === pid && an.body.text === "ליטוש והברקה לשיש בסלון", JSON.stringify(D.api.map(a => a.action)) + " pid=" + pid + " an=" + JSON.stringify(an && an.body));
     check("AI: titles HE + EN, summaries, caption filled (editable)", (await page.inputValue("#pjTitleEn")) === "Marble polishing in a living room" && /052‑9534540/.test(await page.inputValue("#pjCaption")) && /ליטוש/.test(await page.inputValue("#pjSumHe")));
     check("caption editor: the phone + domain show a NON-BREAKING hyphen (U+2011) on screen", /052‑9534540/.test(await page.inputValue("#pjCaption")) && /mr‑polishes\.com/.test(await page.inputValue("#pjCaption")) && !/052-9534540/.test(await page.inputValue("#pjCaption")));
     check("AI: pairs shown as editable role selects (before/after)", JSON.stringify(await page.$$eval('#pjMedia select[data-field="role"]', s => s.map(x => x.value))) === JSON.stringify(["before", "after", "before"]));
@@ -345,13 +357,17 @@ async function unnamedButtons(page, scope) {
     await page.fill("#pjDate", defDate);
     await page.click("#pjSave");
     await page.waitForFunction(() => /נשמר/.test(document.getElementById("pjToast").textContent), null, { timeout: 5000 }).catch(() => {});
+    const saveToast = await page.textContent("#pjToast");
     const proj = await page.evaluate((p) => window.__sb.tables.projects.find(x => x.id === p), pid);
     check("save: consent yes + consent_at + consent_by (who)", proj.consent === "yes" && !!proj.consent_at && proj.consent_by === "panel@example.com");
     check("save: the publish plan is saved (site + instagram, at a future time)", JSON.stringify(proj.ai_meta.publish_plan.destinations) === JSON.stringify(["site", "instagram"]) && proj.ai_meta.publish_plan.timing === "at" && new Date(proj.ai_meta.publish_plan.at) > new Date());
     check("save: the stored caption keeps a normal '-' (052-9534540, mr-polishes.com; no U+2011)", /052-9534540/.test(proj.ai_meta.caption_he) && /mr-polishes\.com/.test(proj.ai_meta.caption_he) && !/‑/.test(JSON.stringify(proj.ai_meta)));
     check("save: city + caption body/hashtags split for later AI corrections", proj.city === "רעננה" && proj.ai_meta.caption_body_he === "השיש בסלון חזר לברק ✨\nליטוש והברקה בכל השטח." && proj.ai_meta.hashtags.includes("#ליטוש_שיש"));
-    check("save: every gate passes → status 'ready'", proj.status === "ready" && (await page.$$(".pj-gates .no")).length === 0, proj.status);
-    check("publishing itself says 'בקרוב' (wired in commands 6/7)", /יחובר בקרוב/.test(await page.textContent(".pj-soon")));
+    check("save: every gate passes → status 'ready' (then the site publish)", (await page.$$(".pj-gates .no")).length === 0 && ["ready", "published"].includes(proj.status), proj.status);
+    check("save + ready + the site → POST /api/site?action=publish with the session → 'עלה לאתר'", D.site.length === 1 && D.site[0].body.project_id === pid && D.site[0].auth === "Bearer fake-access-token" &&
+      /עלה לאתר/.test(saveToast), JSON.stringify(D.site) + " toast=" + saveToast);
+    check("the editor then shows the live page link (status published)", (await page.getAttribute(".pj-live a", "href")) === "/projects/litush-shayish-ve-even-raanana" && /פורסם/.test(await page.textContent(".pj-status")));
+    check("social publishing still says 'בקרוב' (command 7)", /יחובר בקרוב/.test(await page.textContent(".pj-soon")));
 
     // ---- corrections ----
     await page.click("#pjShorter");

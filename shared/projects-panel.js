@@ -87,6 +87,16 @@
       });
     });
   }
+  // The site (command 6): a ready project with the "site" destination goes live now (timing "now") or
+  // at its slot (the publish cron). Same server rules as the bot (api/site.js → api/_site-publish.js).
+  function sitePublish(projectId) {
+    return token().then(function (t) {
+      return fetch("/api/site?action=publish", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify({ project_id: projectId })
+      }).then(function (res) { return res.json().catch(function () { return {}; }); });
+    });
+  }
+
   function db(promise, he) {
     return promise.then(function (r) {
       if (r.error) throw Object.assign(new Error(r.error.message || "db"), { he: he || "השמירה נכשלה. נסו שוב." });
@@ -146,7 +156,7 @@
         '<span class="pj-status pj-status-' + esc(p.status) + '">' + esc(STATUS_HE[p.status] || p.status) + "</span></span>" +
         '<span class="pj-card-body"><b class="pj-card-title">' + esc(p.title_he || "פרויקט ללא כותרת") + "</b>" +
         '<span class="pj-card-meta">' + esc([p.city, SERVICE_HE[p.service]].filter(Boolean).join(" · ") || "—") + " · " + media.length + " קבצים" +
-        (p.source === "telegram" ? " · מהבוט" : "") + "</span>" +
+        (p.source === "telegram" ? " · מהבוט" : "") + (p.ai_meta && p.ai_meta.migrated_from ? " · מהגלריה הקודמת" : "") + "</span>" +
         (flagged ? '<span class="pj-card-warn">⚠️ תמונה דורשת בדיקת פרטיות</span>' : "") +
         (p.consent !== "yes" ? '<span class="pj-card-note">ללא אישור לקוח לפרסום</span>' : "") +
         (chips ? '<span class="pj-chips">' + chips + "</span>" : "") + "</span></button></li>";
@@ -264,7 +274,7 @@
       '<section class="pj-sec" aria-labelledby="pjSecAi"><h4 id="pjSecAi">2. ✨ ניתוח AI</h4>' +
         '<p class="pj-muted">ה-AI מסדר זוגות לפני/אחרי, כותב כותרת, תיאור, כיתוב וטקסט חלופי, ומסמן פנים, לוחיות רישוי ומספרי בתים. הכול ניתן לעריכה.</p>' +
         '<label class="pj-field"><span>מה עשינו? (סוג העבודה והעיר — בלי שמות, כתובות ומחירים)</span>' +
-        '<textarea id="pjAiText" rows="2" maxlength="600" placeholder="לדוגמה: ליטוש והברקה לשיש בסלון בבית שמש"></textarea></label>' +
+        '<textarea id="pjAiText" rows="2" maxlength="600" placeholder="לדוגמה: ליטוש והברקה לשיש בסלון בבית שמש">' + esc((S.aiDraft || {})[p.id] || "") + "</textarea></label>" +
         '<button type="button" class="btn btn-shimmer btn-sm" id="pjAnalyze"' + (images.length ? "" : " disabled") + ">✨ ניתוח AI</button>" +
         (images.length ? "" : ' <span class="pj-muted">(קודם מעלים תמונות)</span>') +
         (meta.needs_review && images.length ? '<div class="pj-note" role="note">🔎 בדקו את זוגות הלפני/אחרי למעלה — ה-AI לא בטוח בהם. אפשר לשנות תפקיד, מספר זוג או להחליף ⇄.</div>' : "") +
@@ -301,7 +311,11 @@
           '<p class="pj-muted" id="pjWhenHint"></p>' +
         "</fieldset>" +
         '<ul class="pj-gates" aria-label="מה חסר לפרסום">' + gates.map(function (g) { return '<li class="' + (g[0] ? "ok" : "no") + '">' + (g[0] ? "✓ " : "✗ ") + esc(g[1]) + "</li>"; }).join("") + "</ul>" +
-        '<p class="pj-soon">🚀 הפרסום עצמו (לאתר ולרשתות) <b>יחובר בקרוב</b> — הבחירות נשמרות כבר עכשיו.</p>' +
+        (p.status === "published" && p.slug && !meta.site_hidden
+          ? '<p class="pj-live">🌐 פורסם באתר · <a href="/projects/' + esc(p.slug) + '" target="_blank" rel="noopener">לעמוד הפרויקט</a></p>'
+          : p.status === "published" && meta.site_hidden ? '<p class="pj-live">🙈 מוסתר מהאתר (הורידו את הסימון כדי להחזיר)</p>'
+          : '<p class="pj-live">🌐 האתר: כשכל הסעיפים ✓ ושומרים, הפרויקט עולה לאתר — מיד או במועד שנבחר.</p>') +
+        '<p class="pj-soon">📣 הפרסום לרשתות <b>יחובר בקרוב</b> — הבחירות נשמרות כבר עכשיו.</p>' +
       "</section>" +
 
       '<section class="pj-sec pj-danger" aria-labelledby="pjSecDel"><h4 id="pjSecDel">מחיקת הפרויקט</h4>' +
@@ -400,8 +414,20 @@
     return db(S.sb.from("projects").update(patch).eq("id", S.current.project.id).select(), "השמירה נכשלה. נסו שוב.").then(function (rows) {
       if (rows && rows[0]) S.current.project = rows[0];
       setDirty(false);
-      if (!quiet) { toast("נשמר ✓"); renderEditor(); }
-      return S.current.project;
+      var p = S.current.project, plan = (p.ai_meta && p.ai_meta.publish_plan) || {};
+      // (render first, THEN the toast: renderEditor() rebuilds #pjToast, so the other order wiped it at once)
+      if (quiet || p.status !== "ready" || (plan.destinations || []).indexOf("site") === -1) {
+        if (!quiet) { renderEditor(); toast("נשמר ✓"); }
+        return p;
+      }
+      return sitePublish(p.id).catch(function () { return {}; }).then(function (r) {
+        var reload = r.published ? db(S.sb.from("projects").select("*").eq("id", p.id), "").then(function (x) { if (x && x[0]) S.current.project = x[0]; }) : Promise.resolve();
+        return reload.catch(function () {}).then(function () {
+          renderEditor();
+          toast(r.published ? "נשמר ✓ · עלה לאתר" : r.scheduled ? "נשמר ✓ · יעלה לאתר במועד שנבחר" : "נשמר ✓");
+          return S.current.project;
+        });
+      });
     }).catch(function (e) { toast(e.he || "השמירה נכשלה.", true); throw e; }).finally(function () { var b = $("#pjSave"); if (b) b.disabled = false; });
   }
 
@@ -614,7 +640,9 @@
     });
     root.addEventListener("input", function (e) {
       if (e.target.id === "pjSearch") { S.filter.q = e.target.value; var pos = e.target.selectionStart; renderList(); var s = $("#pjSearch"); s.focus(); try { s.setSelectionRange(pos, pos); } catch (x) {} return; }
-      if (S.view === "editor" && !e.target.closest("[data-media]") && e.target.id !== "pjAiText" && e.target.id !== "pjCorrText" && e.target.type !== "file") setDirty(true);
+      // "מה עשינו?" isn't project data (it isn't saved), but it must survive a re-render (realtime, an upload finishing)
+      if (e.target.id === "pjAiText" && S.current) { (S.aiDraft = S.aiDraft || {})[S.current.project.id] = e.target.value; return; }
+      if (S.view === "editor" && !e.target.closest("[data-media]") && e.target.id !== "pjCorrText" && e.target.type !== "file") setDirty(true);
     });
     root.addEventListener("change", function (e) {
       var t = e.target;

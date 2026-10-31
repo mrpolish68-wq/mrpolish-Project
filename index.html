@@ -794,17 +794,19 @@
           <p data-i18n="compare_intro">גררו את הידית כדי לחשוף את התוצאה.</p>
         </header>
 
-        <!-- Project tabs (rendered by JS) -->
-        <div class="gallery-tabs" id="galleryTabs" role="tablist" aria-label="בחירת פרויקט"></div>
-
-        <div class="compare reveal" id="compareWidget">
+        <!-- The project gallery (media-projects command 6): data from /api/site?r=gallery (CDN-cached),
+             the static set in main.js as the fallback. Desktop: a card loads the project into this stage.
+             Phones: the stage moves into the dialog below (full screen), and back on close. -->
+        <div class="pg-stage-slot" id="pgStageSlot">
+        <div class="pg-stage reveal" id="pgStage">
+        <div class="compare" id="compareWidget">
           <!-- Base layer: AFTER (revealed on the right) -->
           <div class="compare__after">
-            <img id="cmpAfterImg" alt="הרצפה אחרי ליטוש והברקה" draggable="false" />
+            <img id="cmpAfterImg" alt="" draggable="false" width="1600" height="1000" />
           </div>
           <!-- Overlay layer: BEFORE (clipped to the left) -->
           <div class="compare__before">
-            <img id="cmpBeforeImg" alt="הרצפה לפני הטיפול" draggable="false" />
+            <img id="cmpBeforeImg" alt="" draggable="false" width="1600" height="1000" />
           </div>
 
           <span class="compare__badge compare__badge--before" data-i18n="ba_before">לפני</span>
@@ -822,8 +824,30 @@
           </div>
         </div>
 
-        <!-- Angle dots (rendered by JS, only for multi-angle projects) -->
-        <div class="gallery-dots" id="galleryDots" role="tablist" aria-label="זוויות נוספות"></div>
+        <div class="pg-caption">
+          <h3 class="pg-caption__title" id="pgTitle" tabindex="-1"></h3>
+          <p class="pg-caption__meta" id="pgMeta"></p>
+          <p class="pg-caption__summary" id="pgSummary"></p>
+          <!-- Angle dots (rendered by JS, only for multi-angle projects) -->
+          <div class="gallery-dots" id="galleryDots" role="group" aria-label="זוויות נוספות"></div>
+          <a class="pg-caption__link" id="pgLink" href="#" hidden data-i18n="gallery_open_page">לעמוד הפרויקט</a>
+        </div>
+        </div>
+        </div>
+
+        <div class="pg-filters" id="pgFilters" role="group" aria-label="סינון לפי סוג עבודה"></div>
+        <p class="sr-only" id="pgLive" aria-live="polite"></p>
+        <ul class="pgrid" id="pgGrid" aria-label="פרויקטים"></ul>
+        <div class="pg-more-wrap"><button type="button" class="btn btn-navy pg-more" id="pgMore" hidden></button></div>
+
+        <dialog class="pg-dialog" id="pgDialog" aria-labelledby="pgTitle">
+          <div class="pg-dialog__bar">
+            <button type="button" class="pg-dialog__close" id="pgClose" aria-label="סגירה">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="pg-dialog__body" id="pgDialogBody"></div>
+        </dialog>
       </div>
     </section>
 
@@ -1265,6 +1289,7 @@
     </a>
   </nav>
 
+  <script src="shared/compare.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

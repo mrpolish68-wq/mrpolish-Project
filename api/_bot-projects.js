@@ -94,18 +94,19 @@ async function patchMeta(p, fn, extra) {
 }
 
 // api/media.js, server to server (the same host + internal secret + preview bypass as the quote PDF).
-async function mediaApi(action, body, ms) {
+function mediaApi(action, body, ms) { return internalApi("/api/media?action=" + action, body, ms); }
+async function internalApi(pathQs, body, ms) {
   var env = process.env;
   var host = env.VERCEL_ENV === "production" ? (env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL) : env.VERCEL_URL;
   if (!host || !env.INTERNAL_API_SECRET) return { status: 0, body: { code: "server_config" } };
   var headers = { "Content-Type": "application/json", "X-Internal-Secret": env.INTERNAL_API_SECRET };
   if (env.VERCEL_AUTOMATION_BYPASS_SECRET) headers["x-vercel-protection-bypass"] = env.VERCEL_AUTOMATION_BYPASS_SECRET;
   try {
-    var res = await D.fetchT("https://" + host + "/api/media?action=" + action, { method: "POST", headers: headers, body: JSON.stringify(body), redirect: "manual" }, ms || 30000);
+    var res = await D.fetchT("https://" + host + pathQs, { method: "POST", headers: headers, body: JSON.stringify(body), redirect: "manual" }, ms || 30000);
     var j = await res.json().catch(function () { return {}; });
     return { status: res.status, body: j || {} };
   } catch (err) {
-    console.error("[bot-projects] media " + action + " request failed");
+    console.error("[bot-projects] " + pathQs.split("?")[0] + " request failed");
     return { status: 0, body: { code: "network" } };
   }
 }
@@ -805,7 +806,15 @@ async function processCallback(query, chatId) {
     if (mid) await tgEdit(chatId, mid, "✅ " + planLine(p));
     var smid = p.ai_meta && p.ai_meta.bot && p.ai_meta.bot.summary_mid;
     if (smid) await dropButtons(chatId, smid);
-    await send(chatId, "נשמר ✔ – הפרסום יופעל בשלב הבא");
+    var lines = ["נשמר ✔"];
+    if (plan.destinations.indexOf("site") !== -1) {   // the site: now (or at its slot, by the publish cron)
+      var sp = await internalApi("/api/site?action=publish", { project_id: p.id }, 30000);
+      if (sp.status === 200 && sp.body.published || sp.body.already) lines.push("🌐 עלה לאתר: " + sp.body.url);
+      else if (sp.status === 200 && sp.body.scheduled) lines.push("🌐 יעלה לאתר במועד שנבחר.");
+      else lines.push("🌐 האתר: יעלה בסבב הפרסום הבא (תוך כ-10 דקות).");
+    }
+    if (plan.destinations.some(function (d) { return d !== "site"; })) lines.push("📣 הרשתות – הפרסום יופעל בשלב הבא.");
+    await send(chatId, lines.join("\n"));
     return;
   }
 }
