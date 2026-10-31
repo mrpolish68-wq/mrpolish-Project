@@ -1,7 +1,8 @@
 # Media Projects — plan (single source of truth)
 
 _Branch: `feature/media-projects` · Created 2026-10-30 · Based on the Phase 0 recon (read-only) of 2026-10-30._
-_Update the **Status** column and the **Log** at the end of every phase. `handoff.md` gets a summary section only when the feature ships._
+_Update the **Status** column and the **Log** at the end of every phase. `handoff.md` §34 has the progress summary (feature not shipped yet)._
+_**Status (2026-10-31):** commands 1–4 of 7 done on the branch (not merged). Next: command 5 (the bot's "📸 פרויקט חדש"). Live: pg_cron scheduler, media-projects schema, projects realtime. At merge: `supabase-lead-alert.sql`. Functions: 8 / 12._
 
 ## 1. Goal
 Miri manages Ori's project photos and short videos from her phone — in the Telegram bot (@mrpolish_expenses_bot) and in the admin panel (installed PWA):
@@ -172,7 +173,7 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
 | 3 | Durable scheduler | `pg_net` + `pg_cron` every 10 min + Vault; GitHub kept as backup (D8) | **Done + LIVE** — `supabase-scheduler-pgcron.sql` applied 2026-10-30 (CRON_SECRET rotated; Vault `cron_secret`); first run 17:25 UTC → 200 `{"processed":0…}` |
 | 4 | Lead alert + review link | `leads` trigger → Telegram with a WhatsApp button (D11); `?review=1` opens the review modal (D10) | **Done on branch** — `supabase-lead-alert.sql` applies **at merge** |
 | 5 | DB schema + buckets | The SQL as a file, PGlite tests, applied by the owner; tighten `content-media` | **Done + APPLIED** — `supabase-media-projects.sql` applied by the owner 2026-10-30, VERIFY a–f passed |
-| 6 | Panel "📸 פרויקטים" tab | Browser resize + EXIF strip, TUS video upload, project list + edit | **Done on branch** (command 4) — + "➕ פוסט חדש" in ניהול תוכן; publishing shows "בקרוב" until phases 10–12; `supabase-projects-realtime.sql` safe to apply now |
+| 6 | Panel "📸 פרויקטים" tab | Browser resize + EXIF strip, TUS video upload, project list + edit | **Done on branch** (command 4) — + "➕ פוסט חדש" in ניהול תוכן; publishing shows "בקרוב" until phases 10–12; `supabase-projects-realtime.sql` **APPLIED** 2026-10-31; owner phone test pending |
 | 7 | Bot project mode | Albums + "✅ סיימתי", consent question (D2), album vs receipt split | Not started |
 | 8 | Server processing | sharp: sizes, IG crops, watermark (D4); MP4 metadata; HEIC refusal; ≤ 2560px originals (D5) | **Done on branch** (command 2) — watermark: BADGE, 9.6% width, 85% opacity (owner, command 3) |
 | 9 | AI | Pairing, HE + EN captions/hashtags/alt (D6), privacy flags blocking publish (D3), quota kinds | **Done on branch** (command 3) — live eval: roles 16/18, pairs ≥ 7/9, privacy 2/2 |
@@ -233,3 +234,4 @@ One phase per command; each ends with tests (`npm test` fully green), a preview 
   - **Tests:** `panel-projects` (75, Chrome, desktop 1280 + mobile 390; screenshots in `.playwright-mcp/panel-projects/`), `media-ai` 77, `api-media` 63, `publish-guard` 18, `sql-media-projects` 59. `npm test` = **946 checks in 22 suites**.
   - **Preview e2e** (`94f04ce`, `https://mrpolish-project-nyfyrdfzc-polish1.vercel.app`; via the internal secret — no panel login available; no AI, no publishing): a "[בדיקה]" project → 2 fake images via signed URLs → processed (all variants; public JPEG 1600×1200 without EXIF; IG 1080×1350) → one deleted → the project deleted → verified: 0 project rows, 0 media rows, 0 storage objects; the 19 approved posts untouched.
   - **Open (privacy, owner decision):** public variants are uploaded with `cache-control` 1 year; after a delete the **Supabase CDN kept serving the cached copy** (storage itself was empty). Proposal: 1 day for new variants — the URLs are unguessable, but a removed face photo should not stay reachable for a year.
+- **2026-10-31 — Close-out.** `supabase-projects-realtime.sql` **APPLIED** (owner-approved, via the supabase MCP `execute_sql`); verified read-only: `supabase_realtime` = project_media, projects, quotes. **Cache decided (owner): public project-media copies get `Cache-Control: max-age=86400`** (`api/media.js` `PUBLIC_CACHE_SECONDS`, test updated; `4f4c65d`). `npm test` 946 / 22 (one unexplained intermittent suite failure in one run; not reproduced in 2 full runs + 15 suite repeats). `handoff.md` §34 written. Pending: the owner's phone test of the 📸 tab; the Phase 2 logged-in contract check.

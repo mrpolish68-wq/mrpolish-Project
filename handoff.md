@@ -1,6 +1,6 @@
 # Mr. Polish — Project Handoff
 
-_Last updated: 2026-10-30 (§33 — **Telegram notifications for published / failed posts: LIVE** (merge `d2ac3bf`) and the **burst guard: LIVE** (merge `e412903`, §33.7), the 2026-10-30 burst incident and the 19-post catch-up schedule (1–9 Nov), the GitHub frequent trigger re-enabled, the GitHub CLI installed. Before that, 2026-10-28: §32 — **Telegram price quotes feature: LIVE in production since 2026-10-28** (merge `0e3827c`), followed by **audit fix batches A (`f8d62c1`) and B (`8681463`)** from a full code review + security audit (no Critical/High findings). §32 is the complete, final summary: what it does, the architecture map, the DB objects, decisions, the audit, operations and pending items. `telegram-quotes-plan.md` has the per-phase detail. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
+_Last updated: 2026-10-31 (§34 — **Media projects feature: IN PROGRESS on `feature/media-projects`, not merged** — commands 1–4 done (scheduler, schema, processing, AI, the panel's 📸 tab); what's applied live, what waits for the merge, next steps. Previous update, 2026-10-30: §33 — **Telegram notifications for published / failed posts: LIVE** (merge `d2ac3bf`) and the **burst guard: LIVE** (merge `e412903`, §33.7), the 2026-10-30 burst incident and the 19-post catch-up schedule (1–9 Nov), the GitHub frequent trigger re-enabled, the GitHub CLI installed. Before that, 2026-10-28: §32 — **Telegram price quotes feature: LIVE in production since 2026-10-28** (merge `0e3827c`), followed by **audit fix batches A (`f8d62c1`) and B (`8681463`)** from a full code review + security audit (no Critical/High findings). §32 is the complete, final summary: what it does, the architecture map, the DB objects, decisions, the audit, operations and pending items. `telegram-quotes-plan.md` has the per-phase detail. Previous update, 2026-08-15: §29-31 — the Smart Receipt & Business Expense Scanner shipped end to end: Phase 1 AI Vision OCR scanning in the dashboard (§29), Phase 2 Telegram bot integration with pre-confirmation editing and duplicate detection (§30), and a full security/regression audit that found and fixed a double-save race condition plus four silent-failure bugs (§31). Live on `main` at commit `d741969`. §28 below covers the prior session's work (quote rename, GEO audit, zero-conversions fix). Read this file first in a new chat session — it has everything needed to keep building without re-discovering the codebase from scratch._
 
 ## 0. Source of Truth — current system behavior (read this before §1 onward)
 
@@ -1345,3 +1345,63 @@ Prevents a repeat of §33.1 at three layers:
 - **Verified with one fake lead ("בדיקה – למחוק", 050-0000000) on the preview and on production:** 201, saved, then deleted (0 test rows left; the 6 real leads untouched).
 - **Note for anyone debugging:** DevTools / Playwright still show the insert as `net::ERR_ABORTED` — that is how Chrome reports a **completed keepalive** request (it fires at the same moment as the 201, ~300 ms *before* the page changes, and the page's own code sees `res.ok`). It is not a lost lead; check the `leads` table, not that line.
 - **Context:** real leads end at id 7 (24 Jun 2026); 58 ids were used by inserts that never saved (rejected inserts still consume an id) — older than the 24 h log window, most likely the RLS bug fixed on 2026-08-15 (§26). `site_stats`: 639 page views, 13 WhatsApp clicks, 5 phone clicks — visitors mostly use WhatsApp / phone.
+
+---
+
+## 34. Media projects feature — IN PROGRESS on `feature/media-projects` (not merged) (2026-10-31)
+
+### 34.1 Goal
+Miri manages Ori's before/after project photos and short videos from her phone — in the **Telegram bot** and the **panel's "📸 פרויקטים" tab**. Gemini pairs before/after shots, writes the titles / site text / caption / hashtags / alt texts in **Hebrew and English**, and flags faces, licence plates and house numbers. Each project gets a consent answer and its destinations (site / Facebook / Instagram / story) + timing. The site gets a DB-driven gallery and `/projects/<slug>` pages; Meta gets carousels and videos through the existing `content_queue` pipeline (burst guard + notifications, §33). Extras: an instant Telegram alert per new lead, a WhatsApp review request, a weekly summary, alerts for flagged comments.
+
+### 34.2 Where the truth lives
+- **`media-projects-plan.md`** (on the branch) — owner decisions D1–D12, the architecture, the 14-phase status table and a log entry per command. Read it first.
+- **SQL files** (each says SAFE NOW or AT MERGE, with VERIFY + ROLLBACK; all tested in PGlite by `tests/sql-media-projects.test.mjs`): `supabase-scheduler-pgcron.sql`, `supabase-media-projects.sql`, `supabase-projects-realtime.sql`, `supabase-lead-alert.sql`.
+- **Code:** `api/media.js` (the one new function: upload slots, processing, AI analyze / correct, deletes), `api/_media-process.js` (sharp), `api/_video-meta.js` (MP4/MOV), `api/_media-ai.js` (Gemini vision + the caption rules), `shared/media-client.js` (browser resize / EXIF strip / TUS), `shared/projects-panel.js` (the panel tab), `api/panel.js` (the five old panel endpoints, merged), `api/_lead-alert.js`.
+
+### 34.3 Owner decisions (in force)
+- **Consent per project** — no consent → private only; the DB refuses to publish or schedule without `consent = 'yes'`.
+- **Privacy flags block publishing** (faces / plates / house numbers) until Miri taps **"בדקתי, אפשר לפרסם"** or removes the photo. No auto-blur. Enforced in the DB too.
+- **Watermark = the badge** (`assets/watermark/badge.png`), **9.6 % of the width, 85 % opacity**, bottom-right, ON by default, toggleable per project.
+- **Originals:** only a ≤ 2560 px copy, private, never watermarked; no EXIF / GPS in anything we store or publish. **Videos are deleted 7 days after a successful publish** unless the site uses them (Phase 13).
+- **Caption rules:** never "free" / "ללא עלות" / "חינם"; CTA "📞 לתיאום בדיקה והצעת מחיר: 052-9534540 (גם בוואטסאפ) · mr-polishes.com"; describe **only work Miri stated or that is plainly visible** (no sealer / grout / crystal / anti-slip / crack-repair claims or hashtags unless stated); a **professional, warm 30-year-expert tone**, no slang, no stock opening, 2–3 sentences; a "shorter" request must really shorten (verified, one retry, else it says so). No prices, client names, streets or house numbers anywhere; the city only if Miri said it.
+- **Public copies are cached for 1 day** (`Cache-Control: max-age=86400`) — the CDN keeps serving a cached copy after a delete, so a removed photo disappears within a day (it was a year).
+- **Slugs** `/projects/<transliterated-service-city>`; Miri approves in the bot (no second approval in the panel); alerts go to the production bot's chats; the site must look excellent at 375 / 768 / 1280 / 1920.
+
+### 34.4 Commands done (on the branch)
+| # | What | Commits |
+|---|---|---|
+| Plan + Phase 1 | Plan file, leads health check, Meta re-authorized (data access until **2027-01-28**) | `e2a48fc`, `7a958e2`, `d0bc58d` |
+| Phase 2 | The five panel endpoints merged into `api/panel.js` (functions 11 → 7); live contract check | `c83beb9`, `390abdb`, `54a811a` |
+| 1 | pg_cron scheduler, lead alert, `?review=1`, the media-projects schema | `dce5444`, `799e02f` |
+| 2 | Media processing (sharp), video metadata, `api/media.js` (8th function), browser upload helper | `256d2db` |
+| 3 | Media AI (Gemini vision) + the badge watermark | `564ba17` |
+| 4 | Caption rules, the panel's "📸 פרויקטים" tab, "➕ פוסט חדש" in ניהול תוכן; carousels fail closed in the publisher until command 7 | `94f04ce`, `63a718c`, `4f4c65d` (1-day cache) |
+
+`npm test` = **946 checks in 22 suites**, all offline (Chrome for `panel-*` / `site-*`; `SKIP_BROWSER=1` skips them).
+
+### 34.5 Already APPLIED live (production DB / secrets)
+- **The pg_cron scheduler** (`supabase-scheduler-pgcron.sql`): job `publish-every-10-min` calls `/api/publish-scheduled-content` with the CRON_SECRET from **Vault `cron_secret`**; GitHub Actions stays as the backup.
+- **CRON_SECRET rotated** (2026-10-30) in `.env`, the GitHub Actions secret, Vercel Production and Vault.
+- **`supabase-media-projects.sql`** — tables `projects`, `project_media`, `project_publications`, `weekly_reports`; `content_queue(+archive).project_id / media_items`; enum `carousel`; the consent / flags guards; RLS; quota kinds `media_ai` / `media_file`; buckets `project-originals` (private) + `project-media` (public, no listing); `content-media` tightened.
+- **`supabase-projects-realtime.sql`** (2026-10-31) — `projects` + `project_media` in `supabase_realtime` (verified: project_media, projects, quotes).
+- Note: the **code** using these (the panel tab, `api/media.js` …) is only on the branch / its previews, not in production.
+
+### 34.6 Waiting for the MERGE
+- **`supabase-lead-alert.sql`** — apply only after **`DB_WEBHOOK_SECRET`** is set in **Vercel Production** and as **Vault `db_webhook_secret`** (the value is in `.env`, generated by `tools/ensure-db-webhook-secret.js`; never printed).
+- Phase 2 (`api/panel.js`) must merge only after Sunday 1 Nov 10:00 has published OK.
+- The privacy policy must mention that lead details go to the business's Telegram chat (Phase 14).
+
+### 34.7 Open items
+- **The owner's manual phone test of the 📸 tab** (steps in the command-4 report) — pending.
+- **The Phase 2 logged-in contract check** (`tools/panel-contract-check.js --login`) — needs the owner's panel session.
+- **Pairs must be confirmed by Miri whenever a project has ≥ 2 pairs** (`needs_review`): live, Gemini paired 6 look-alike basalt photos wrongly at 0.9 confidence.
+- The GitHub `schedule` trigger hadn't resumed by 30 Oct (pg_cron covers it).
+
+### 34.8 Next steps
+- **Command 5:** the bot's "📸 פרויקט חדש" (albums, "✅ סיימתי", the consent question, project vs receipt routing; reuses `api/media.js` with the internal secret).
+- **Command 6:** the site gallery + `/projects/<slug>` pages (OG + JSON-LD, sitemap) + migrate the 5 static gallery projects (their before/after order is correct).
+- **Command 7:** carousel + video publishing (FB multi-photo, IG carousel, two-phase IG video), the weekly summary (Sun 08:00), comment alerts, the WhatsApp review request.
+- **Then:** a full audit (security, privacy / Amendment 13, accessibility) and **one merge** of the branch, with the owner's approval.
+
+### 34.9 Function count
+**8 of 12** on Vercel Hobby: `analytics-agent`, `csp-report`, `media`, `panel`, `parse-receipt`, `publish-scheduled-content`, `render-quote-pdf`, `telegram-webhook` (`tests/api-panel.test.js` asserts exactly these 8). The plan's site function (`api/site.js`, command 6) would make 9.
