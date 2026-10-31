@@ -66,6 +66,8 @@ function rest(table, method, qs, body, prefer) {
   if (method === "GET") return filterRows(rows, qs);
   if (method === "POST") {
     const list = Array.isArray(body) ? body : [body];
+    // like PostgREST: a multi-row insert must use the same keys in every object (found live on the preview)
+    if (list.length > 1 && list.some(r => Object.keys(r).sort().join() !== Object.keys(list[0]).sort().join())) return { status: 400, body: { message: "All object keys must match" } };
     if (table === "project_publications") {
       for (const r of list) { const p = T.projects.find(x => x.id === r.project_id); if (!p || p.consent !== "yes") return { status: 400, body: { message: "project has no publishing consent" } }; }
     }

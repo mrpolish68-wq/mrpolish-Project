@@ -204,7 +204,11 @@ async function queueProject(projectId, opts) {
     var built = buildRows(p, media, now, (tk.body || []).map(function (x) { return x.scheduled_for; }));
     if (!built.rows.length) { await finish("blocked", { reason: built.reason }); return { ok: false, reason: built.reason }; }
 
+    // PostgREST's multi-row insert needs the SAME keys in every object: missing ones are sent as null.
     var insert = built.rows.map(function (r) { var o = Object.assign({}, r); delete o.kind; delete o.destinations; return o; });
+    var keys = {};
+    insert.forEach(function (o) { Object.keys(o).forEach(function (k) { keys[k] = true; }); });
+    insert = insert.map(function (o) { var x = {}; Object.keys(keys).forEach(function (k) { x[k] = o[k] === undefined ? null : o[k]; }); return x; });
     var ins = await rest("content_queue", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(insert) });
     if (!ins.ok || !Array.isArray(ins.body) || ins.body.length !== insert.length) throw new Error("queue insert failed: " + ins.status);
     var created = ins.body;
