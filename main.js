@@ -401,6 +401,7 @@
     var html = document.documentElement;
     html.lang = lang;
     html.dir = lang === "en" ? "ltr" : "rtl";
+    html.classList.toggle("lang-en", lang === "en");
 
     var btn = document.getElementById("langSwitch");
     if (btn) {
@@ -425,6 +426,8 @@
     var saved = qLang || localStorage.getItem("mrp_lang");
     if (saved === "en") applyLang("en");
   } catch (e) {}
+  // the head script hid the texts of an English page until now (no sideways re-layout after load)
+  document.documentElement.classList.remove("i18n-pending");
 
   /* ---------------------------------------------------------
      2. MOBILE NAVIGATION
@@ -712,7 +715,7 @@
       return state.list.map(function (p, k) { return { p: p, k: k }; })
         .filter(function (x) { return state.filter === "all" || x.p.service === state.filter; });
     }
-    var CARD_SIZES = "(min-width: 1200px) 270px, (min-width: 900px) 31vw, (min-width: 520px) 46vw, 92vw";
+    var CARD_SIZES = "(min-width: 1024px) 370px, (min-width: 520px) 46vw, 92vw";   // 3 / 2 / 1 columns
     function imgTag(im, cls, alt, sizes) {
       if (!im) return "";
       var a = ' alt="' + esc(alt) + '" loading="lazy" decoding="async" class="' + cls + '"';

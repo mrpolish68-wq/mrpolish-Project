@@ -10,7 +10,8 @@
      no divider). */
 (function (root) {
   "use strict";
-  var SIZES = "(min-width: 1000px) 900px, 100vw";
+  // phones: 320px → w480 at DPR 1, w960 at DPR 2–3 (never w1600 on a phone)
+  var SIZES = "(max-width: 600px) 320px, (min-width: 1000px) 900px, 100vw";
 
   function setImg(el, im, lang, fallbackAlt) {
     if (!el) return;

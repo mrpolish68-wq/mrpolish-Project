@@ -20,6 +20,8 @@ const SITE = SP.SITE_URL;
 const PUBLIC_BASE = SUPABASE_URL + "/storage/v1/object/public/project-media/";
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// the slider: phones get w480 (DPR 1) or w960 (DPR 2–3), never w1600 — same in shared/compare.js
+const SLIDER_SIZES = "(max-width: 600px) 320px, (min-width: 1000px) 900px, 100vw";
 const CACHE_PUBLIC = "public, max-age=60, s-maxage=300, stale-while-revalidate=86400";
 const PHONE = "+972529534540", PHONE_TXT = "052-9534540";
 const SERVICE_ID = { floor_polish: "floor-restoration", crystal: "crystal-polish", marble_stone: "marble-stone", sealer: "sealer", concrete: "concrete-polish",
@@ -145,7 +147,7 @@ function ctaBlock(t) {
 }
 function compareMarkup(t, first, lang) {
   var a = first.after, b = first.before;
-  var sizes = "(min-width: 1000px) 900px, 100vw";
+  var sizes = SLIDER_SIZES;
   return '<div class="compare' + (b ? "" : " compare--single") + '" id="ppCompare" data-sizes="' + sizes + '">' +
     '<div class="compare__after"><img id="ppAfter" src="' + esc(a.s[960]) + '" srcset="' + esc(srcset(a)) + '" sizes="' + sizes + '" width="' + a.w + '" height="' + a.h +
       '" alt="' + esc(a.alt[lang] || t.after) + '" draggable="false" fetchpriority="high" /></div>' +
@@ -158,7 +160,7 @@ function compareMarkup(t, first, lang) {
 function cardMarkup(p, lang, t) {
   var c = p.cover, b = p.coverBefore;
   return '<li><a class="pcard' + (b ? " pcard--split" : "") + '" href="/projects/' + esc(p.slug) + (lang === "en" ? "?lang=en" : "") + '">' +
-    '<span class="pcard__media"><img class="pcard__after" src="' + esc(c.s[480]) + '" srcset="' + esc(c.s[480] + " 480w, " + c.s[960] + " 960w") + '" sizes="(min-width: 900px) 360px, 92vw" width="' + c.w + '" height="' + c.h +
+    '<span class="pcard__media"><img class="pcard__after" src="' + esc(c.s[480]) + '" srcset="' + esc(c.s[480] + " 480w, " + c.s[960] + " 960w") + '" sizes="(min-width: 1024px) 370px, (min-width: 520px) 46vw, 92vw" width="' + c.w + '" height="' + c.h +
     '" alt="' + esc(c.alt[lang] || "") + '" loading="lazy" decoding="async" />' +
     (b ? '<span class="pcard__before" aria-hidden="true"><img src="' + esc(b.s[480]) + '" width="' + b.w + '" height="' + b.h + '" alt="" loading="lazy" decoding="async" /></span>' : "") + "</span>" +
     '<span class="pcard__body"><span class="pcard__title">' + esc(p.title[lang]) + "</span>" +
@@ -198,7 +200,7 @@ function projectPage(p, all, lang) {
     '<meta property="og:image" content="' + esc(og.jpg) + '" />\n<meta property="og:image:width" content="' + og.w + '" />\n<meta property="og:image:height" content="' + og.h + '" />\n' +
     '<meta property="og:image:alt" content="' + esc(og.alt[lang] || p.title[lang]) + '" />\n<meta name="twitter:card" content="summary_large_image" />\n' +
     '<meta name="twitter:title" content="' + esc(title) + '" />\n<meta name="twitter:description" content="' + esc(desc) + '" />\n<meta name="twitter:image" content="' + esc(og.jpg) + '" />\n' +
-    '<link rel="preload" as="image" href="' + esc(p.angles[0].after.s[960]) + '" imagesrcset="' + esc(srcset(p.angles[0].after)) + '" imagesizes="(min-width: 1000px) 900px, 100vw" />\n' +
+    '<link rel="preload" as="image" href="' + esc(p.angles[0].after.s[960]) + '" imagesrcset="' + esc(srcset(p.angles[0].after)) + '" imagesizes="' + SLIDER_SIZES + '" fetchpriority="high" />\n' +
     '<script type="application/ld+json">' + jsonForScript(ld) + "</script>\n";
   var data = { lang: lang, angles: p.angles.map(function (a) { return { before: a.before, after: a.after }; }), t: { before: t.before, after: t.after, angle: t.angle } };
   return head({ lang: lang, title: title, description: desc, canonical: url, extraHead: extra }) +

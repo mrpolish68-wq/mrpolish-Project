@@ -21,7 +21,8 @@ const server = http.createServer((req, res) => {
 
 // 10 fake projects in the API's shape (images: the local gallery JPEGs)
 const SVC = [["marble_stone", "שיש ואבן", "Marble & stone"], ["stairs", "מדרגות", "Stairs"], ["floor_polish", "ליטוש מרצפות", "Floor polishing"]];
-function im(p, k, n) { const u = "/assets/gallery/project" + p + "-" + k + n + ".jpeg"; return { s: { 480: u, 960: u, 1600: u }, jpg: u, w: 1600, h: 1200, alt: { he: "חלופי " + p + k + n, en: "alt " + p + k + n } }; }
+// distinct URLs per width (?w=…, the local server ignores the query) → the tests see which one the browser picked
+function im(p, k, n) { const u = "/assets/gallery/project" + p + "-" + k + n + ".jpeg"; return { s: { 480: u + "?w=480", 960: u + "?w=960", 1600: u + "?w=1600" }, jpg: u, w: 1600, h: 1200, alt: { he: "חלופי " + p + k + n, en: "alt " + p + k + n } }; }
 const PROJECTS = Array.from({ length: 10 }, (_, i) => {
   const s = SVC[i % 3], p = (i % 5) + 1, two = p === 1 || p === 2 || p === 4;
   const angles = [{ before: im(p, "before", 1), after: im(p, "after", 1) }].concat(two ? [{ before: im(p, "before", 2), after: im(p, "after", 2) }] : []);
@@ -49,6 +50,7 @@ async function open(browser, base, viewport, opts) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, projects: PROJECTS }) });
     }
     if (/\/projects\/proj-1/.test(u)) return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: site._internal.projectPage(PROJECTS[0], PROJECTS, /lang=en/.test(u) ? "en" : "he") });
+    if (opts.blockMain && /\/main\.js$/.test(u)) return route.abort();
     if (u.startsWith(base)) return route.continue();
     if (/supabase\.co/.test(u)) return route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: "[]" });
     return route.abort();
@@ -80,9 +82,12 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
     const page = D.page;
     await toGallery(page, base);
     check("desktop: the gallery loads from /api/site?r=gallery (data-source=api)", D.api.length === 1 && (await page.getAttribute("#compare", "data-source")) === "api");
+    const cols = (pg) => pg.$eval("#pgGrid", e => getComputedStyle(e).gridTemplateColumns.split(" ").length);
+    check("desktop 1280: 3 columns (5 projects = 3 + 2, no lone card)", (await cols(page)) === 3);
+    check("headings balanced: card titles text-wrap: balance", await page.$eval("#pgGrid .pcard__title", e => getComputedStyle(e).textWrap === "balance" || getComputedStyle(e).textWrapStyle === "balance"));
     check("cards: 8 of 10 + 'עוד פרויקטים (2)'", (await page.$$("#pgGrid .pcard")).length === 8 && /עוד פרויקטים \(2\)/.test(await page.textContent("#pgMore")) && !(await page.isHidden("#pgMore")));
     const card = await page.$eval("#pgGrid .pcard", (b) => { const i = b.querySelector(".pcard__after"); return { srcset: i.getAttribute("srcset"), sizes: i.getAttribute("sizes"), w: i.getAttribute("width"), h: i.getAttribute("height"), lazy: i.getAttribute("loading"), alt: i.alt, sliver: !!b.querySelector(".pcard__before"), text: b.textContent }; });
-    check("card: responsive image (srcset 480/960, sizes, width/height, lazy) + its alt", /480w, .* 960w/.test(card.srcset) && /270px/.test(card.sizes) && card.w === "1600" && card.h === "1200" && card.lazy === "lazy" && card.alt === "חלופי 1after1");
+    check("card: responsive image (srcset 480/960, sizes, width/height, lazy) + its alt", /480w, .* 960w/.test(card.srcset) && /\(min-width: 1024px\) 370px/.test(card.sizes) && card.w === "1600" && card.h === "1200" && card.lazy === "lazy" && card.alt === "חלופי 1after1");
     check("card: title + service chip (+ the 'before' sliver, hidden from screen readers)", /פרויקט 1/.test(card.text) && /שיש ואבן/.test(card.text) && card.sliver &&
       await page.$eval("#pgGrid .pcard .pcard__before", e => e.getAttribute("aria-hidden") === "true"));
     check("card with a city: a pin + the city (and a screen-reader label)", /עיר: רעננה/.test(await page.textContent("#pgGrid li:nth-child(2) .pcard__meta")));
@@ -110,13 +115,16 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
     check("desktop: a card loads INLINE (no dialog), the title has focus, aria-current on the card", !(await page.$eval("#pgDialog", d => d.open)) && (await page.textContent("#pgTitle")) === "פרויקט 4" &&
       (await page.evaluate(() => document.activeElement.id)) === "pgTitle" && (await page.getAttribute('#pgGrid .pcard[data-k="3"]', "aria-current")) === "true");
     check("desktop: the stage scrolled into view", await page.$eval("#pgStage", e => { const r = e.getBoundingClientRect(); return r.top >= -2 && r.top < window.innerHeight / 2; }));
-    check("stage: the new project's images + alt", /project4-after1/.test(await page.getAttribute("#cmpAfterImg", "src")) && (await page.getAttribute("#cmpAfterImg", "alt")) === "חלופי 4after1");
+    const below = await page.evaluate(() => { const hb = document.querySelector(".site-header").getBoundingClientRect().bottom, c = document.querySelector("#pgStage .compare").getBoundingClientRect(),
+      badge = document.querySelector("#pgStage .compare__badge--after").getBoundingClientRect(); return { hb: Math.round(hb), top: Math.round(c.top), badge: Math.round(badge.top), r: getComputedStyle(document.querySelector("#pgStage .compare")).borderRadius }; });
+    check("desktop: the image top + the 'אחרי' badge sit BELOW the sticky header (scroll-margin), rounded on all 4 corners", below.top >= below.hb && below.badge > below.hb && below.r === "22px", JSON.stringify(below));
+    check("stage: the new project's images + alt", /project4-after1/.test(await page.getAttribute("#cmpAfterImg", "srcset")) && (await page.getAttribute("#cmpAfterImg", "alt")) === "חלופי 4after1");
     await page.focus(".compare__handle");
     await page.keyboard.press("ArrowRight"); await page.keyboard.press("ArrowRight");
     check("slider: keyboard ←/→ moves it (aria-valuenow 54)", (await page.getAttribute(".compare__handle", "aria-valuenow")) === "54");
     await page.click('#galleryDots [data-angle="1"]');
     await page.waitForTimeout(400);
-    check("dots: angle 2 → the second pair", /project4-after2/.test(await page.getAttribute("#cmpAfterImg", "src")) && (await page.getAttribute('#galleryDots [data-angle="1"]', "aria-pressed")) === "true");
+    check("dots: angle 2 → the second pair", /project4-after2/.test(await page.getAttribute("#cmpAfterImg", "srcset")) && (await page.getAttribute('#galleryDots [data-angle="1"]', "aria-pressed")) === "true");
     check("a11y: every visible button in the section has a name", await page.$$eval("#compare button", (b) => b.filter(x => x.offsetParent !== null && !(x.getAttribute("aria-label") || x.textContent.trim())).length === 0));
 
     // EN
@@ -143,7 +151,7 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
     check("phone: a card opens the FULL-SCREEN dialog with the stage inside", await mp.$eval("#pgDialog", d => d.open && d.contains(document.getElementById("pgStage")) && d.getBoundingClientRect().width >= 389));
     check("phone dialog: focus on the close button (named), the page behind can't scroll", (await mp.evaluate(() => document.activeElement.id)) === "pgClose" &&
       (await mp.getAttribute("#pgClose", "aria-label")) === "סגירה" && (await mp.evaluate(() => document.documentElement.classList.contains("pg-locked"))));
-    check("phone dialog: the project shown (title + slider)", (await mp.textContent("#pgTitle")) === "פרויקט 2" && /project2-after1/.test(await mp.getAttribute("#cmpAfterImg", "src")));
+    check("phone dialog: the project shown (title + slider)", (await mp.textContent("#pgTitle")) === "פרויקט 2" && /project2-after1/.test(await mp.getAttribute("#cmpAfterImg", "srcset")));
     await mp.screenshot({ path: path.join(SHOTS, "phone-dialog.png") });
     await mp.keyboard.press("Escape");
     await mp.waitForTimeout(300);
@@ -151,7 +159,52 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
       (await mp.evaluate(() => document.getElementById("pgStageSlot").contains(document.getElementById("pgStage")))) &&
       (await mp.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-k"))) === "1" && !(await mp.evaluate(() => document.documentElement.classList.contains("pg-locked"))));
     check("phone: no console errors", M.errors.length === 0, M.errors.slice(0, 3).join(" | "));
+    check("phone 390: 1 column", (await cols(mp)) === 1);
     await M.ctx.close();
+
+    // tablet: 2 columns; phones 375 / 390: the action bar never covers the footer links at the end of the page
+    const T = await open(browser, base, { width: 768, height: 1024 });
+    await toGallery(T.page, base);
+    check("tablet 768: 2 columns", (await cols(T.page)) === 2);
+    await T.ctx.close();
+    async function barClear(pg) {
+      // instant (the site scrolls smoothly), twice: lazy content can still grow the page
+      for (let i = 0; i < 2; i++) { await pg.evaluate(() => window.scrollTo({ top: document.scrollingElement.scrollHeight, behavior: "instant" })); await pg.waitForTimeout(500); }
+      return pg.evaluate(() => {
+        const bar = document.querySelector(".mobile-bar").getBoundingClientRect();
+        const links = [...document.querySelectorAll("footer a")].filter(a => a.offsetParent !== null);
+        const lowest = Math.max(...links.map(a => a.getBoundingClientRect().bottom));
+        return { barTop: Math.round(bar.top), lowestLink: Math.round(lowest), ok: links.length > 0 && lowest <= bar.top };
+      });
+    }
+    for (const w of [375, 390]) {
+      const B = await open(browser, base, { width: w, height: 812 });
+      await B.page.goto(base + "/index.html", { waitUntil: "load" });
+      await B.page.waitForTimeout(600);
+      const r = await barClear(B.page);
+      check("home " + w + ": at the end of the page the footer links sit above the action bar", r.ok, JSON.stringify(r));
+      await B.page.goto(base + "/projects/proj-1", { waitUntil: "load" });
+      await B.page.waitForTimeout(400);
+      const r2 = await barClear(B.page);
+      check("project page " + w + ": the footer links (accessibility, privacy) sit above the action bar", r2.ok, JSON.stringify(r2));
+      await B.ctx.close();
+    }
+
+    // English before the first paint (the <head> script): LTR at once, texts hidden until main.js swaps them
+    const E = await open(browser, base, { width: 1280, height: 900 }, { lang: "en", blockMain: true });
+    await E.page.goto(base + "/index.html", { waitUntil: "domcontentloaded" });
+    const early = await E.page.evaluate(() => ({ dir: document.documentElement.dir, lang: document.documentElement.lang, pending: document.documentElement.classList.contains("i18n-pending"),
+      hidden: getComputedStyle(document.querySelector("[data-i18n]")).visibility }));
+    await E.page.waitForTimeout(3300);
+    const late = await E.page.evaluate(() => document.documentElement.classList.contains("i18n-pending"));
+    check("EN head script: LTR + lang en before main.js; texts hidden meanwhile; a 3 s safety net if main.js never runs",
+      early.dir === "ltr" && early.lang === "en" && early.pending && early.hidden === "hidden" && !late, JSON.stringify(early) + " late=" + late);
+    await E.ctx.close();
+    const E2 = await open(browser, base, { width: 1280, height: 900 }, { lang: "en" });
+    await E2.page.goto(base + "/index.html", { waitUntil: "load" });
+    check("EN with main.js: texts swapped in, revealed at once (no pending), lang-en class", await E2.page.evaluate(() => !document.documentElement.classList.contains("i18n-pending") &&
+      document.documentElement.classList.contains("lang-en") && /Before/.test(document.querySelector(".compare__badge--before").textContent)));
+    await E2.ctx.close();
 
     // ============================================================ FALLBACK
     const F = await open(browser, base, { width: 1280, height: 900 }, { apiFail: true });
@@ -186,9 +239,20 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
     await PG.page.waitForTimeout(400);
     check("project page: H1, the slider, 2 dots, the CTA, more projects", (await PG.page.textContent("h1")) === "פרויקט 1" && !!(await PG.page.$("#ppCompare .compare__handle")) &&
       (await PG.page.$$("#ppDots .gallery-dot")).length === 2 && !!(await PG.page.$('.pp-cta a[href^="tel:"]')) && (await PG.page.$$(".pp-more .pcard")).length === 3);
+    const crumbs = await PG.page.evaluate(() => {
+      const ol = document.querySelector(".pp-crumbs ol"), lis = [...ol.children], last = lis[lis.length - 1];
+      const mids = lis.map(li => { const r = li.getBoundingClientRect(); return r.top + r.height / 2; });   // the linked crumbs are taller tap targets
+      return { oneLine: Math.max(...mids) - Math.min(...mids) < 6, mids: mids.map(Math.round), sep: getComputedStyle(lis[0], "::after").content, ellipsis: getComputedStyle(last).textOverflow, nowrap: getComputedStyle(last).whiteSpace };
+    });
+    check("project page 375: breadcrumbs on ONE line, '/' glued after its item, the current title ellipsized", crumbs.oneLine && crumbs.sep === '"/"' && crumbs.ellipsis === "ellipsis" && crumbs.nowrap === "nowrap", JSON.stringify(crumbs));
+    check("project page: the H1 is balanced (text-wrap: balance)", await PG.page.$eval("h1", e => getComputedStyle(e).textWrap === "balance" || getComputedStyle(e).textWrapStyle === "balance"));
+    const hero = await PG.page.evaluate(() => { const i = document.getElementById("ppAfter"), l = document.querySelector('link[rel="preload"][as="image"]');
+      return { cur: i.currentSrc, fp: i.getAttribute("fetchpriority"), pre: l && l.getAttribute("imagesizes"), preFp: l && l.getAttribute("fetchpriority"), preSet: l && l.getAttribute("imagesrcset") }; });
+    check("project page 375 (DPR 2): the hero 'after' loads w960 — never w1600 on a phone; fetchpriority high", /w=960$/.test(hero.cur) && hero.fp === "high", JSON.stringify(hero));
+    check("project page: the hero is preloaded with the SAME imagesrcset / imagesizes (phones 320px) + fetchpriority high", /max-width: 600px\) 320px/.test(hero.pre || "") && hero.preFp === "high" && /480w/.test(hero.preSet || ""), JSON.stringify(hero));
     await PG.page.click('#ppDots [data-angle="1"]');
     await PG.page.waitForTimeout(400);
-    check("project page: a dot switches the angle (shared/compare.js)", /project1-after2/.test(await PG.page.getAttribute("#ppAfter", "src")));
+    check("project page: a dot switches the angle (shared/compare.js)", /project1-after2/.test(await PG.page.getAttribute("#ppAfter", "srcset")));
     await PG.page.focus("#ppCompare .compare__handle");
     await PG.page.keyboard.press("End");
     check("project page: the slider works by keyboard", (await PG.page.getAttribute("#ppCompare .compare__handle", "aria-valuenow")) === "100");

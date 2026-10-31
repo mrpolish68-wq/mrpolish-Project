@@ -136,6 +136,9 @@ async function call(query, opts) {
     ld[0].provider["@id"] === "https://mr-polishes.com/#business" && ld[0].about["@id"] === "https://mr-polishes.com/#service-marble-stone" &&
     ld[0].locationCreated.address.addressLocality === "רעננה" && ld[1]["@type"] === "BreadcrumbList" && ld[1].itemListElement.length === 3);
   check("page: the CTA — call + WhatsApp", /href="tel:\+972529534540"/.test(html) && /https:\/\/wa\.me\/972529534540\?text=/.test(html));
+  check("page: the hero never asks a phone for w1600 (sizes caps phones at 320px) + preload with the same imagesrcset / imagesizes + fetchpriority high",
+    /sizes="\(max-width: 600px\) 320px, \(min-width: 1000px\) 900px, 100vw"[^>]*fetchpriority="high"/.test(html) &&
+    /<link rel="preload" as="image" href="[^"]+" imagesrcset="[^"]+480w[^"]+" imagesizes="\(max-width: 600px\) 320px[^"]*" fetchpriority="high" \/>/.test(html));
   check("page: the site's sticky mobile action bar (call / WhatsApp / Waze)", /<nav class="mobile-bar"/.test(html) && /mb-call/.test(html) && /mb-wa/.test(html) && /mb-waze/.test(html));
   check("page: more projects (not itself, not hidden / unconsented)", /class="pp-more"/.test(html) && /href="\/projects\/hidush-madregot"/.test(html) && !/href="\/projects\/litush-shayish-ve-even-raanana"/.test(html.split('class="pp-more"')[1]) && !/hidden-one|not-consented/.test(html));
   check("page: the slider data is CSP-safe JSON (no inline JS) and can't break out of its script tag", /<script type="application\/json" id="ppData">/.test(html) && !/<script>alert/.test(html) && !/<\/script><script>/.test(html.split('id="ppData">')[1].split("</script>")[0]));

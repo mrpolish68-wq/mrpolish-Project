@@ -3,6 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- The language BEFORE the first paint (?lang=… or the saved choice): an English visitor gets LTR from the
+       first frame, and the translatable texts stay invisible (keeping their space) until main.js swaps them in
+       — so the page never re-lays out sideways after load. A 3 s safety net reveals them if main.js fails. -->
+  <script>
+    (function () {
+      try {
+        var q = (location.search.match(/[?&]lang=(en|he)\b/) || [])[1];
+        var lang = q || localStorage.getItem("mrp_lang");
+        if (lang !== "en") return;
+        var h = document.documentElement;
+        h.lang = "en"; h.dir = "ltr";
+        h.classList.add("lang-en", "i18n-pending");
+        setTimeout(function () { h.classList.remove("i18n-pending"); }, 3000);
+      } catch (e) {}
+    })();
+  </script>
 
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-Y9FGVG5WSZ"></script>
