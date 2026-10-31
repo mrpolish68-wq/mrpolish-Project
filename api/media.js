@@ -44,7 +44,12 @@ const HEIC_TYPES = ["image/heic", "image/heif", "image/heic-sequence", "image/he
 const MAX_BYTES = 50 * 1024 * 1024;
 // Public copies: Cache-Control max-age=86400 (owner, 2026-10-31). The CDN keeps serving a cached copy
 // after a delete, so a removed photo must not stay reachable for long (it was 1 year).
+// Storage serves the uploaded cache-control as-is, so it must be a valid header: a bare "86400" was
+// served as "public, 86400" (invalid → ignored). Checked live by tools/media-cache-check.js.
 const PUBLIC_CACHE_SECONDS = 86400;
+function cacheControl(bucket, seconds) {
+  return (bucket === PUBLIC ? "public" : "private") + ", max-age=" + (seconds || 3600);
+}
 const LIMITS = { "create-upload": [60, 60000], process: [30, 60000], delete: [30, 60000], analyze: [10, 60000], correct: [10, 60000], "delete-project": [10, 60000] };
 var timeoutMs = 20000;
 
@@ -91,7 +96,7 @@ async function getProject(id, fields) {
 async function storageUpload(bucket, objectPath, buffer, contentType, cacheSeconds) {
   var res = await fetch(SUPABASE_URL + "/storage/v1/object/" + bucket + "/" + objectPath, {
     method: "POST", body: buffer, signal: AbortSignal.timeout(timeoutMs),
-    headers: svc({ "Content-Type": contentType, "x-upsert": "true", "cache-control": String(cacheSeconds || 3600) })
+    headers: svc({ "Content-Type": contentType, "x-upsert": "true", "cache-control": cacheControl(bucket, cacheSeconds) })
   });
   if (!res.ok) throw new Error("storage upload " + bucket + " failed: " + res.status);
 }

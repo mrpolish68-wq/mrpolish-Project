@@ -40,6 +40,11 @@
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; });
   }
+  // The caption editor is a plain <textarea> (no spans), so the phone number and the domain get a
+  // non-breaking hyphen (U+2011) on screen only — Chrome wrapped "052-" / "9534540" on phones.
+  // Converted back on save: the stored / published caption keeps a normal "-".
+  function captionToEditor(s) { return String(s || "").replace(/(\d)-(?=\d)/g, "$1‑").replace(/\bmr-polishes\.com/g, "mr‑polishes.com"); }
+  function captionFromEditor(s) { return String(s || "").replace(/‑/g, "-"); }
   function $(sel, el) { return (el || S.root).querySelector(sel); }
   function $all(sel, el) { return Array.prototype.slice.call((el || S.root).querySelectorAll(sel)); }
   function pub(path) { return path ? S.url + "/storage/v1/object/public/project-media/" + path.split("/").map(encodeURIComponent).join("/") : ""; }
@@ -274,7 +279,7 @@
         '<label class="pj-field"><span>עיר (בלי רחוב ומספר)</span><input type="text" id="pjCity" maxlength="40" value="' + esc(p.city || "") + '" /></label></div>' +
         '<label class="pj-field"><span>תיאור לאתר (עברית)</span><textarea id="pjSumHe" rows="3" maxlength="420">' + esc(p.summary_he || "") + "</textarea></label>" +
         '<label class="pj-field"><span>Description for the site (English)</span><textarea id="pjSumEn" rows="3" dir="ltr" maxlength="420">' + esc(p.summary_en || "") + "</textarea></label>" +
-        '<label class="pj-field"><span>כיתוב לרשתות</span><textarea id="pjCaption" rows="7" maxlength="2200">' + esc(meta.caption_he || "") + "</textarea></label>" +
+        '<label class="pj-field"><span>כיתוב לרשתות</span><textarea id="pjCaption" rows="7" maxlength="2200">' + esc(captionToEditor(meta.caption_he)) + "</textarea></label>" +
         '<div class="pj-correct"><label class="pj-sr" for="pjCorrText">תיקון במילים</label><input type="text" id="pjCorrText" maxlength="300" placeholder="תיקון במילים, למשל: העיר היא רעננה" />' +
         '<button type="button" class="btn btn-navy btn-sm" id="pjCorrect">תיקון</button><button type="button" class="btn btn-navy btn-sm" id="pjShorter">✂️ קצר יותר</button></div>' +
       "</section>" +
@@ -364,7 +369,7 @@
       if (at <= new Date()) throw Object.assign(new Error("past"), { he: "המועד שבחרתם כבר עבר — בחרו מועד עתידי." });
     }
     var dests = $all(".pj-dest[aria-pressed=true]").map(function (b) { return b.getAttribute("data-dest"); });
-    var cap = $("#pjCaption").value;
+    var cap = captionFromEditor($("#pjCaption").value);
     var split = splitCaption(cap);
     meta.caption_he = cap.trim() || null;
     meta.caption_body_he = split.body || null;

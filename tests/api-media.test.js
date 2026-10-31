@@ -185,7 +185,9 @@ function gpsEntries(buf) {
   check("original → PRIVATE project-originals/<project>/<media>.jpg", ups.some(u => u.bucket === "project-originals" && u.path === P1 + "/" + row.id + ".jpg" && u.type === "image/jpeg"));
   const pub = ups.filter(u => u.bucket === "project-media").map(u => u.path.split("/").pop()).sort();
   check("public project-media: w480/w960/w1600 .webp + w1600.jpg + ig.jpg", JSON.stringify(pub) === JSON.stringify(["ig.jpg", "w1600.jpg", "w1600.webp", "w480.webp", "w960.webp"]), pub.join(","));
-  check("public files: Cache-Control max-age 1 day (86400; a deleted photo leaves the CDN within a day)", ups.filter(u => u.bucket === "project-media").length >= 5 && ups.filter(u => u.bucket === "project-media").every(u => u.cache === "86400" && u.path.startsWith(P1 + "/" + row.id + "/")));
+  check("public files: a VALID Cache-Control 'public, max-age=86400' (1 day; a bare '86400' was served as the invalid 'public, 86400')", ups.filter(u => u.bucket === "project-media").length >= 5 && ups.filter(u => u.bucket === "project-media").every(u => u.cache === "public, max-age=86400" && u.path.startsWith(P1 + "/" + row.id + "/")),
+    JSON.stringify([...new Set(ups.map(u => u.cache))]));
+  check("private original: Cache-Control 'private, max-age=3600'", ups.filter(u => u.bucket === "project-originals").length >= 1 && ups.filter(u => u.bucket === "project-originals").every(u => u.cache === "private, max-age=3600"));
   check("variants in the row: paths + sizes, IG 1080×1350, watermark 'badge' (project watermark on)", row.variants.ig.width === 1080 && row.variants.ig.height === 1350 &&
     row.variants.w1600.path === P1 + "/" + row.id + "/w1600.webp" && row.variants.watermark === "badge");
   const stored = store["project-originals/" + P1 + "/" + row.id + ".jpg"].buf;

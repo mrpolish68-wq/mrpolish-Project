@@ -286,7 +286,8 @@ async function unnamedButtons(page, scope) {
     await page.waitForFunction(() => document.querySelector("#pjTitleHe") && document.querySelector("#pjTitleHe").value === "ליטוש שיש בסלון", null, { timeout: 10000 }).catch(() => {});
     const an = D.api.find(a => a.action === "analyze");
     check("AI: analyze called with the project + Miri's text", an && an.body.project_id === pid && an.body.text === "ליטוש והברקה לשיש בסלון");
-    check("AI: titles HE + EN, summaries, caption filled (editable)", (await page.inputValue("#pjTitleEn")) === "Marble polishing in a living room" && /052-9534540/.test(await page.inputValue("#pjCaption")) && /ליטוש/.test(await page.inputValue("#pjSumHe")));
+    check("AI: titles HE + EN, summaries, caption filled (editable)", (await page.inputValue("#pjTitleEn")) === "Marble polishing in a living room" && /052‑9534540/.test(await page.inputValue("#pjCaption")) && /ליטוש/.test(await page.inputValue("#pjSumHe")));
+    check("caption editor: the phone + domain show a NON-BREAKING hyphen (U+2011) on screen", /052‑9534540/.test(await page.inputValue("#pjCaption")) && /mr‑polishes\.com/.test(await page.inputValue("#pjCaption")) && !/052-9534540/.test(await page.inputValue("#pjCaption")));
     check("AI: pairs shown as editable role selects (before/after)", JSON.stringify(await page.$$eval('#pjMedia select[data-field="role"]', s => s.map(x => x.value))) === JSON.stringify(["before", "after", "before"]));
     check("AI: needs_review → a note asks to check the pairs", /בדקו את זוגות/.test(await page.textContent("#pjRoot")));
     check("AI: the face flag blocks with 'בדקתי, אפשר לפרסם' + 'הסרת התמונה'", (await page.$$('.pj-flag [data-act="ack"]')).length === 1 && (await page.$$('.pj-flag [data-act="remove"]')).length === 1);
@@ -347,6 +348,7 @@ async function unnamedButtons(page, scope) {
     const proj = await page.evaluate((p) => window.__sb.tables.projects.find(x => x.id === p), pid);
     check("save: consent yes + consent_at + consent_by (who)", proj.consent === "yes" && !!proj.consent_at && proj.consent_by === "panel@example.com");
     check("save: the publish plan is saved (site + instagram, at a future time)", JSON.stringify(proj.ai_meta.publish_plan.destinations) === JSON.stringify(["site", "instagram"]) && proj.ai_meta.publish_plan.timing === "at" && new Date(proj.ai_meta.publish_plan.at) > new Date());
+    check("save: the stored caption keeps a normal '-' (052-9534540, mr-polishes.com; no U+2011)", /052-9534540/.test(proj.ai_meta.caption_he) && /mr-polishes\.com/.test(proj.ai_meta.caption_he) && !/‑/.test(JSON.stringify(proj.ai_meta)));
     check("save: city + caption body/hashtags split for later AI corrections", proj.city === "רעננה" && proj.ai_meta.caption_body_he === "השיש בסלון חזר לברק ✨\nליטוש והברקה בכל השטח." && proj.ai_meta.hashtags.includes("#ליטוש_שיש"));
     check("save: every gate passes → status 'ready'", proj.status === "ready" && (await page.$$(".pj-gates .no")).length === 0, proj.status);
     check("publishing itself says 'בקרוב' (wired in commands 6/7)", /יחובר בקרוב/.test(await page.textContent(".pj-soon")));
@@ -426,8 +428,30 @@ async function unnamedButtons(page, scope) {
     check("mobile: touch targets ≥ 44px (new project, search)", tap >= 44 && (await mp.$eval("#pjSearch", e => e.getBoundingClientRect().height)) >= 44);
     check("mobile: inputs use 16px text (no iOS zoom)", (await mp.$eval("#pjSearch", e => getComputedStyle(e).fontSize)) === "16px");
     await mp.screenshot({ path: path.join(SHOTS, "mobile-1-list.png"), fullPage: true });
+    await mp.evaluate(() => { window.__sb.tables.projects.find(p => p.id === "aaaaaaaa-2222-4222-8222-000000000002").ai_meta =
+      { caption_he: "המדרגות חזרו לברק.\n\n📞 לתיאום בדיקה והצעת מחיר: 052-9534540 (גם בוואטסאפ) · mr-polishes.com\n\n#מדרגות" }; });
     await mp.click('[data-open="aaaaaaaa-2222-4222-8222-000000000002"]');
     await mp.waitForSelector("#pjEdTitle");
+    // How the textarea wraps its own text (a mirror with the same computed styles), at many widths: the
+    // phone number must never split; the same text with a normal '-' must split somewhere (the measure works).
+    const wrap = await mp.evaluate(() => {
+      const ta = document.getElementById("pjCaption"), cs = getComputedStyle(ta);
+      const d = document.createElement("div");
+      ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "wordSpacing", "paddingInlineStart", "paddingInlineEnd", "direction", "boxSizing", "textAlign"].forEach(k => { d.style[k] = cs[k]; });
+      Object.assign(d.style, { whiteSpace: "pre-wrap", overflowWrap: "break-word", position: "absolute", visibility: "hidden", insetBlockStart: "0", insetInlineStart: "0" });
+      document.body.appendChild(d);
+      const lines = (text, w) => {
+        d.style.width = w + "px"; d.textContent = text;
+        const i = text.search(/052.9534540/), r = document.createRange();
+        r.setStart(d.firstChild, i); r.setEnd(d.firstChild, i + 11);
+        return new Set([...r.getClientRects()].filter(x => x.width > 0).map(x => Math.round(x.top / 4))).size;
+      };
+      const shown = ta.value, plain = shown.replace(/‑/g, "-"), out = { shown: 0, plain: 0, widths: 0 };
+      for (let w = 180; w <= 380; w += 4) { out.widths++; if (lines(shown, w) > 1) out.shown++; if (lines(plain, w) > 1) out.plain++; }
+      d.remove();
+      return out;
+    });
+    check("mobile: the phone number in the caption editor never wraps (0 splits over 180–380px; a normal '-' splits at some widths)", wrap.shown === 0 && wrap.plain > 0, JSON.stringify(wrap));
     check("mobile: editor without horizontal scroll", await noOverflow(mp));
     check("mobile: RTL (dir=rtl on the page)", await mp.evaluate(() => document.documentElement.dir === "rtl"));
     check("mobile: the flagged photo from the bot shows the privacy block", (await mp.$$(".pj-flag")).length === 1);
