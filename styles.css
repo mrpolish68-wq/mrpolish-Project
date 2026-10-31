@@ -920,7 +920,12 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 
 #compare [hidden] { display: none !important; }   /* .btn / the link set display, which beats [hidden] */
 .pg-stage { max-width: 900px; margin-inline: auto; }
-.pg-caption { text-align: center; padding-block: 18px 4px; max-width: 62ch; margin-inline: auto; }
+.pg-caption { text-align: center; padding-block: 18px 4px; max-width: 62ch; margin-inline: auto; min-height: 9.5rem; }
+.pg-dialog .pg-caption { min-height: 0; }
+/* placeholders before the data arrives (same box as a card) */
+.pcard-skel { display: flex; flex-direction: column; border-radius: var(--radius); overflow: hidden; background: var(--white); border: 1px solid var(--marble-200); }
+.pcard-skel__media { display: block; aspect-ratio: 4 / 3; background: var(--marble-200); }
+.pcard-skel__body { display: block; height: 92px; }
 .pg-caption__title { font-size: clamp(1.15rem, 2.6vw, 1.45rem); margin: 0; outline: none; }
 .pg-caption__title:empty { display: none; }
 .pg-caption__meta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 12px; margin-block: 8px 0; }
@@ -942,7 +947,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 800; color: var(--char-900); }
 /* filter chips: the gallery-tab look; one scrollable row on phones, centered when it fits */
 .pg-filters {
   display: flex; gap: 10px; justify-content: safe center; overflow-x: auto; scrollbar-width: none;
-  max-width: 100%; margin: clamp(28px, 4vw, 44px) auto 18px; padding: 4px 2px 8px;
+  max-width: 100%; margin: clamp(28px, 4vw, 44px) auto 18px; padding: 4px 2px 8px; min-height: 56px;
 }
 .pg-filters::-webkit-scrollbar { display: none; }
 .pg-filters .gallery-tab { min-height: 44px; }

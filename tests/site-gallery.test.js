@@ -40,10 +40,11 @@ async function open(browser, base, viewport, opts) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: phone ? 2 : 1, isMobile: phone, hasTouch: phone, locale: "he-IL" });
   await ctx.addInitScript((l) => { try { sessionStorage.setItem("mrp_splash_seen", "1"); if (l) localStorage.setItem("mrp_lang", l); } catch (e) {} }, opts.lang || null);
   const errors = [], api = [];
-  await ctx.route("**/*", (route) => {
+  await ctx.route("**/*", async (route) => {
     const u = route.request().url();
     if (/\/api\/site\?r=gallery/.test(u)) {
       api.push(u);
+      if (opts.delayMs) await new Promise(r => setTimeout(r, opts.delayMs));
       if (opts.apiFail) return route.fulfill({ status: 500, contentType: "application/json", body: '{"ok":false}' });
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, projects: PROJECTS }) });
     }
@@ -161,6 +162,23 @@ const noOverflow = (page) => page.evaluate(() => document.scrollingElement.scrol
     check("fallback: the static projects keep their EN titles + the Kfar Saba city", /שיש קרמה/.test(await F.page.textContent("#pgGrid")) && /כפר סבא/.test(await F.page.textContent("#pgGrid")));
     check("fallback: no console errors", F.errors.length === 0, F.errors.slice(0, 3).join(" | "));
     await F.ctx.close();
+
+    // ============================================================ SLOW API: no layout shift while the data arrives
+    for (const vp of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+      const S = await open(browser, base, vp, { delayMs: 2500 });
+      await S.page.addInitScript(() => {});
+      await S.page.goto(base + "/index.html", { waitUntil: "load" });
+      await S.page.evaluate(() => { window.__cls = 0; new PerformanceObserver(l => { for (const e of l.getEntries()) if (!e.hadRecentInput) window.__cls += e.value; }).observe({ type: "layout-shift" }); });
+      for (let i = 0; i < 8; i++) { await S.page.evaluate(() => document.getElementById("compare").scrollIntoView()); await S.page.waitForTimeout(250); }
+      const before = await S.page.evaluate(() => ({ skel: document.querySelectorAll("#pgGrid .pcard-skel").length, busy: document.getElementById("pgGrid").getAttribute("aria-busy") }));
+      await S.page.evaluate(() => { window.__cls = 0; });   // only what the data's arrival does from here on
+      await S.page.waitForSelector("#pgGrid .pcard", { timeout: 15000 });
+      await S.page.waitForTimeout(800);
+      const cls = await S.page.evaluate(() => window.__cls);
+      check("slow API (" + vp.width + "): placeholders hold the space (4 skeletons, aria-busy) → the data's arrival shifts the visible page by CLS < 0.05", before.skel === 4 && before.busy === "true" && cls < 0.05 &&
+        (await S.page.getAttribute("#pgGrid", "aria-busy")) === null, "skel=" + before.skel + " cls=" + cls.toFixed(3));
+      await S.ctx.close();
+    }
 
     // ============================================================ PROJECT PAGE (rendered by api/site.js)
     const PG = await open(browser, base, { width: 375, height: 812 });

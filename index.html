@@ -837,7 +837,13 @@
 
         <div class="pg-filters" id="pgFilters" role="group" aria-label="סינון לפי סוג עבודה"></div>
         <p class="sr-only" id="pgLive" aria-live="polite"></p>
-        <ul class="pgrid" id="pgGrid" aria-label="פרויקטים"></ul>
+        <!-- placeholders until the data arrives: the section keeps its height (no layout shift) -->
+        <ul class="pgrid" id="pgGrid" aria-label="פרויקטים" aria-busy="true">
+          <li class="pcard-skel" aria-hidden="true"><span class="pcard-skel__media"></span><span class="pcard-skel__body"></span></li>
+          <li class="pcard-skel" aria-hidden="true"><span class="pcard-skel__media"></span><span class="pcard-skel__body"></span></li>
+          <li class="pcard-skel" aria-hidden="true"><span class="pcard-skel__media"></span><span class="pcard-skel__body"></span></li>
+          <li class="pcard-skel" aria-hidden="true"><span class="pcard-skel__media"></span><span class="pcard-skel__body"></span></li>
+        </ul>
         <div class="pg-more-wrap"><button type="button" class="btn btn-navy pg-more" id="pgMore" hidden></button></div>
 
         <dialog class="pg-dialog" id="pgDialog" aria-labelledby="pgTitle">

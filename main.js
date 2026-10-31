@@ -729,7 +729,8 @@
     function renderFilters() {
       var present = SERVICES.filter(function (s) { return state.list.some(function (p) { return p.service === s; }); });
       filtersEl.setAttribute("aria-label", L[lang()].filter);
-      if (present.length < 2) { filtersEl.innerHTML = ""; filtersEl.hidden = true; return; }
+      if (present.length < 2) { filtersEl.innerHTML = ""; filtersEl.style.visibility = "hidden"; return; }   // keeps its height
+      filtersEl.style.visibility = "";
       filtersEl.hidden = false;
       filtersEl.innerHTML = ["all"].concat(present).map(function (s) {
         return '<button type="button" class="gallery-tab" data-filter="' + s + '" aria-pressed="' + (state.filter === s) + '">' +
@@ -751,6 +752,7 @@
     function renderGrid(focusFrom) {
       var items = filtered(), shown = items.slice(0, state.shown);
       gridEl.setAttribute("aria-label", L[lang()].grid);
+      gridEl.removeAttribute("aria-busy");
       gridEl.innerHTML = shown.map(function (x) {
         var p = x.p;
         return '<li><button type="button" class="pcard' + (p.coverBefore ? " pcard--split" : "") + '" data-k="' + x.k + '"' + (x.k === state.cur ? ' aria-current="true"' : "") + ">" +
@@ -873,7 +875,7 @@
     if ("IntersectionObserver" in window) {
       var io = new IntersectionObserver(function (entries, obs) {
         if (entries.some(function (e) { return e.isIntersecting; })) { boot(); obs.disconnect(); }
-      }, { rootMargin: "600px 0px" });
+      }, { rootMargin: "1500px 0px" });   // early enough that the data is usually in before the section shows
       io.observe(section);
     } else boot();
   })();
